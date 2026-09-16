@@ -70,5 +70,19 @@ namespace Bicep.IO.FileSystem
                 yield return new FileSystemFileHandle(this.FileSystem, fileUri);
             }
         }
+
+        public bool IsSymbolicLink()
+        {
+            try
+            {
+                return this.FileSystem.DirectoryInfo.New(this.FilePath).LinkTarget is not null;
+            }
+            catch (Exception)
+            {
+                // If the link status cannot be determined, treat the directory as an ordinary one
+                // rather than failing the caller's traversal.
+                return false;
+            }
+        }
     }
 }

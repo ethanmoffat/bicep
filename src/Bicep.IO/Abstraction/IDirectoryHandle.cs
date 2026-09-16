@@ -24,5 +24,11 @@ namespace Bicep.IO.Abstraction
         IEnumerable<IDirectoryHandle> EnumerateDirectories(string searchPattern = "");
 
         IEnumerable<IFileHandle> EnumerateFiles(string searchPattern = "");
+
+        /// <summary>
+        /// Whether this directory is a symbolic link, junction or other reparse point.
+        /// Callers that walk a directory tree use this to avoid following links out of the tree they are bounded to.
+        /// </summary>
+        bool IsSymbolicLink();
     }
 }

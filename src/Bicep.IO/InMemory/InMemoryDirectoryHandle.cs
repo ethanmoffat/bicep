@@ -57,6 +57,11 @@ namespace Bicep.IO.InMemory
 
         public override bool Exists() => this.FileStore.DirectoryExists(this);
 
+        /// <summary>
+        /// The in-memory file store has no concept of links, so no directory is ever a symbolic link.
+        /// </summary>
+        public bool IsSymbolicLink() => false;
+
         public IDirectoryHandle GetDirectory(string relativePath)
         {
             var directoryUri = this.Uri.Resolve(relativePath);

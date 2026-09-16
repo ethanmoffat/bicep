@@ -1,0 +1,47 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using System.Collections.Immutable;
+
+namespace Bicep.Core.TestFramework;
+
+/// <summary>
+/// A test-owned, statically declared description of which source files a test applies to.
+/// Every value is a literal: the selector must be resolvable before any target is bound or evaluated.
+/// </summary>
+/// <param name="Root">
+/// The directory the include and exclude patterns are relative to, itself relative to the directory
+/// containing the test file. Traversal never leaves this directory.
+/// </param>
+/// <param name="Include">Patterns selecting files under the root. At least one is required.</param>
+/// <param name="Exclude">Patterns removing files from the included set. Excludes always win over includes.</param>
+/// <param name="AllowEmpty">
+/// Whether selecting no files at all is acceptable. Defaults to false so that a selector which
+/// silently stops matching anything is reported rather than passing vacuously.
+/// </param>
+public record TestTargetSelector(
+    string Root,
+    ImmutableArray<string> Include,
+    ImmutableArray<string> Exclude,
+    bool AllowEmpty)
+{
+    public const string RootPropertyName = "root";
+    public const string IncludePropertyName = "include";
+    public const string ExcludePropertyName = "exclude";
+    public const string AllowEmptyPropertyName = "allowEmpty";
+
+    public const string DefaultRoot = ".";
+
+    /// <summary>
+    /// The property names a selector may declare. Anything else is rejected.
+    /// </summary>
+    public static readonly ImmutableArray<string> KnownPropertyNames =
+        [RootPropertyName, IncludePropertyName, ExcludePropertyName, AllowEmptyPropertyName];
+
+    public static TestTargetSelector Create(
+        string? root,
+        IEnumerable<string> include,
+        IEnumerable<string>? exclude = null,
+        bool allowEmpty = false)
+        => new(root ?? DefaultRoot, [.. include], [.. exclude ?? []], allowEmpty);
+}
