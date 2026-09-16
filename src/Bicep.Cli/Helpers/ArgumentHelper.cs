@@ -81,6 +81,14 @@ public class ArgumentHelper
         }
     }
 
+    public static void ValidateBicepOrBicepTestFile(IOUri fileUri)
+    {
+        if (!fileUri.HasBicepExtension() && !fileUri.HasBicepTestExtension())
+        {
+            throw new CommandLineException(string.Format(CliResources.UnrecognizedBicepOrBicepTestFileExtensionMessage, fileUri.ToString()));
+        }
+    }
+
     public static void ValidateBicepOrBicepParamFile(IOUri fileUri)
     {
         if (!fileUri.HasBicepExtension() && !fileUri.HasBicepParamExtension())

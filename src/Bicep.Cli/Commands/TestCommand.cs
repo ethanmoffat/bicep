@@ -46,7 +46,7 @@ namespace Bicep.Cli.Commands
         public async Task<int> RunAsync(TestArguments args)
         {
             var inputUri = this.inputOutputArgumentsResolver.ResolveInputArguments(args);
-            ArgumentHelper.ValidateBicepFile(inputUri);
+            ArgumentHelper.ValidateBicepOrBicepTestFile(inputUri);
             var features = featureProviderFactory.GetFeatureProvider(inputUri);
 
             if (!features.TestFrameworkEnabled)

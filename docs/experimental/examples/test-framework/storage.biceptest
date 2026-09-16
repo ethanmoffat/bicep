@@ -1,0 +1,16 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+test validPrefix 'storage.bicep' = {
+  params: {
+    namePrefix: 'contoso'
+    location: 'eastus'
+  }
+}
+
+test prefixAtLengthLimit 'storage.bicep' = {
+  params: {
+    namePrefix: 'abcdefghijklmnopqrstu'
+    location: 'eastus'
+  }
+}

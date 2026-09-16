@@ -1,0 +1,11 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+// This test intentionally fails: the prefix is too long, so the generated
+// storage account name exceeds the 24 character limit asserted in storage.bicep.
+test prefixTooLong 'storage.bicep' = {
+  params: {
+    namePrefix: 'averylongcontosoprefixvalue'
+    location: 'eastus'
+  }
+}

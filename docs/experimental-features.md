@@ -11,7 +11,7 @@ The following features can be optionally enabled through your `bicepconfig.json`
 
 ### `assertions`
 
-Should be enabled in tandem with `testFramework` experimental feature flag for expected functionality. Allows you to author boolean assertions using the `assert` keyword comparing the actual value of a parameter, variable, or resource name to an expected value. Assert statements can only be written directly within the Bicep file whose resources they reference. For more information, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).
+Should be enabled in tandem with the `testFramework` experimental feature flag for expected functionality. Allows you to author boolean assertions using the `assert` keyword comparing the actual value of a parameter, variable, or resource name to an expected value. Assert statements can only be written directly within the Bicep file whose resources they reference. For more information, see [Using the Bicep Test Framework](./experimental/test-framework.md).
 
 ### `azExtensionConfig`
 
@@ -102,7 +102,8 @@ Allows the ARM template layer to use a new schema to represent resources as an o
 
 ### `testFramework`
 
-Should be enabled in tandem with `assertions` experimental feature flag for expected functionality. Allows you to author client-side, offline unit-test test blocks that reference Bicep files and mock deployment parameters in a separate `test.bicep` file using the new `test` keyword. Test blocks can be run with the command *bicep test <filepath_to_file_with_test_blocks>* which runs all `assert` statements in the Bicep files referenced by the test blocks. For more information, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).
+Should be enabled in tandem with the `assertions` experimental feature flag for expected functionality. Allows you to author client-side, offline tests that reference Bicep files and supply their parameters, using the `test` keyword. Tests can be declared in a `.bicep` file or in a dedicated `.biceptest` file, and are run with `bicep test <filepath>`, which evaluates the `assert` statements in the Bicep files referenced by the test declarations. For more information, see [Using the Bicep Test Framework](./experimental/test-framework.md).
+
 ### `userDefinedConstraints`
 
 Enables the `@validate()` decorator on types, type properties, parameters, and outputs. The decorator takes two arguments: 1) a lambda function that accepts the decorator target's value and returns a boolean indicating if the value is valid (`true`) or not (`false`), and 2) an optional error message to use if the lambda returns `false`.
