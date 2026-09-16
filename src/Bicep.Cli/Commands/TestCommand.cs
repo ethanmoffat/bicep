@@ -64,8 +64,7 @@ namespace Bicep.Cli.Commands
 
             var semanticModel = compilation.GetEntrypointSemanticModel();
 
-            var declarations = semanticModel.Root.TestDeclarations;
-            var testResults = TestRunner.Run(declarations);
+            var testResults = TestRunner.Run(semanticModel);
 
             LogResults(testResults, summary.HasErrors);
 
@@ -75,7 +74,7 @@ namespace Bicep.Cli.Commands
 
         private void LogResults(TestResults testResults, bool hasCompilationErrors)
         {
-            foreach (var (testDeclaration, evaluation) in testResults.Results)
+            foreach (var (testDeclaration, _, evaluation) in testResults.Results)
             {
                 if (evaluation.Success)
                 {

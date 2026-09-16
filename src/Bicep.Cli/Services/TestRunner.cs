@@ -14,7 +14,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Bicep.Cli.Services
 {
-    public record TestResult(TestSymbol Source, TestEvaluation Result);
+    public record TestResult(TestSymbol Source, TestCaseIdentity Identity, TestEvaluation Result);
 
     public record TestResults(ImmutableArray<TestResult> Results)
     {
@@ -30,14 +30,17 @@ namespace Bicep.Cli.Services
     }
     public class TestRunner
     {
-        public static TestResults Run(ImmutableArray<TestSymbol> testDeclarations)
+        public static TestResults Run(SemanticModel testFileModel)
         {
-            var testResults = ImmutableArray.CreateBuilder<TestResult>(); ;
-            foreach (var testDeclaration in testDeclarations)
+            var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
+            var testResults = ImmutableArray.CreateBuilder<TestResult>();
+
+            foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
             {
                 if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var failureDiagnostic) &&
                     semanticModel is SemanticModel testSemanticModel)
                 {
+                    var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, testSemanticModel.SourceFile.FileHandle.Uri);
                     var parameters = TryGetParameters(testSemanticModel, testDeclaration);
                     var templateJToken = GetTemplate(testSemanticModel);
                     TestEvaluation evaluation;
@@ -56,16 +59,11 @@ namespace Bicep.Cli.Services
                         evaluation = new TestEvaluation(null, error, [], []);
                     }
 
-                    var testResult = new TestResult(testDeclaration, evaluation);
-
-                    testResults.Add(testResult);
-
+                    testResults.Add(new TestResult(testDeclaration, identity, evaluation));
                 }
-
             }
+
             return new TestResults(testResults.ToImmutable());
-
-
         }
 
         private static JToken GetTemplate(SemanticModel model)
