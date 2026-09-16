@@ -204,6 +204,28 @@ namespace Bicep.LanguageServer.Features.Language.Completion
 
                         break;
 
+                    case BicepSourceFileKind.TestFile:
+                        // Test files declare the inputs and tests that exercise other Bicep files.
+                        // They are not deployed, so resource/module/output declarations are not offered.
+                        if (model.Features.TestFrameworkEnabled)
+                        {
+                            yield return CreateKeywordCompletion(LanguageConstants.TestKeyword, "Test keyword", context.ReplacementRange, priority: CompletionPriority.High);
+                        }
+
+                        yield return CreateKeywordCompletion(LanguageConstants.MetadataKeyword, "Metadata keyword", context.ReplacementRange);
+                        yield return CreateKeywordCompletion(LanguageConstants.ParameterKeyword, "Parameter keyword", context.ReplacementRange);
+                        yield return CreateKeywordCompletion(LanguageConstants.VariableKeyword, "Variable keyword", context.ReplacementRange);
+                        yield return CreateKeywordCompletion(LanguageConstants.TypeKeyword, "Type keyword", context.ReplacementRange);
+                        yield return CreateKeywordCompletion(LanguageConstants.ImportKeyword, "Import keyword", context.ReplacementRange);
+
+                        yield return CreateContextualSnippetCompletion(
+                            LanguageConstants.FunctionKeyword,
+                            "Function declaration",
+                            "func ${1:name}() ${2:outputType} => $0",
+                            context.ReplacementRange);
+
+                        break;
+
                     default:
                         throw new NotImplementedException($"Unexpected source file kind '{model.SourceFileKind}'.");
                 }

@@ -40,6 +40,11 @@ namespace Bicep.LanguageServer.Features.Language.TextDocumentSync
                 return new TextDocumentAttributes(uri, LanguageConstants.ParamsLanguageId);
             }
 
+            if (uri.ToIOUri().HasBicepTestExtension())
+            {
+                return new TextDocumentAttributes(uri, LanguageConstants.TestLanguageId);
+            }
+
             return new TextDocumentAttributes(uri, LanguageConstants.LanguageId);
         }
 

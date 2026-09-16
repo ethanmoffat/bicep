@@ -37,6 +37,18 @@ test validPrefix 'storage.bicep' = {
 
 The target path is a literal path relative to the test file.
 
+## Editor support
+
+`.biceptest` files are registered as their own language (`bicep-test`) in the Bicep VS Code extension and are handled by the Bicep language server. Opening a `.biceptest` file gives syntax highlighting, diagnostics, formatting and completions.
+
+Top-level completions in a `.biceptest` file are scoped to what a test file can declare:
+
+| Offered | Not offered |
+|---------|-------------|
+| `test` (only when `testFramework` is enabled), `metadata`, `param`, `var`, `type`, `func`, `import` | `resource`, `module`, `output`, `targetScope`, `extension` |
+
+Deployment-only declarations are omitted because a test file is never deployed. The `test` keyword is hidden unless the `testFramework` experimental feature is enabled, so the completion list matches what will actually compile.
+
 ## Assertions
 
 Assertions are currently authored in the Bicep file under test using the `assert` keyword. Each `assert` is evaluated after the test's parameters are applied.

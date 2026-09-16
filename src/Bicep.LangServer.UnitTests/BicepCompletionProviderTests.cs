@@ -8,16 +8,19 @@ using Bicep.Core.Extensions;
 using Bicep.Core.Features;
 using Bicep.Core.Registry.Catalog;
 using Bicep.Core.Registry.Catalog.Implementation.PublicRegistries;
+using Bicep.Core.SourceGraph;
 using Bicep.Core.Syntax;
 using Bicep.Core.TypeSystem;
 using Bicep.Core.UnitTests;
 using Bicep.Core.UnitTests.Features;
 using Bicep.Core.UnitTests.Mock;
 using Bicep.Core.UnitTests.Utils;
+using Bicep.IO.Abstraction;
 using Bicep.LangServer.UnitTests.Completions;
 using Bicep.LanguageServer.Features.Language.Completion;
 using Bicep.LanguageServer.Features.Language.Completion.Snippets;
 using Bicep.LanguageServer.Settings;
+using Bicep.Testing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -553,6 +556,48 @@ output length int =
                     c.TextEdit!.TextEdit!.NewText.Should().Be(expected);
                     c.Detail.Should().Be(expected);
                 });
+        }
+
+        [TestMethod]
+        public async Task TestFileDeclarationContextShouldReturnTestKeywordCompletions()
+        {
+            var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: true);
+
+            completions.Select(c => c.Label).Should().Contain("test");
+        }
+
+        [TestMethod]
+        public async Task TestFileDeclarationContextShouldNotReturnDeploymentOnlyKeywordCompletions()
+        {
+            var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: true);
+
+            var labels = completions.Select(c => c.Label).ToList();
+
+            labels.Should().Contain(["metadata", "param", "var", "type", "import", "func"]);
+            labels.Should().NotContain(["resource", "module", "output", "targetScope", "extension"]);
+        }
+
+        [TestMethod]
+        public async Task TestFileDeclarationContextWithoutTestFrameworkShouldNotReturnTestKeyword()
+        {
+            var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: false);
+
+            completions.Select(c => c.Label).Should().NotContain("test");
+        }
+
+        private static async Task<List<CompletionItem>> GetTestFileDeclarationCompletions(bool testFrameworkEnabled)
+        {
+            var entryFileUri = TestFileUri.FromInMemoryPath("main.biceptest");
+            var compilation = Services
+                .WithFeatureOverrides(new(TestFrameworkEnabled: testFrameworkEnabled))
+                .BuildCompilation(new Dictionary<IOUri, string> { [entryFileUri] = string.Empty }, entryFileUri);
+
+            compilation.GetEntrypointSemanticModel().SourceFileKind.Should().Be(BicepSourceFileKind.TestFile);
+
+            var completionProvider = CreateProvider();
+            var completions = await completionProvider.GetFilteredCompletions(compilation, BicepCompletionContext.Create(compilation, 0), CancellationToken.None);
+
+            return completions.Where(c => c.Kind == CompletionItemKind.Keyword || c.Kind == CompletionItemKind.Snippet).ToList();
         }
 
         private static void AssertExpectedFunctions(List<CompletionItem> completions, bool expectParamDefaultFunctions, IEnumerable<string>? fullyQualifiedFunctionNames = null)

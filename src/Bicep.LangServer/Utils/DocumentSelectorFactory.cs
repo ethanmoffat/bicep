@@ -19,8 +19,8 @@ namespace Bicep.LanguageServer.Utils
         public TextDocumentSelector CreateForBicepAndParams() => new(
             langServerOptions?.VsCompatibilityMode == true
               // VS doesn't currently support language filters in the document selector, so we must give it a file pattern
-              ? [TextDocumentFilter.ForPattern(Glob(LanguageConstants.LanguageFileExtension, LanguageConstants.ParamsFileExtension))]
-              : [TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId)]
+              ? [TextDocumentFilter.ForPattern(Glob(LanguageConstants.LanguageFileExtension, LanguageConstants.ParamsFileExtension, LanguageConstants.TestFileExtension))]
+              : [TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.TestLanguageId)]
             );
 
         public TextDocumentSelector CreateForAllSupportedLangIds() => new(
@@ -30,12 +30,14 @@ namespace Bicep.LanguageServer.Utils
                   TextDocumentFilter.ForPattern(Glob(
                     LanguageConstants.LanguageFileExtension,
                     LanguageConstants.ParamsFileExtension,
+                    LanguageConstants.TestFileExtension,
                     LanguageConstants.JsoncFileExtension,
                     LanguageConstants.JsonFileExtension,
                     LanguageConstants.ArmTemplateFileExtension))
               ] : [
                     TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId),
+                  TextDocumentFilter.ForLanguage(LanguageConstants.TestLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.JsoncLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.JsonLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.ArmTemplateLanguageId)
