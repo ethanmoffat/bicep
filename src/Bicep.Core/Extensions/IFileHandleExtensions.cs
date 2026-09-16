@@ -23,6 +23,8 @@ namespace Bicep.Core.Extensions
 
         public static bool IsBicepParamFile(this IFileHandle fileHandle) => fileHandle.Uri.HasBicepParamExtension();
 
+        public static bool IsBicepTestFile(this IFileHandle fileHandle) => fileHandle.Uri.HasBicepTestExtension();
+
         public static ResultWithDiagnosticBuilder<IFileHandle> TryGetRelativeFile(this IFileHandle fileHandle, RelativePath path)
         {
             try

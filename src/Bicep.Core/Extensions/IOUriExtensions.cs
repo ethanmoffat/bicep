@@ -20,5 +20,7 @@ namespace Bicep.Core.Extensions
         public static bool HasBicepExtension(this IOUri uri) => uri.HasExtension(LanguageConstants.LanguageFileExtension);
 
         public static bool HasBicepParamExtension(this IOUri uri) => uri.HasExtension(LanguageConstants.ParamsFileExtension);
+
+        public static bool HasBicepTestExtension(this IOUri uri) => uri.HasExtension(LanguageConstants.TestFileExtension);
     }
 }

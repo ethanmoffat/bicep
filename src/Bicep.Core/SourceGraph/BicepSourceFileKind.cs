@@ -21,6 +21,12 @@ namespace Bicep.Core.SourceGraph
         /// <summary>
         /// A Bicep file used in the REPL environment.
         /// </summary>
-        ReplFile
+        ReplFile,
+
+        /// <summary>
+        /// A Bicep test file that declares tests referencing other Bicep files. Part of the
+        /// experimental test framework and only meaningful when that feature is enabled.
+        /// </summary>
+        TestFile
     }
 }

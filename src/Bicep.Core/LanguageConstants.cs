@@ -27,6 +27,11 @@ namespace Bicep.Core
 
         public static bool IsBicepOrParamsLanguage([NotNullWhen(true)] string? languageId) => IsBicepLanguage(languageId) || IsParamsLanguage(languageId);
 
+        public const string TestLanguageId = "bicep-test";
+        public const string TestFileExtension = ".biceptest";
+
+        public static bool IsTestLanguage(string? languageId) => string.Equals(TestLanguageId, languageId, StringComparison.OrdinalIgnoreCase);
+
         public const string JsonLanguageId = "json";
         public const string JsoncLanguageId = "jsonc";
         public const string ArmTemplateLanguageId = "arm-template"; // Provided by the ARM Tools VSCode extension.
