@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Azure.Deployments.Core.Definitions.Schema;
 using Bicep.Core;
 using Bicep.Core.Emit;
@@ -17,11 +18,26 @@ using Newtonsoft.Json.Linq;
 
 namespace Bicep.Cli.Services
 {
-    public record TestResult(TestSymbol Source, TestCaseIdentity Identity, TestEvaluation Result);
+    /// <summary>
+    /// One evaluation and how long it took. <see cref="Duration"/> covers the whole unit of work a
+    /// host would attribute to this case, including compiling the target, because that is the cost a
+    /// slow policy actually imposes. It is set once where the result is collected rather than by each
+    /// site that constructs one, so no path can report an unmeasured zero.
+    /// </summary>
+    public record TestResult(TestSymbol Source, TestCaseIdentity Identity, TestEvaluation Result)
+    {
+        public TimeSpan Duration { get; init; }
+    }
 
     public record TestResults(ImmutableArray<TestResult> Results)
     {
         public int TotalEvaluations => Results.Length;
+
+        /// <summary>
+        /// The summed cost of the evaluations, not wall-clock time for the run. The two coincide while
+        /// evaluation is sequential, and summing stays correct if it ever stops being.
+        /// </summary>
+        public TimeSpan TotalDuration => Results.Aggregate(TimeSpan.Zero, (total, result) => total + result.Duration);
 
         public int SuccessfulEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Passed);
 
@@ -59,7 +75,7 @@ namespace Bicep.Cli.Services
                     {
                         // A literal target names one file, so the test file's own directory is the frame of
                         // reference its facts are reported in.
-                        testResults.Add(Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri, inputCase));
+                        testResults.Add(Timed(() => Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri, inputCase)));
                     }
                 }
             }
@@ -78,24 +94,44 @@ namespace Bicep.Cli.Services
 
             if (TestTargetSelectorBinder.TryBind(testDeclaration.DeclaringTest) is not { } selector)
             {
-                return [Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.", inputCase)];
+                return [Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.", inputCase))];
             }
 
             var discovery = TestTargetDiscovery.Discover(testFileHandle.GetParent(), selector);
 
             if (discovery.Error is { } error)
             {
-                return [Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message, inputCase)];
+                return [Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message, inputCase))];
             }
 
             var results = new List<TestResult>();
 
             foreach (var targetUri in discovery.Targets)
             {
-                results.Add(await EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri, inputCase));
+                results.Add(await TimedAsync(() => EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri, inputCase)));
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Measures one evaluation. Centralized so that every result carries a real measurement:
+        /// attaching the duration at each construction site would let a new path forget to.
+        /// </summary>
+        private static TestResult Timed(Func<TestResult> evaluate)
+        {
+            var start = Stopwatch.GetTimestamp();
+            var result = evaluate();
+
+            return result with { Duration = Stopwatch.GetElapsedTime(start) };
+        }
+
+        private static async Task<TestResult> TimedAsync(Func<Task<TestResult>> evaluate)
+        {
+            var start = Stopwatch.GetTimestamp();
+            var result = await evaluate();
+
+            return result with { Duration = Stopwatch.GetElapsedTime(start) };
         }
 
         private async Task<TestResult> EvaluateTargetAsync(SemanticModel testFileModel, TestSymbol testDeclaration, IOUri targetUri, IOUri factRoot, TestInputCase? inputCase)

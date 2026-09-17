@@ -972,6 +972,7 @@ $ bicep test storage-failing.biceptest --output-format json
       "inputCase": null,
       "status": "failed",
       "error": null,
+      "durationMs": 485.507,
       "assertions": {
         "total": 2,
         "failed": 1,
@@ -993,7 +994,8 @@ $ bicep test storage-failing.biceptest --output-format json
     "total": 1,
     "passed": 0,
     "failed": 1,
-    "skipped": 0
+    "skipped": 0,
+    "durationMs": 485.507
   }
 }
 ```
@@ -1016,6 +1018,7 @@ $ bicep test source-policy-failing.biceptest --output-format json
       "inputCase": null,
       "status": "failed",
       "error": null,
+      "durationMs": 622.212,
       "assertions": {
         "total": 1,
         "failed": 1,
@@ -1033,18 +1036,49 @@ $ bicep test source-policy-failing.biceptest --output-format json
           }
         ]
       }
+    },
+    {
+      "caseId": "source-policy-failing.biceptest#forbidStorageAccounts#modules/fileStorage.bicep",
+      "testFile": "source-policy-failing.biceptest",
+      "testName": "forbidStorageAccounts",
+      "target": "modules/fileStorage.bicep",
+      "inputFile": null,
+      "inputCase": null,
+      "status": "failed",
+      "error": null,
+      "durationMs": 20.074,
+      "assertions": {
+        "total": 1,
+        "failed": 1,
+        "failedNames": [
+          "noStorageAccounts"
+        ],
+        "failures": [
+          {
+            "name": "noStorageAccounts",
+            "message": "Storage accounts must be created by the platform team, not by service modules.",
+            "error": null,
+            "violations": [
+              "fileStorage.bicep(12): storageAccount"
+            ]
+          }
+        ]
+      }
     }
   ],
   "summary": {
     "total": 2,
     "passed": 0,
     "failed": 2,
-    "skipped": 0
+    "skipped": 0,
+    "durationMs": 642.285
   }
 }
 ```
 
-(The second case is elided above for brevity; the real document contains one case per target.)
+Note the two durations: 622ms for the first target and 20ms for the second. Both do the same amount
+of work; the first simply pays for everything the run loads once. Durations are a measurement of
+real cost, not a benchmark, and they are not comparable across positions in a run.
 
 The same option applies to `--list`, where `mode` is `list` and each case has a status of `listed`
 or `unresolved`:
@@ -1060,6 +1094,8 @@ $ bicep test naming.biceptest --list --output-format json
       "testFile": "naming.biceptest",
       "testName": "namingPolicy",
       "target": "modules/blobStorage.bicep",
+      "inputFile": null,
+      "inputCase": null,
       "status": "listed",
       "error": null
     },
@@ -1068,6 +1104,8 @@ $ bicep test naming.biceptest --list --output-format json
       "testFile": "naming.biceptest",
       "testName": "namingPolicy",
       "target": "modules/fileStorage.bicep",
+      "inputFile": null,
+      "inputCase": null,
       "status": "listed",
       "error": null
     }
@@ -1092,6 +1130,15 @@ Notes on the contract:
 - `assertions` is present only for cases that were actually evaluated. A skipped case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares
   none.
+- `durationMs` is how long this case cost, in milliseconds to three decimal places. It covers the
+  whole unit of work attributable to the case, including compiling the target, because that is the
+  cost a slow policy actually imposes. Skipped cases carry one too: deciding a target cannot be
+  evaluated still takes time. `summary.durationMs` is the sum of the cases, not wall-clock time for
+  the process.
+- `durationMs` is absent in `--list` mode. Listing evaluates nothing, so there is no evaluation to
+  time, and reporting zero would be a measurement rather than an absence.
+- Because durations differ between runs, two reports of the same suite are no longer byte-identical.
+  A host comparing reports should compare case identities and outcomes, not the whole document.
 - `failures` describes each failed assertion. `violations` holds selector-relative source locations
   drawn from the target's own declarations; it is empty for target-owned `assert` statements, which
   have no offending-fact collection.

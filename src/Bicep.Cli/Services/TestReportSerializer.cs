@@ -21,7 +21,6 @@ public static class TestReportSerializer
     /// Additive, optional properties do not require a new version.
     /// </summary>
     public const string ContractVersion = "1.0";
-
     private const string ListedStatus = "listed";
     private const string UnresolvedStatus = "unresolved";
 
@@ -71,6 +70,10 @@ public static class TestReportSerializer
         {
             var node = CreateCase(result.Identity, GetStatusName(result.Result.Status), result.Result.Error);
 
+            // How long this case cost. Reported for skipped cases too: deciding a target cannot be
+            // evaluated still takes time, and a host that hides that cost cannot explain its own runtime.
+            node["durationMs"] = RoundToMilliseconds(result.Duration);
+
             // Assertion counts are only meaningful when the target was actually evaluated.
             if (result.Result.Status is not TestCaseStatus.Skipped)
             {
@@ -97,9 +100,17 @@ public static class TestReportSerializer
                 ["passed"] = results.SuccessfulEvaluations,
                 ["failed"] = results.FailedEvaluations,
                 ["skipped"] = results.SkippedEvaluations,
+                ["durationMs"] = RoundToMilliseconds(results.TotalDuration),
             },
         });
     }
+
+    /// <summary>
+    /// Milliseconds to three decimal places. Serializing the raw tick count would make the document
+    /// differ on every run for no reader's benefit, and microseconds are already finer than anything
+    /// a host reports.
+    /// </summary>
+    private static double RoundToMilliseconds(TimeSpan duration) => Math.Round(duration.TotalMilliseconds, 3);
 
     private static JsonObject CreateCase(TestCaseIdentity identity, string status, string? error)
         => new()

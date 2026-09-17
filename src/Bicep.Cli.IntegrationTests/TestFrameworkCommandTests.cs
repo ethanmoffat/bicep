@@ -614,6 +614,51 @@ test failing 'target.bicep' = {
         }
 
         [TestMethod]
+        public async Task Test_JsonOutput_ReportsMeasuredDurations()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), "assert alwaysTrue = true", outputFileDir);
+            // Does not compile, so it is skipped - and rejecting it still costs time.
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "broken.bicep"), "resource nope 'Not.A/type' = {}", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+}", outputFileDir);
+
+            var (output, _, _) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            using (new AssertionScope())
+            {
+                var root = JsonDocument.Parse(output).RootElement;
+                var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+
+                cases.Should().HaveCount(2);
+
+                // A real run must produce real measurements. Serializing the field is not enough: a
+                // duration that is always zero would satisfy the shape and tell a host nothing.
+                foreach (var testCase in cases)
+                {
+                    testCase.GetProperty("durationMs").GetDouble().Should().BePositive(
+                        $"evaluating {testCase.GetProperty("target").GetString()} takes measurable time");
+                }
+
+                // Including the one that could not be evaluated.
+                cases.Should().Contain(x => x.GetProperty("status").GetString() == "skipped");
+
+                var total = cases.Sum(x => x.GetProperty("durationMs").GetDouble());
+                root.GetProperty("summary").GetProperty("durationMs").GetDouble()
+                    .Should().BeApproximately(total, 0.01, "the summary is the sum of the cases it summarizes");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_JsonOutput_ReportsInventoryForListMode()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
@@ -777,11 +822,31 @@ assert isEqual = foo == 'ShouldSucceed'";
 
             // Selection is owned by the test file, so the same invocation from a different directory
             // must produce byte-identical case identities.
-            var fromRoot = await RunFrom(outputFileDir);
-            var fromNested = await RunFrom(Path.Combine(outputFileDir, "modules"));
+            //
+            // Durations are excluded from the comparison: they are a measurement of this machine at
+            // this moment, so requiring them to match would be asserting that two runs take exactly
+            // the same time. Everything else - identities, order, statuses, assertion counts - is
+            // still compared byte for byte, which is what "does not depend on the working directory"
+            // actually claims.
+            var fromRoot = WithoutDurations(await RunFrom(outputFileDir));
+            var fromNested = WithoutDurations(await RunFrom(Path.Combine(outputFileDir, "modules")));
 
             fromNested.Should().Be(fromRoot);
             fromRoot.Should().Contain("main.biceptest#policy#modules/one.bicep");
+        }
+
+        /// <summary>
+        /// Blanks measured durations so two runs can be compared for everything except how long they
+        /// took. Asserts that it actually replaced something, so the comparison cannot silently become
+        /// vacuous if the field is renamed.
+        /// </summary>
+        private static string WithoutDurations(string json)
+        {
+            var normalized = Regex.Replace(json, "\"durationMs\": [0-9.]+", "\"durationMs\": 0");
+
+            normalized.Should().NotBe(json, "the report should carry durations to blank out");
+
+            return normalized;
         }
 
         [TestMethod]

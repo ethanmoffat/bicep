@@ -21,6 +21,9 @@ public class TestReportSerializerTests
     private static TestResult Result(TestCaseIdentity identity, TestEvaluation evaluation)
         => new(null!, identity, evaluation);
 
+    private static TestResult Result(TestCaseIdentity identity, TestEvaluation evaluation, TimeSpan duration)
+        => new(null!, identity, evaluation) { Duration = duration };
+
     private static TestEvaluation Passed(params string[] assertions)
         => new(null, null, [.. assertions.Select(name => new AssertionResult(name, true))], []);
 
@@ -115,6 +118,41 @@ public class TestReportSerializerTests
         summary.GetProperty("passed").GetInt32().Should().Be(1);
         summary.GetProperty("failed").GetInt32().Should().Be(1);
         summary.GetProperty("skipped").GetInt32().Should().Be(1);
+    }
+
+    [TestMethod]
+    public void SerializeResults_ReportsPerCaseAndTotalDurations()
+    {
+        var json = TestReportSerializer.SerializeResults(new(
+        [
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Passed("a"), TimeSpan.FromMilliseconds(12.5)),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/two.bicep"), Failed("a", "b"), TimeSpan.FromMilliseconds(7.25)),
+            // A target that could not be evaluated still cost time to reject, so it is reported too.
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Skipped("Missing parameter."), TimeSpan.FromMilliseconds(3)),
+        ]));
+
+        var root = Parse(json);
+        var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+
+        cases[0].GetProperty("durationMs").GetDouble().Should().Be(12.5);
+        cases[1].GetProperty("durationMs").GetDouble().Should().Be(7.25);
+        cases[2].GetProperty("durationMs").GetDouble().Should().Be(3);
+
+        root.GetProperty("summary").GetProperty("durationMs").GetDouble().Should().Be(22.75);
+    }
+
+    [TestMethod]
+    public void SerializeResults_RoundsDurationsRatherThanReportingTickNoise()
+    {
+        var json = TestReportSerializer.SerializeResults(new(
+        [
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Passed("a"), TimeSpan.FromTicks(1234567)),
+        ]));
+
+        var single = Parse(json).GetProperty("cases").EnumerateArray().Single();
+
+        // 1234567 ticks is 123.4567ms; three decimal places is finer than any host reports.
+        single.GetProperty("durationMs").GetDouble().Should().Be(123.457);
     }
 
     [TestMethod]
