@@ -5,6 +5,39 @@
 
 The Bicep test framework lets you author client-side, offline tests for Bicep files. Tests compile and evaluate the file under test without deploying anything to Azure.
 
+## Getting a build
+
+The test framework is not in an official Bicep release. To try it you need a build that contains it.
+
+Prebuilt artifacts are published as GitHub releases:
+
+| Asset | Use |
+| --- | --- |
+| `bicep-win-x64.exe` | CLI for Windows |
+| `bicep-linux-x64` | CLI for Linux |
+| `vscode-bicep.vsix` | Matching editor tooling |
+
+Download them anonymously; no token is required:
+
+```console
+$ curl -Lo bicep.exe https://github.com/ethanmoffat/bicep/releases/download/<tag>/bicep-win-x64.exe
+$ ./bicep.exe --version
+Bicep CLI version 0.47.93 (978b41ee5e)
+```
+
+The version string ends with the commit the binary was built from. Pin that revision and check it, rather than assuming whichever `bicep` is on the path has the feature. A pipeline that quietly falls back to another `bicep` will otherwise appear to pass without having run any of these tests.
+
+To install the editor tooling:
+
+```console
+$ code --install-extension vscode-bicep.vsix
+```
+
+> [!IMPORTANT]
+> This extension shares its identifier with the Bicep extension published on the Marketplace, so installing it replaces that extension rather than sitting alongside it. Reinstall the Marketplace build to go back.
+
+The extension bundles its own language server, so install the extension and the CLI from the same release. Mixing revisions can produce editor diagnostics that disagree with the CLI.
+
 ## Enabling the feature
 
 Tests are gated behind the `testFramework` experimental feature. Assertions written inside the Bicep file under test are additionally gated behind the `assertions` feature.
