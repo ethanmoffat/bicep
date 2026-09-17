@@ -48,9 +48,10 @@ namespace Bicep.Cli.Commands
 
         public async Task<int> RunAsync(TestArguments args)
         {
-            // Sorted so that a pattern covering several files reports them in the same order every run.
+            // Sorted so that a pattern covering several files reports them in the same order every
+            // run, and in the same order on every host: ordinal rather than the host's case rules.
             var inputUris = this.inputOutputArgumentsResolver.ResolveFilePatternInputArguments(args)
-                .OrderBy(uri => uri.ToString(), IOUri.GlobalSettings.LocalFilePathComparer)
+                .OrderBy(uri => uri.ToString(), StringComparer.Ordinal)
                 .ToArray();
 
             // A pattern that discovers nothing is an error: an empty suite must never be reported as a

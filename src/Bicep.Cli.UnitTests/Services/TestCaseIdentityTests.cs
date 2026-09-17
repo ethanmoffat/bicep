@@ -98,6 +98,49 @@ public class TestCaseIdentityTests
     }
 
     [TestMethod]
+    public void CompareTo_OrdersIdenticallyOnEveryHost()
+    {
+        // Ordinal and case-insensitive ordering disagree about these names. Pinning the ordinal
+        // answer keeps a suite's reported case order the same on Windows and in a Linux pipeline,
+        // so two runs of the same suite stay comparable across hosts.
+        var unordered = new[]
+        {
+            Identity("/repo/tests/app.biceptest", "t", "/repo/src/a.bicep"),
+            Identity("/repo/tests/README.biceptest", "t", "/repo/src/a.bicep"),
+            Identity("/repo/tests/Zoo.biceptest", "t", "/repo/src/a.bicep"),
+        };
+
+        unordered.Order().Select(x => x.TestFileName)
+            .Should().Equal("README.biceptest", "Zoo.biceptest", "app.biceptest");
+    }
+
+    [TestMethod]
+    public void CompareTo_OrdersTargetsOfOneTestIdenticallyOnEveryHost()
+    {
+        var unordered = new[]
+        {
+            Identity("/repo/tests/a.biceptest", "t", "/repo/src/app.bicep"),
+            Identity("/repo/tests/a.biceptest", "t", "/repo/src/README.bicep"),
+            Identity("/repo/tests/a.biceptest", "t", "/repo/src/Zoo.bicep"),
+        };
+
+        unordered.Order().Select(x => x.RelativeTargetPath)
+            .Should().Equal("../src/README.bicep", "../src/Zoo.bicep", "../src/app.bicep");
+    }
+
+    [TestMethod]
+    public void CompareTo_IsConsistentWithEqualityForPathsNamingOneFile()
+    {
+        // Two spellings of one path must not order as distinct while comparing as equal. On a
+        // case-insensitive host these name the same file and compare equal; on a case-sensitive one
+        // they are different files and order deterministically.
+        var lower = Identity("/repo/tests/a.biceptest", "t", "/repo/src/storage.bicep");
+        var upper = Identity("/repo/tests/a.biceptest", "t", "/repo/src/STORAGE.bicep");
+
+        (lower.CompareTo(upper) == 0).Should().Be(lower.Equals(upper));
+    }
+
+    [TestMethod]
     public void CompareTo_SortsNullFirst()
     {
         Identity("/repo/tests/a.biceptest", "t", "/repo/src/a.bicep")

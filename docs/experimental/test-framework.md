@@ -117,6 +117,23 @@ Rules:
 - Matching zero files is an error unless `allowEmpty` is `true`. A selector that has quietly stopped matching anything should not pass vacuously.
 - A test uses either a literal target path or a `match` selector, never both.
 
+### The same test file on Windows and Linux
+
+Test files are commonly written on one operating system and run on another, so selection is specified
+to give the same answer on both wherever it reasonably can:
+
+- **Rootedness is judged from the pattern text**, not by asking the host. `C:\src\*.bicep` is rejected
+  on Linux as well as on Windows, rather than being read as an ordinary relative file name on a host
+  where drive letters mean nothing.
+- **Reported order is the same everywhere.** Targets and cases are ordered ordinally, so a suite lists
+  its cases in one order — in an editor on Windows and in a Linux pipeline alike — and two runs stay
+  comparable. Upper-case names therefore sort before lower-case ones.
+- **Whether a pattern matches a file follows the host**, because that is a filesystem question rather
+  than a Bicep one. On Linux `main.bicep` does not name `Main.bicep`; on Windows and macOS it does.
+  Matching the case of your files exactly is the only portable option.
+
+`/` and `\` are interchangeable in patterns on every host.
+
 ### Discovery versus selection
 
 These are two different things, and they are deliberately kept apart:

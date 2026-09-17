@@ -135,6 +135,45 @@ public class TestTargetDiscoveryTests
     }
 
     [TestMethod]
+    public void Discover_OrdersResultsIdenticallyOnEveryHost()
+    {
+        // Names chosen so that the two orderings disagree: ordinal puts upper-case first, while the
+        // case-insensitive ordering a Windows host would otherwise supply puts "app" first. Asserting
+        // the ordinal answer pins the reported order to be the same in an editor on Windows and in a
+        // Linux pipeline, so an inventory captured on one can be compared with the other.
+        var tree = CreateTree(
+            "/repo/tests/app.bicep",
+            "/repo/tests/README.bicep",
+            "/repo/tests/Zoo.bicep");
+
+        Discover(tree, TestTargetSelector.Create(null, ["**/*.bicep"]))
+            .Should().Equal(
+                "/repo/tests/README.bicep",
+                "/repo/tests/Zoo.bicep",
+                "/repo/tests/app.bicep");
+    }
+
+    [TestMethod]
+    public void Discover_MatchesUsingTheHostFileSystemCaseRules()
+    {
+        var tree = CreateTree("/repo/tests/Main.bicep");
+
+        var result = TestTargetDiscovery.Discover(tree, TestTargetSelector.Create(null, ["main.bicep"]));
+
+        // Unlike ordering, whether a pattern matches a file is a filesystem question, so it follows
+        // the host: on Linux "main.bicep" does not name "Main.bicep", and on Windows and macOS it does.
+        // Pinned in both directions so that neither answer can be hardcoded by accident.
+        if (IOUri.GlobalSettings.LocalFilePathCaseSensitive)
+        {
+            result.Error!.Kind.Should().Be(TestTargetDiscoveryErrorKind.NoTargetsMatched);
+        }
+        else
+        {
+            result.Targets.Should().ContainSingle();
+        }
+    }
+
+    [TestMethod]
     public void Discover_ExclusionsDoNotLeakBetweenSelectors()
     {
         var tree = CreateTree("/repo/tests/a.bicep", "/repo/tests/b.bicep");

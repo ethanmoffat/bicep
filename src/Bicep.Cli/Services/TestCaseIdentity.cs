@@ -45,9 +45,7 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
             return 1;
         }
 
-        var pathComparer = IOUri.GlobalSettings.LocalFilePathComparer;
-
-        if (pathComparer.Compare(TestFile.ToString(), other.TestFile.ToString()) is var testFileComparison and not 0)
+        if (ComparePaths(TestFile, other.TestFile) is var testFileComparison and not 0)
         {
             return testFileComparison;
         }
@@ -57,13 +55,25 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
             return testNameComparison;
         }
 
-        if (pathComparer.Compare(TargetFile.ToString(), other.TargetFile.ToString()) is var targetComparison and not 0)
+        if (ComparePaths(TargetFile, other.TargetFile) is var targetComparison and not 0)
         {
             return targetComparison;
         }
 
         return string.CompareOrdinal(Inputs?.Name, other.Inputs?.Name);
     }
+
+    /// <summary>
+    /// Orders two paths identically on every host.
+    /// </summary>
+    /// <remarks>
+    /// Reported order is part of the result contract, so it deliberately does not use the host's
+    /// case rules: a suite must not list its cases in one order on Windows and another on Linux.
+    /// Paths the host considers the same file still compare equal, keeping this consistent with
+    /// the structural equality of the record.
+    /// </remarks>
+    private static int ComparePaths(IOUri left, IOUri right)
+        => left.Equals(right) ? 0 : string.CompareOrdinal(left.ToString(), right.ToString());
 
     private static string GetFileName(IOUri uri)
     {

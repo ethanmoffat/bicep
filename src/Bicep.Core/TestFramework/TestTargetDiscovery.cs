@@ -114,10 +114,14 @@ public static class TestTargetDiscovery
         var matched = matcher.Match(filesByRelativePath.Keys);
 
         // A file matched by several include patterns is still one target, so dedupe by URI.
+        // Ordering is ordinal rather than host-defined: which files match is a filesystem question and
+        // rightly follows the host's case rules, but the order they are reported in is part of the
+        // result contract and must not change between the machine a test is authored on and the one
+        // it runs on.
         var targets = matched.Files
             .Select(match => filesByRelativePath[match.Path])
             .Distinct()
-            .OrderBy(uri => uri.ToString(), IOUri.GlobalSettings.LocalFilePathComparer)
+            .OrderBy(uri => uri.ToString(), StringComparer.Ordinal)
             .ToImmutableArray();
 
         if (targets.IsEmpty && !selector.AllowEmpty)
