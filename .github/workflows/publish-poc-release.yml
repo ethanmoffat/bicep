@@ -29,6 +29,28 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
+  # Reusing a tag is caught here rather than by `gh release create` at the very end. The
+  # gate below is the bulk of the run, so discovering the collision after it would mean
+  # spending the whole suite to learn the release was never publishable.
+  preflight:
+    name: Check the tag is free
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Reject a tag that already exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::Release '${{ inputs.tag }}' already exists. Pick a new tag; a published release is pinned by a consumer and must not be replaced."
+            exit 1
+          fi
+          if gh api "repos/${{ github.repository }}/git/ref/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag '${{ inputs.tag }}' already exists without a release. Delete it or pick a new tag."
+            exit 1
+          fi
+          echo "Tag '${{ inputs.tag }}' is free."
+
   # A release is a thing other people consume, so it must not be possible to publish one
   # from a revision whose tests are failing. The invocation deliberately mirrors the one in
   # build.yml, including its three-way split, rather than inventing a second way to run the
@@ -36,6 +58,7 @@ jobs:
   # of path handling and Windows alone cannot catch a separator or rooting difference.
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.config.name }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
 
     strategy:
