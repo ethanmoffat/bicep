@@ -129,6 +129,9 @@ namespace Bicep.Core.TypeSystem
                 case DeploymentContextDeclarationSyntax deploymentContext:
                     return new DeclaredTypeAssignment(LanguageConstants.CreateDeploymentContextType(), deploymentContext);
 
+                case MocksDeclarationSyntax mocks:
+                    return new DeclaredTypeAssignment(TestMockType.Create(), mocks);
+
                 case VariableAccessSyntax variableAccess:
                     return GetVariableAccessType(variableAccess);
 

@@ -5,6 +5,7 @@ using Bicep.Core.Diagnostics;
 using Bicep.Core.UnitTests;
 using Bicep.Core.UnitTests.Assertions;
 using Bicep.Core.UnitTests.Utils;
+using Bicep.Testing.IO;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -18,6 +19,20 @@ namespace Bicep.Core.IntegrationTests
 
         [NotNull]
         public TestContext? TestContext { get; set; }
+
+        /// <summary>
+        /// Compiles a '.biceptest' file as the entry point, alongside a trivial target so that the test
+        /// declaration itself resolves. Compiling the test file directly is what puts the file-kind
+        /// specific rules under test.
+        /// </summary>
+        private CompilationHelper.CompilationResult CompileTestFile(string testFileContents)
+        {
+            var fileSet = new MockFileSystemTestFileSet();
+            fileSet.AddFile("sample.biceptest", testFileContents);
+            fileSet.AddFile("target.bicep", "param name string = 'us'\n");
+
+            return CompilationHelper.Compile(ServicesWithTestFramework, fileSet, fileSet.GetUri("sample.biceptest"));
+        }
 
         [TestMethod]
         public void TestFramework_is_disabled_unless_feature_is_enabled()
@@ -680,6 +695,143 @@ test foo = {
 
             result.Should().HaveDiagnostics(new[] {
                 ("BCP036", DiagnosticLevel.Error, "The property \"failOn\" expected a value of type \"array\" but the provided value is of type \"true\"."),
+            });
+        }
+
+        [TestMethod]
+        public void Mocks_are_declared_in_a_test_file()
+        {
+            var result = CompileTestFile("""
+                        mocks = {
+                          identity: {
+                            operation: 'reference'
+                            resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/demo'
+                            apiVersion: '2024-11-30'
+                            response: {
+                              properties: {
+                                principalId: '11111111-1111-1111-1111-111111111111'
+                              }
+                            }
+                          }
+                        }
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void A_mock_can_reference_a_declared_test_parameter()
+        {
+            var result = CompileTestFile("""
+                        param principalId string = '11111111-1111-1111-1111-111111111111'
+
+                        mocks = {
+                          identity: {
+                            operation: 'reference'
+                            resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/demo'
+                            apiVersion: '2024-11-30'
+                            response: {
+                              properties: {
+                                principalId: principalId
+                              }
+                            }
+                          }
+                        }
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void A_mock_entry_requires_its_matching_metadata()
+        {
+            var result = CompileTestFile("""
+                        mocks = {
+                          identity: {
+                            operation: 'reference'
+                          }
+                        }
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            // Without an identity a mock is a wildcard, and a wildcard would answer calls nobody meant
+            // to make.
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"object\" declaration is missing the following required properties: \"apiVersion\", \"resourceId\"."),
+            });
+        }
+
+        [TestMethod]
+        public void An_unsupported_mock_operation_is_reported()
+        {
+            var result = CompileTestFile("""
+                        mocks = {
+                          identity: {
+                            operation: 'listSecrets'
+                            resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/demo'
+                            apiVersion: '2023-01-01'
+                          }
+                        }
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP036", DiagnosticLevel.Error, "The property \"operation\" expected a value of type \"'listKeys' | 'reference'\" but the provided value is of type \"'listSecrets'\"."),
+            });
+        }
+
+        [TestMethod]
+        public void A_misspelled_mock_field_is_reported()
+        {
+            var result = CompileTestFile("""
+                        mocks = {
+                          identity: {
+                            operation: 'reference'
+                            resourceID: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/demo'
+                            apiVersion: '2023-01-01'
+                          }
+                        }
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"object\" declaration is missing the following required properties: \"resourceId\"."),
+                ("BCP089", DiagnosticLevel.Error, "The property \"resourceID\" is not allowed on objects of type \"mock\". Did you mean \"resourceId\"?"),
+            });
+        }
+
+        [TestMethod]
+        public void Mocks_cannot_be_declared_twice()
+        {
+            var result = CompileTestFile("""
+                        mocks = {}
+
+                        mocks = {}
+
+                        test policy 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP470", DiagnosticLevel.Error, "A file can declare \"mocks\" only once."),
+            });
+        }
+
+        [TestMethod]
+        public void Mocks_cannot_be_declared_in_a_deployable_file()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+mocks = {}
+");
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP468", DiagnosticLevel.Error, "A \"mocks\" declaration is only supported in a \".biceptest\" file."),
             });
         }
 

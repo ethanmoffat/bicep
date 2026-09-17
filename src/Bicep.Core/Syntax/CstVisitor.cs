@@ -132,6 +132,14 @@ namespace Bicep.Core.Syntax
             this.Visit(syntax.Assignment);
             this.Visit(syntax.Value);
         }
+
+        public override void VisitMocksDeclarationSyntax(MocksDeclarationSyntax syntax)
+        {
+            this.VisitNodes(syntax.LeadingNodes);
+            this.Visit(syntax.Keyword);
+            this.Visit(syntax.Assignment);
+            this.Visit(syntax.Value);
+        }
         public override void VisitOutputDeclarationSyntax(OutputDeclarationSyntax syntax)
         {
             this.VisitNodes(syntax.LeadingNodes);

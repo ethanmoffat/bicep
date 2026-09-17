@@ -37,6 +37,7 @@ namespace Bicep.Core
 
         public const string TestCaseKeyword = "case";
         public const string DeploymentContextKeyword = "deploymentContext";
+        public const string MocksKeyword = "mocks";
 
         public const string DeploymentContextTenantIdPropertyName = "tenantId";
         public const string DeploymentContextManagementGroupPropertyName = "managementGroup";

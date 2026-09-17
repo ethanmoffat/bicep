@@ -677,6 +677,42 @@ namespace Bicep.Core.TypeSystem
                 return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType, false);
             });
 
+        public override void VisitMocksDeclarationSyntax(MocksDeclarationSyntax syntax)
+            => AssignTypeWithDiagnostics(syntax, diagnostics =>
+            {
+                base.VisitMocksDeclarationSyntax(syntax);
+
+                if (this.model.SourceFile.FileKind is not BicepSourceFileKind.TestFile)
+                {
+                    diagnostics.Write(DiagnosticBuilder.ForPosition(syntax.Keyword).MocksAreOnlySupportedInTestFiles());
+
+                    return ErrorType.Empty();
+                }
+
+                if (!this.model.Features.TestFrameworkEnabled)
+                {
+                    diagnostics.Write(DiagnosticBuilder.ForPosition(syntax.Keyword).MocksRequireTestFrameworkFeature());
+
+                    return ErrorType.Empty();
+                }
+
+                // A second declaration would have to either win, lose or merge, and every one of those
+                // answers hides half of what the author wrote.
+                if (this.model.Root.Syntax.Children.OfType<MocksDeclarationSyntax>().FirstOrDefault() != syntax)
+                {
+                    diagnostics.Write(DiagnosticBuilder.ForPosition(syntax.Keyword).MockCannotBeDeclaredMoreThanOnce());
+
+                    return ErrorType.Empty();
+                }
+
+                if (typeManager.GetDeclaredType(syntax) is not { } declaredType)
+                {
+                    return ErrorType.Empty();
+                }
+
+                return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType, false);
+            });
+
         public override void VisitUsingDeclarationSyntax(UsingDeclarationSyntax syntax)            => AssignTypeWithDiagnostics(syntax, diagnostics =>
             {
                 if (this.model.SourceFile is BicepParamFile && syntax.Decorators.Any())

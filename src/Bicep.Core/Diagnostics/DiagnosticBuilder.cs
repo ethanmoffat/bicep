@@ -2133,6 +2133,18 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic TestParamsFileMustDeclareACase() => CoreError(
                 "BCP467",
                 $"A \"{LanguageConstants.TestParamsFileExtension}\" file must declare at least one \"{LanguageConstants.TestCaseKeyword}\".");
+
+            public Diagnostic MocksAreOnlySupportedInTestFiles() => CoreError(
+                "BCP468",
+                $"A \"{LanguageConstants.MocksKeyword}\" declaration is only supported in a \"{LanguageConstants.TestFileExtension}\" file.");
+
+            public Diagnostic MocksRequireTestFrameworkFeature() => CoreError(
+                "BCP469",
+                $"A \"{LanguageConstants.MocksKeyword}\" declaration requires the \"testFramework\" experimental feature to be enabled.");
+
+            public Diagnostic MockCannotBeDeclaredMoreThanOnce() => CoreError(
+                "BCP470",
+                $"A file can declare \"{LanguageConstants.MocksKeyword}\" only once.");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

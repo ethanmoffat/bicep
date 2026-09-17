@@ -210,6 +210,7 @@ namespace Bicep.LanguageServer.Features.Language.Completion
                         if (model.Features.TestFrameworkEnabled)
                         {
                             yield return CreateKeywordCompletion(LanguageConstants.TestKeyword, "Test keyword", context.ReplacementRange, priority: CompletionPriority.High);
+                            yield return CreateKeywordCompletion(LanguageConstants.MocksKeyword, "Mocks keyword", context.ReplacementRange);
                         }
 
                         yield return CreateKeywordCompletion(LanguageConstants.MetadataKeyword, "Metadata keyword", context.ReplacementRange);

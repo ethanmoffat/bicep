@@ -67,6 +67,7 @@ namespace Bicep.Core.Parsing
                             LanguageConstants.ImportKeyword => this.ImportDeclaration(leadingNodes),
                             LanguageConstants.ExtensionKeyword => this.ExtensionDeclaration(ExpectKeyword(current.Text), leadingNodes),
                             LanguageConstants.AssertKeyword => this.AssertDeclaration(leadingNodes),
+                            LanguageConstants.MocksKeyword => this.MocksDeclaration(leadingNodes),
                             _ => leadingNodes.Length > 0
                                 ? new MissingDeclarationSyntax(leadingNodes)
                                 : throw new ExpectedTokenException(current, b => b.UnrecognizedDeclaration()),
@@ -84,8 +85,16 @@ namespace Bicep.Core.Parsing
                 RecoveryFlags.None,
                 TokenType.NewLine);
 
-        private SyntaxBase TargetScope(IEnumerable<SyntaxBase> leadingNodes)
+        private MocksDeclarationSyntax MocksDeclaration(IEnumerable<SyntaxBase> leadingNodes)
         {
+            var keyword = ExpectKeyword(LanguageConstants.MocksKeyword);
+            var assignment = this.WithRecovery(this.Assignment, RecoveryFlags.None, TokenType.NewLine);
+            var value = this.WithRecovery(() => this.Object(ExpressionFlags.AllowComplexLiterals), GetSuppressionFlag(assignment), TokenType.NewLine);
+
+            return new MocksDeclarationSyntax(leadingNodes, keyword, assignment, value);
+        }
+
+        private SyntaxBase TargetScope(IEnumerable<SyntaxBase> leadingNodes)        {
             var keyword = ExpectKeyword(LanguageConstants.TargetScopeKeyword);
             var assignment = this.WithRecovery(this.Assignment, RecoveryFlags.None, TokenType.NewLine);
             var value = this.WithRecovery(() => this.Expression(ExpressionFlags.AllowComplexLiterals), RecoveryFlags.None, TokenType.NewLine);

@@ -567,6 +567,14 @@ output length int =
         }
 
         [TestMethod]
+        public async Task TestFileDeclarationContextShouldReturnMocksKeywordCompletion()
+        {
+            var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: true);
+
+            completions.Select(c => c.Label).Should().Contain("mocks");
+        }
+
+        [TestMethod]
         public async Task TestFileDeclarationContextShouldNotReturnDeploymentOnlyKeywordCompletions()
         {
             var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: true);
@@ -583,6 +591,14 @@ output length int =
             var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: false);
 
             completions.Select(c => c.Label).Should().NotContain("test");
+        }
+
+        [TestMethod]
+        public async Task TestFileDeclarationContextWithoutTestFrameworkShouldNotReturnMocksKeyword()
+        {
+            var completions = await GetTestFileDeclarationCompletions(testFrameworkEnabled: false);
+
+            completions.Select(c => c.Label).Should().NotContain("mocks");
         }
 
         private static async Task<List<CompletionItem>> GetTestFileDeclarationCompletions(bool testFrameworkEnabled)
