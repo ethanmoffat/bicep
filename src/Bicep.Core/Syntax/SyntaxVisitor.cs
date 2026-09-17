@@ -60,6 +60,10 @@ namespace Bicep.Core.Syntax
 
         public abstract void VisitTestDeclarationSyntax(TestDeclarationSyntax syntax);
 
+        public abstract void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax);
+
+        public abstract void VisitDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax);
+
         public abstract void VisitNonNullAssertionSyntax(NonNullAssertionSyntax syntax);
 
         public abstract void VisitNullableTypeSyntax(NullableTypeSyntax syntax);

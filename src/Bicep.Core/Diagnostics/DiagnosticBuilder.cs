@@ -2117,6 +2117,14 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic TestAssertionRequiresExactlyOneCondition() => CoreError(
                 "BCP463",
                 $"An assertion must declare exactly one of \"{TestAssertion.PassWhenPropertyName}\" or \"{TestAssertion.FailOnPropertyName}\".");
+
+            public Diagnostic UnrecognizedTestParamsFileDeclaration() => CoreError(
+                "BCP464",
+                $"This declaration type is not recognized. Specify a \"{LanguageConstants.UsingKeyword}\", \"{LanguageConstants.TestCaseKeyword}\", \"{LanguageConstants.DeploymentContextKeyword}\" or \"{LanguageConstants.VariableKeyword}\" declaration.");
+
+            public Diagnostic ExpectedTestCaseIdentifier() => CoreError(
+                "BCP465",
+                "Expected a test case identifier at this location.");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

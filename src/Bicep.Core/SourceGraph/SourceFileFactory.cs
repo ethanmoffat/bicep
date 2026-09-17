@@ -53,6 +53,11 @@ namespace Bicep.Core.SourceGraph
                 return CreateBicepTestFile(fileUri, fileContents);
             }
 
+            if (sourceFileType == typeof(BicepTestParamFile))
+            {
+                return CreateBicepTestParamFile(fileUri, fileContents);
+            }
+
             if (sourceFileType == typeof(ArmTemplateFile))
             {
                 return CreateArmTemplateFile(fileUri, fileContents);
@@ -88,6 +93,11 @@ namespace Bicep.Core.SourceGraph
                 return CreateBicepTestFile(fileUri, fileContents);
             }
 
+            if (fileUri.HasBicepTestParamsExtension())
+            {
+                return CreateBicepTestParamFile(fileUri, fileContents);
+            }
+
             // The file does not have an extension. Assuming it is a Bicep file. Note that
             // this is only possible when a module reference path is provided without an
             // extension. When an untilted file (whose URI has no extension) in VS Code,
@@ -107,6 +117,15 @@ namespace Bicep.Core.SourceGraph
         public BicepTestFile CreateBicepTestFile(IOUri fileUri, string fileContents)
         {
             var parser = new Parser(fileContents);
+            var lineStarts = TextCoordinateConverter.GetLineStarts(fileContents);
+            var fileHandle = this.CreateFileHandle(fileUri);
+
+            return new(fileHandle, lineStarts, parser.Program(), this.configurationManager, this.featureProviderFactory, this.auxiliaryFileCache, parser.LexingErrorLookup, parser.ParsingErrorLookup);
+        }
+
+        public BicepTestParamFile CreateBicepTestParamFile(IOUri fileUri, string fileContents)
+        {
+            var parser = new TestParamsParser(fileContents);
             var lineStarts = TextCoordinateConverter.GetLineStarts(fileContents);
             var fileHandle = this.CreateFileHandle(fileUri);
 

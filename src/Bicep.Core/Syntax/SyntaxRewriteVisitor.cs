@@ -348,6 +348,39 @@ namespace Bicep.Core.Syntax
         }
         void ISyntaxVisitor.VisitTestDeclarationSyntax(TestDeclarationSyntax syntax) => ReplaceCurrent(syntax, ReplaceTestDeclarationSyntax);
 
+        protected virtual SyntaxBase ReplaceTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax)
+        {
+            var hasChanges = TryRewrite(syntax.LeadingNodes, out var leadingNodes);
+            hasChanges |= TryRewriteStrict(syntax.Keyword, out var keyword);
+            hasChanges |= TryRewriteStrict(syntax.Name, out var name);
+            hasChanges |= TryRewrite(syntax.Assignment, out var assignment);
+            hasChanges |= TryRewrite(syntax.Value, out var value);
+
+            if (!hasChanges)
+            {
+                return syntax;
+            }
+
+            return new TestCaseDeclarationSyntax(leadingNodes, keyword, name, assignment, value);
+        }
+        void ISyntaxVisitor.VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax) => ReplaceCurrent(syntax, ReplaceTestCaseDeclarationSyntax);
+
+        protected virtual SyntaxBase ReplaceDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax)
+        {
+            var hasChanges = TryRewrite(syntax.LeadingNodes, out var leadingNodes);
+            hasChanges |= TryRewriteStrict(syntax.Keyword, out var keyword);
+            hasChanges |= TryRewrite(syntax.Assignment, out var assignment);
+            hasChanges |= TryRewrite(syntax.Value, out var value);
+
+            if (!hasChanges)
+            {
+                return syntax;
+            }
+
+            return new DeploymentContextDeclarationSyntax(leadingNodes, keyword, assignment, value);
+        }
+        void ISyntaxVisitor.VisitDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax) => ReplaceCurrent(syntax, ReplaceDeploymentContextDeclarationSyntax);
+
         protected virtual SyntaxBase ReplaceOutputDeclarationSyntax(OutputDeclarationSyntax syntax)
         {
             var hasChanges = TryRewrite(syntax.LeadingNodes, out var leadingNodes);

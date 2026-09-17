@@ -72,6 +72,10 @@ namespace Bicep.Core.PrettyPrintV2
 
         public void VisitTestDeclarationSyntax(TestDeclarationSyntax syntax) => this.Apply(syntax, this.LayoutTestDeclarationSyntax);
 
+        public void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax) => this.Apply(syntax, this.LayoutTestCaseDeclarationSyntax);
+
+        public void VisitDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax) => this.Apply(syntax, this.LayoutDeploymentContextDeclarationSyntax);
+
         public void VisitNonNullAssertionSyntax(NonNullAssertionSyntax syntax) => this.Apply(syntax, this.LayoutNonNullAssertionSyntax);
 
         public void VisitNullableTypeSyntax(NullableTypeSyntax syntax) => this.Apply(syntax, this.LayoutNullableTypeSyntax);

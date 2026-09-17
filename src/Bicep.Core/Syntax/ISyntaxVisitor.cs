@@ -31,6 +31,10 @@ namespace Bicep.Core.Syntax
 
         void VisitTestDeclarationSyntax(TestDeclarationSyntax syntax);
 
+        void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax);
+
+        void VisitDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax);
+
         void VisitNullableTypeSyntax(NullableTypeSyntax syntax);
 
         void VisitNullLiteralSyntax(NullLiteralSyntax syntax);

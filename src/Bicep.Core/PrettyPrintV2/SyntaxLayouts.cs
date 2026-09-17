@@ -267,6 +267,21 @@ namespace Bicep.Core.PrettyPrintV2
                 syntax.Assignment,
                 syntax.Value);
 
+        private IEnumerable<Document> LayoutTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax) =>
+            this.LayoutLeadingNodes(syntax.LeadingNodes)
+                .Concat(this.Spread(
+                    syntax.Keyword,
+                    syntax.Name,
+                    syntax.Assignment,
+                    syntax.Value));
+
+        private IEnumerable<Document> LayoutDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax) =>
+            this.LayoutLeadingNodes(syntax.LeadingNodes)
+                .Concat(this.Spread(
+                    syntax.Keyword,
+                    syntax.Assignment,
+                    syntax.Value));
+
         private IEnumerable<Document> LayoutParameterDeclarationSyntax(ParameterDeclarationSyntax syntax) =>
             this.LayoutLeadingNodes(syntax.LeadingNodes)
                 .Concat(syntax.Modifier is not null

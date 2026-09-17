@@ -27,6 +27,12 @@ namespace Bicep.Core.SourceGraph
         /// A Bicep test file that declares tests referencing other Bicep files. Part of the
         /// experimental test framework and only meaningful when that feature is enabled.
         /// </summary>
-        TestFile
+        TestFile,
+
+        /// <summary>
+        /// A Bicep test parameters file that binds to a test file with "using" and supplies
+        /// named input cases for it. Part of the experimental test framework.
+        /// </summary>
+        TestParamsFile
     }
 }
