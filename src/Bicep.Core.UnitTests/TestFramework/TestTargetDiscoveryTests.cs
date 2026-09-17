@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.IO.Abstractions.TestingHelpers;
 using Bicep.Core.TestFramework;
 using Bicep.IO.Abstraction;
+using Bicep.IO.FileSystem;
 using Bicep.IO.InMemory;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -279,6 +281,33 @@ public class TestTargetDiscoveryTests
 
         Discover(tree, TestTargetSelector.Create(null, ["**/*.bicep"]))
             .Should().Equal("/repo/tests/inside.bicep");
+    }
+
+    [TestMethod]
+    public void Discover_DoesNotFollowLinkedDirectoriesAndReportsThemAsSkipped()
+    {
+        // The in-memory store has no concept of links, so this walks a mock filesystem instead: a
+        // link is the one way a walk bounded by the selector root can otherwise reach outside it.
+        var fileSystem = new MockFileSystem();
+        var testsDirectory = fileSystem.Path.GetFullPath("/repo/tests");
+
+        fileSystem.AddFile(fileSystem.Path.Combine(testsDirectory, "a.bicep"), new MockFileData("// file"));
+        fileSystem.AddFile(fileSystem.Path.GetFullPath("/repo/elsewhere/b.bicep"), new MockFileData("// file"));
+        fileSystem.Directory.CreateSymbolicLink(
+            fileSystem.Path.Combine(testsDirectory, "link"),
+            fileSystem.Path.GetFullPath("/repo/elsewhere"));
+
+        var testFileDirectory = new FileSystemDirectoryHandle(fileSystem, IOUri.FromFilePath(testsDirectory));
+
+        var result = TestTargetDiscovery.Discover(testFileDirectory, TestTargetSelector.Create(null, ["**/*.bicep"]));
+
+        result.Error.Should().BeNull();
+        result.Targets.Select(uri => uri.GetFilePath().Replace('\\', '/'))
+            .Should().ContainSingle().Which.Should().EndWith("/repo/tests/a.bicep");
+
+        // Reported rather than silently omitted, so a partial walk is never mistaken for an exhaustive one.
+        result.SkippedDirectories.Select(uri => uri.GetFilePath().Replace('\\', '/'))
+            .Should().ContainSingle().Which.Should().Contain("/repo/tests/link");
     }
 
     [TestMethod]

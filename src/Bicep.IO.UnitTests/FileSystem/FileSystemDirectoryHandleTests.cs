@@ -238,6 +238,46 @@ namespace Bicep.IO.UnitTests.FileSystem
 #endif
         }
 
+        [TestMethod]
+        public void IsSymbolicLink_OrdinaryDirectory_ReturnsFalse()
+        {
+            // Arrange.
+            var fileSystem = new MockFileSystem();
+            fileSystem.AddDirectory("/dir");
+
+            var directoryHandle = CreateFileSystemDirectoryHandle(fileSystem, "/dir");
+
+            // Act & Assert.
+            directoryHandle.IsSymbolicLink().Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void IsSymbolicLink_LinkedDirectory_ReturnsTrue()
+        {
+            // Arrange.
+            var fileSystem = new MockFileSystem();
+            fileSystem.AddDirectory("/target");
+            fileSystem.Directory.CreateSymbolicLink(fileSystem.Path.GetFullPath("/link"), fileSystem.Path.GetFullPath("/target"));
+
+            var directoryHandle = CreateFileSystemDirectoryHandle(fileSystem, "/link");
+
+            // Act & Assert.
+            directoryHandle.IsSymbolicLink().Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void IsSymbolicLink_DirectoryDoesNotExist_ReturnsFalse()
+        {
+            // Arrange.
+            var fileSystem = new MockFileSystem();
+
+            var directoryHandle = CreateFileSystemDirectoryHandle(fileSystem, "/missing");
+
+            // Act & Assert. A directory whose link status cannot be established is reported as an
+            // ordinary directory rather than failing the caller's traversal.
+            directoryHandle.IsSymbolicLink().Should().BeFalse();
+        }
+
         private static FileSystemDirectoryHandle CreateFileSystemDirectoryHandle(MockFileSystem fileSystem, string path)
         {
             path = fileSystem.Path.GetFullPath(path);
