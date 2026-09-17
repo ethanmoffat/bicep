@@ -1,0 +1,14 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using 'rbac.biceptest'
+
+deploymentContext = {
+  subscriptionId: '00000000-0000-0000-0000-000000000001'
+  resourceGroup: 'contoso-prod-rg'
+}
+
+case contoso = {
+  workloadName: 'contoso'
+  vaultName: 'contoso-secrets'
+}

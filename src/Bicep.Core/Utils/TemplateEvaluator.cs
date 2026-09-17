@@ -238,6 +238,12 @@ namespace Bicep.Core.Utils
             /// </summary>
             public bool StrictOutputs { get; init; }
 
+            /// <summary>
+            /// Leaves a resource value that cannot yet be computed in place instead of failing, so a
+            /// caller resolving values across nested deployments can evaluate again with more known.
+            /// </summary>
+            public bool TolerateUnresolvedValues { get; init; }
+
             public static EvaluationConfiguration Default = new(
                 DummyTenantId,
                 DummyManagementGroupName,
@@ -298,10 +304,18 @@ namespace Bicep.Core.Utils
                     }
                     ;
 
-                    resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
-                        root: resource.Properties.Value,
-                        evaluationContext: evaluationContext,
-                        skipEvaluationPaths: skipEvaluationPaths);
+                    // A value a resource needs may come from a deployment this pass has not evaluated yet.
+                    // A caller resolving that chain asks for tolerance and repeats; a caller that expects
+                    // every value to be available gets the failure.
+                    resource.Properties.Value = config.TolerateUnresolvedValues
+                        ? ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                            root: resource.Properties.Value,
+                            evaluationContext: evaluationContext,
+                            skipEvaluationPaths: skipEvaluationPaths)
+                        : ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                            root: resource.Properties.Value,
+                            evaluationContext: evaluationContext,
+                            skipEvaluationPaths: skipEvaluationPaths);
                 }
             }
 

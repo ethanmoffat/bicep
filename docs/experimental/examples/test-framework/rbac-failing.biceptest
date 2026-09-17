@@ -1,0 +1,43 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// The same policy applied to a miswired composition. The grant is still deployed and the template
+// still compiles; what changed is which principal it grants to, and the policy catches it.
+
+param workloadName string
+param vaultName string
+
+var scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/contoso-prod-rg'
+
+var vaultId = '${scope}/providers/Microsoft.KeyVault/vaults/${vaultName}'
+
+var principalId = '33333333-3333-3333-3333-333333333333'
+
+var secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+mocks = {
+  workloadIdentity: {
+    operation: 'reference'
+    resourceId: '${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${workloadName}-id'
+    apiVersion: '2023-01-31'
+    response: {
+      properties: {
+        principalId: principalId
+      }
+    }
+  }
+}
+
+test vaultAccessIsGranted 'rbac-miswired.bicep' = {
+  params: {
+    workloadName: workloadName
+    location: 'eastus'
+    vaultName: vaultName
+  }
+  assertions: {
+    grantIsDerivedFromWhatItGrants: {
+      passWhen: target.evaluated.outputs.grantName == guid(vaultId, principalId, secretsUserRoleId)
+      message: 'The role assignment should grant the identity this deployment created.'
+    }
+  }
+}

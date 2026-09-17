@@ -2267,6 +2267,80 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_ResolvesChainedModuleArguments()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "chained-modules");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "first.bicep", """
+                param prefix string
+
+                output token string = '${prefix}-token'
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "second.bicep", """
+                param token string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: replace(token, '-', '')
+                  location: 'eastus'
+                }
+
+                output accountName string = account.name
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param prefix string
+
+                module first 'parts/first.bicep' = {
+                  name: 'first'
+                  params: {
+                    prefix: prefix
+                  }
+                }
+
+                module second 'parts/second.bicep' = {
+                  name: 'second'
+                  params: {
+                    token: first.outputs.token
+                  }
+                }
+
+                output accountName string = second.outputs.accountName
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test chained 'main.bicep' = {
+                  params: {
+                    prefix: 'contoso'
+                  }
+                  assertions: {
+                    // The second module's argument is the first module's output, so it can only be known
+                    // after the first module has been evaluated.
+                    argumentFlowsBetweenModules: {
+                      passWhen: target.evaluated.outputs.accountName == 'contosotoken'
+                      message: 'A module argument taken from another module output should be resolved.'
+                    }
+                    instanceIsNamedAccordingly: {
+                      passWhen: target.evaluated.withModules.resources[0].name == 'contosotoken'
+                      message: 'The deployed instance should carry the resolved name.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation chained (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_AnswerReferenceAndListRequests()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

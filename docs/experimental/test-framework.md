@@ -759,6 +759,68 @@ A `reference` answer is a resource envelope: an ordinary `reference` reads its `
 `reference(..., 'Full')` reads the envelope itself. A `listKeys` answer is the operation's own result
 and is used exactly as written.
 
+### Composing modules with mocked values
+
+A mocked value does not stop at the module that read it. It flows into that module's outputs, into
+the arguments its caller passes on, and into whatever those arguments derive.
+
+`rbac.bicep` creates a workload identity in one module and grants it Key Vault access in another.
+Azure assigns the principal ID, so the test states it; everything else — the role assignment's name,
+which is derived from the vault, the principal and the role — is computed from source.
+
+```bicep
+// docs/experimental/examples/test-framework/rbac.bicep
+module identity 'rbac/workloadIdentity.bicep' = {
+  name: '${workloadName}-identity'
+  params: {
+    identityName: '${workloadName}-id'
+    location: location
+  }
+}
+
+module vaultAccess 'rbac/vaultSecretsAccess.bicep' = {
+  name: '${workloadName}-vault-access'
+  params: {
+    vaultName: vaultName
+    principalId: identity.outputs.principalId
+  }
+}
+```
+
+```bicep
+// docs/experimental/examples/test-framework/rbac.biceptest
+grantIsDerivedFromWhatItGrants: {
+  passWhen: target.evaluated.outputs.grantName == guid(vaultId, principalId, secretsUserRoleId)
+  message: 'The role assignment name should be derived from the vault, the principal and the role.'
+}
+```
+
+```console
+$ bicep test rbac.biceptest --inputs rbac.biceptestparam
+[✓] Evaluation vaultAccessIsGranted (rbac.bicep) [rbac.biceptestparam: contoso] Passed!
+All 1 evaluations passed!
+```
+
+An argument taken from another module's output is only knowable once that module has been evaluated,
+and the module it is passed to cannot be evaluated until then. Evaluation therefore repeats until the
+module outputs stop changing, resolving one more link of the chain each round.
+
+That is what makes a miswiring visible. `rbac-miswired.bicep` passes the identity's resource ID where
+a principal ID belongs. Both are strings, so it compiles and deploys a role assignment either way —
+but not the one the policy asked for:
+
+```console
+$ bicep test rbac-failing.biceptest --inputs rbac-failing.biceptestparam
+[✗] Evaluation vaultAccessIsGranted (rbac-miswired.bicep) [rbac-failing.biceptestparam: contoso] Failed at 1 / 1 assertions!
+	[✗] Assertion grantIsDerivedFromWhatItGrants failed!
+		The role assignment should grant the identity this deployment created.
+Evaluation Summary: Failure!
+Total: 1 - Success: 0 - Skipped: 0 - Failed: 1
+```
+
+This says nothing about whether the grant would be accepted by Azure. It says what the deployment
+computes, which is the part the source is responsible for.
+
 ## Running tests
 
 ```console
@@ -981,6 +1043,14 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `mocks.biceptestparam` | One case supplying the names the mocks are built from |
 | `mocks-failing.biceptest` | A response that omits a field the target reads |
 | `mocks-failing.biceptestparam` | The same case, bound to the failing test file |
+| `rbac.bicep` | A composition whose second module is wired from the first module's output |
+| `rbac/workloadIdentity.bicep` | Creates an identity whose principal ID Azure assigns |
+| `rbac/vaultSecretsAccess.bicep` | Grants a principal vault access, naming the grant after what it grants |
+| `rbac.biceptest` | Mocks only the principal ID and asserts everything derived from it |
+| `rbac.biceptestparam` | One case supplying the workload and vault names |
+| `rbac-miswired.bicep` | The same composition with the identity's resource ID passed as a principal ID |
+| `rbac-failing.biceptest` | The same policy, catching the miswiring |
+| `rbac-failing.biceptestparam` | The same case, bound to the miswired target |
 
 Running the passing tests:
 
@@ -1098,7 +1168,7 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 ## Current limitations
 
 - Evaluated values cover resource instances and outputs. Individual resource properties are not yet exposed.
-- A module argument that itself depends on another module's output is evaluated before that output is available, so chained module-to-module argument flow is not yet resolved.
+- Module-to-module argument flow is resolved by repeated evaluation, up to a bounded number of rounds. A longer chain than that is left unresolved.
 - Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
 - `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.

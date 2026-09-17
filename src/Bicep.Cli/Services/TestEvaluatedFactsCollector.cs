@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using Bicep.Core.Semantics;
 using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace Bicep.Cli.Services;
@@ -26,6 +27,13 @@ public sealed class TestEvaluatedFactsProvider(
 {
     private const string DeploymentResourceType = "Microsoft.Resources/deployments";
     private const string DeploymentParametersSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#";
+
+    /// <summary>
+    /// Each round resolves one more module-to-module link, so a chain longer than this is not resolved
+    /// rather than retried forever. A bound is needed because a template whose values never settle would
+    /// otherwise never finish.
+    /// </summary>
+    private const int MaxResolutionRounds = 8;
 
     /// <summary>
     /// One evaluated deployment: the template as this case computes it, plus the module calls it makes.
@@ -65,25 +73,48 @@ public sealed class TestEvaluatedFactsProvider(
     /// <summary>
     /// Evaluates one template and everything it deploys.
     ///
-    /// A module's arguments are only known once the calling template has been evaluated, and the
-    /// caller's outputs are only knowable once the modules it reads have been. So the template is
-    /// evaluated, its modules are evaluated with the arguments that produced, and the template is then
-    /// evaluated again with those module outputs available.
+    /// A module's arguments are only known once the calling template has been evaluated, and a caller's
+    /// own values may depend on outputs of modules it called - including the arguments it passes to the
+    /// next module. Each round resolves one more link of that chain, so the work repeats until the
+    /// module outputs stop changing.
     /// </summary>
     private EvaluatedDeployment Evaluate(JToken template, JObject? inputs, TestDeploymentContext context, string file)
     {
-        var first = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(null), strictOutputs: false);
-        var modules = EvaluateModules(first, context, file);
+        var modules = ImmutableDictionary.Create<string, EvaluatedDeployment>(StringComparer.OrdinalIgnoreCase);
+        var evaluated = EvaluateTemplate(template, inputs, context, mocks, null, strictOutputs: false, tolerant: true);
 
-        if (modules.IsEmpty)
+        for (var round = 0; round < MaxResolutionRounds; round++)
         {
-            return new EvaluatedDeployment(first, template, inputs, file, context, modules);
+            var next = EvaluateModules(evaluated, context, file);
+            var settled = Fingerprint(next) == Fingerprint(modules);
+
+            modules = next;
+
+            if (settled || modules.IsEmpty)
+            {
+                break;
+            }
+
+            evaluated = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(modules), strictOutputs: false, tolerant: true);
         }
 
-        var second = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(modules), strictOutputs: false);
+        // Everything the modules contribute is known by now, so nothing needs to be tolerated: a value
+        // that still cannot be computed is a real failure and is reported as one.
+        var authoritative = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(modules), strictOutputs: false, tolerant: false);
 
-        return new EvaluatedDeployment(second, template, inputs, file, context, modules);
+        return new EvaluatedDeployment(authoritative, template, inputs, file, context, modules);
     }
+
+    /// <summary>
+    /// Identifies what the modules of a deployment currently contribute back to their caller. A round
+    /// that produces the same contribution as the last one has nothing left to resolve.
+    /// </summary>
+    private static string Fingerprint(ImmutableDictionary<string, EvaluatedDeployment> modules)
+        => string.Join(
+            '\u0000',
+            modules
+                .OrderBy(module => module.Key, StringComparer.Ordinal)
+                .Select(module => $"{module.Key}={module.Value.Template[TestTargetType.OutputsPropertyName]?.ToString(Formatting.None) ?? string.Empty}"));
 
     /// <summary>
     /// Re-evaluates a deployment with strict outputs, resolving module outputs from strict module
@@ -102,7 +133,8 @@ public sealed class TestEvaluatedFactsProvider(
             deployment.Context,
             mocks,
             ModuleOutputResolver(modules),
-            strictOutputs: true);
+            strictOutputs: true,
+            tolerant: false);
     }
 
     private static TemplateEvaluator.OnUnresolvedReferenceDelegate? ModuleOutputResolver(ImmutableDictionary<string, EvaluatedDeployment>? modules)
@@ -126,7 +158,8 @@ public sealed class TestEvaluatedFactsProvider(
         TestDeploymentContext context,
         TestMockRegistry? mocks,
         TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference,
-        bool strictOutputs)
+        bool strictOutputs,
+        bool tolerant)
         => (JObject)TemplateEvaluator.Evaluate(
             template,
             inputs,
@@ -134,6 +167,7 @@ public sealed class TestEvaluatedFactsProvider(
             {
                 OnUnresolvedReferenceFunc = onUnresolvedReference,
                 StrictOutputs = strictOutputs,
+                TolerateUnresolvedValues = tolerant,
             }).ToJToken();
 
     /// <summary>
