@@ -4,6 +4,8 @@
 namespace Bicep.Cli.Arguments;
 
 public record TestArguments(
-    string InputFile,
+    string? InputFile,
+    string? FilePattern,
     bool NoRestore,
-    DiagnosticsFormat? DiagnosticsFormat) : IInputArguments;
+    bool List,
+    DiagnosticsFormat? DiagnosticsFormat) : IFilePatternInputArguments;

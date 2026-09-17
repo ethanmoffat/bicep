@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Immutable;
 using System.CommandLine;
 using Bicep.Cli.Arguments;
 using Bicep.Cli.Constants;
@@ -9,8 +10,10 @@ using Bicep.Cli.Logging;
 using Bicep.Cli.Services;
 using Bicep.Core;
 using Bicep.Core.Features;
+using Bicep.IO.Abstraction;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Option = Bicep.Cli.Constants.Option;
 
 namespace Bicep.Cli.Commands
 {
@@ -45,42 +48,112 @@ namespace Bicep.Cli.Commands
 
         public async Task<int> RunAsync(TestArguments args)
         {
-            var inputUri = this.inputOutputArgumentsResolver.ResolveInputArguments(args);
-            ArgumentHelper.ValidateBicepOrBicepTestFile(inputUri);
-            var features = featureProviderFactory.GetFeatureProvider(inputUri);
+            // Sorted so that a pattern covering several files reports them in the same order every run.
+            var inputUris = this.inputOutputArgumentsResolver.ResolveFilePatternInputArguments(args)
+                .OrderBy(uri => uri.ToString(), IOUri.GlobalSettings.LocalFilePathComparer)
+                .ToArray();
 
-            if (!features.TestFrameworkEnabled)
+            // A pattern that discovers nothing is an error: an empty suite must never be reported as a
+            // suite that passed. An explicitly named file keeps its existing behavior.
+            if (args.FilePattern is not null && inputUris.Length == 0)
             {
-                await io.Error.Writer.WriteLineAsync("TestFrameWork not enabled");
+                await io.Error.Writer.WriteLineAsync($"The pattern \"{args.FilePattern}\" did not match any test files.");
 
                 return 1;
             }
 
-            logger.LogWarning(string.Format(CliResources.ExperimentalFeaturesDisclaimerMessage, "TestFramework"));
+            var hasErrors = false;
+            var warnedAboutExperimentalFeature = false;
+            var allResults = ImmutableArray.CreateBuilder<TestResult>();
 
-            var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
+            foreach (var inputUri in inputUris)
+            {
+                ArgumentHelper.ValidateBicepOrBicepTestFile(inputUri);
 
-            var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+                if (!featureProviderFactory.GetFeatureProvider(inputUri).TestFrameworkEnabled)
+                {
+                    await io.Error.Writer.WriteLineAsync("TestFrameWork not enabled");
 
-            var semanticModel = compilation.GetEntrypointSemanticModel();
+                    return 1;
+                }
 
-            var testResults = await new TestRunner(compiler).RunAsync(semanticModel);
+                // Warn once per invocation rather than once per file, so that a pattern covering many
+                // test files does not bury its own output in repeated disclaimers.
+                if (!warnedAboutExperimentalFeature)
+                {
+                    logger.LogWarning(string.Format(CliResources.ExperimentalFeaturesDisclaimerMessage, "TestFramework"));
+                    warnedAboutExperimentalFeature = true;
+                }
 
-            LogResults(testResults, summary.HasErrors);
+                if (args.List)
+                {
+                    hasErrors |= await ListAsync(args, inputUri);
+                    continue;
+                }
 
-            // Return a non-zero exit code for compilation and test evaluation errors.
-            return summary.HasErrors || !testResults.Success ? 1 : 0;
+                var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
+                var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+                var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel());
+
+                LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
+                allResults.AddRange(testResults.Results);
+
+                hasErrors |= summary.HasErrors;
+            }
+
+            if (!args.List)
+            {
+                // A single summary covers every discovered file, so that one failing file is never
+                // followed by a later file reporting overall success.
+                hasErrors |= LogSummary(new(allResults.ToImmutable()), hasErrors);
+            }
+
+            return hasErrors ? 1 : 0;
         }
 
-        private void LogResults(TestResults testResults, bool hasCompilationErrors)
+        /// <summary>
+        /// Reports what a test file covers without compiling, restoring or evaluating any target.
+        /// Listing confirms inventory; it never claims the targets compile or pass.
+        /// </summary>
+        private async Task<bool> ListAsync(TestArguments args, IOUri inputUri)
+        {
+            var compilation = await compiler.CreateCompilation(inputUri, skipRestore: true);
+            var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+            var inventory = TestDiscoveryService.Discover(compilation.GetEntrypointSemanticModel());
+
+            foreach (var entry in inventory.Entries)
+            {
+                if (entry.IsResolved)
+                {
+                    await io.Output.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> {entry.Identity.RelativeTargetPath}");
+                }
+                else
+                {
+                    await io.Error.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> (no targets): {entry.Error}");
+                }
+            }
+
+            foreach (var skipped in inventory.SkippedDirectories)
+            {
+                await io.Error.Writer.WriteLineAsync($"Not traversed (link): {skipped}");
+            }
+
+            return summary.HasErrors || inventory.HasErrors;
+        }
+
+        private void LogResults(TestResults testResults, bool qualifyWithTestFile)
         {
             foreach (var (testDeclaration, identity, evaluation) in testResults.Results)
             {
                 // A test may resolve to several targets, so the target is always named: without it two
-                // outcomes of the same declaration would be indistinguishable.
+                // outcomes of the same declaration would be indistinguishable. When several test files
+                // run together the file is named too, since test names are only unique within a file.
+                var name = qualifyWithTestFile
+                    ? $"{identity.TestFileName}: {testDeclaration.Name}"
+                    : testDeclaration.Name;
                 var label = identity.IsSelfTargeted
-                    ? testDeclaration.Name
-                    : $"{testDeclaration.Name} ({identity.RelativeTargetPath})";
+                    ? name
+                    : $"{name} ({identity.RelativeTargetPath})";
 
                 if (evaluation.Success)
                 {
@@ -100,16 +173,28 @@ namespace Bicep.Cli.Commands
                     }
                 }
             }
+        }
+
+        /// <summary>Reports the aggregate outcome once, and returns whether it was a failure.</summary>
+        private bool LogSummary(TestResults testResults, bool hasCompilationErrors)
+        {
             // Do not report overall success when compilation diagnostics contain errors.
             if (testResults.Success && !hasCompilationErrors)
             {
                 io.Output.Writer.WriteLine($"All {testResults.TotalEvaluations} evaluations passed!");
+
+                return false;
             }
-            else if (!testResults.Success)
+
+            if (!testResults.Success)
             {
                 io.Error.Writer.WriteLine($"Evaluation Summary: Failure!");
                 io.Error.Writer.WriteLine($"Total: {testResults.TotalEvaluations} - Success: {testResults.SuccessfulEvaluations} - Skipped: {testResults.SkippedEvaluations} - Failed: {testResults.FailedEvaluations}");
+
+                return true;
             }
+
+            return false;
         }
 
         private DiagnosticOptions GetDiagnosticOptions(TestArguments args)
@@ -119,37 +204,47 @@ namespace Bicep.Cli.Commands
 
         internal static System.CommandLine.Command CreateCommand(CommandLineBuilderContext context)
         {
-            var command = new System.CommandLine.Command(Constants.Command.Test, "Runs tests in a .bicep file.")
+            var command = new System.CommandLine.Command(Constants.Command.Test, "Runs tests in a .bicep or .biceptest file.")
             {
                 TreatUnmatchedTokensAsErrors = true,
             };
 
             var inputFileArgument = new System.CommandLine.Argument<string?>(Constants.Argument.InputFile)
             {
-                Description = "The path to the input .bicep file.",
+                Description = "The path to the input .bicep or .biceptest file.",
                 Arity = ArgumentArity.ZeroOrOne,
             };
-            var noRestoreOption = new System.CommandLine.Option<bool>(Constants.Option.NoRestore)
+            var filePatternOption = new System.CommandLine.Option<string?>(Option.Pattern)
+            {
+                Description = "Runs tests in all files matching the specified glob pattern, relative to the current directory.",
+            };
+            var listOption = new System.CommandLine.Option<bool>(Option.List)
+            {
+                Description = "Lists the tests and targets that would run, without evaluating them.",
+            };
+            var noRestoreOption = new System.CommandLine.Option<bool>(Option.NoRestore)
             {
                 Description = "Do not restore modules prior to running tests.",
             };
-            var diagnosticsFormatOption = new System.CommandLine.Option<DiagnosticsFormat?>(Constants.Option.DiagnosticsFormat)
+            var diagnosticsFormatOption = new System.CommandLine.Option<DiagnosticsFormat?>(Option.DiagnosticsFormat)
             {
                 Description = "Set the format of diagnostics (Default, SARIF).",
             };
 
             command.Add(inputFileArgument);
+            command.Add(filePatternOption);
+            command.Add(listOption);
             command.Add(noRestoreOption);
             command.Add(diagnosticsFormatOption);
             command.Validators.Add((System.CommandLine.Parsing.CommandResult result) => CommandLineBuilderContext.ValidatePositionalArgument(result, inputFileArgument));
 
             command.SetAction((result, ct) => context.RunCommandAsync(async () =>
             {
-                var inputFile = result.GetValue(inputFileArgument)
-                    ?? throw new CommandLineException("The input file path was not specified");
                 var args = new TestArguments(
-                    inputFile,
+                    result.GetValue(inputFileArgument),
+                    result.GetValue(filePatternOption),
                     result.GetValue(noRestoreOption),
+                    result.GetValue(listOption),
                     result.GetValue(diagnosticsFormatOption));
 
                 return await context.GetCommand<TestCommand>().RunAsync(args);

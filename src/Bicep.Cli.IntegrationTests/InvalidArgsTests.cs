@@ -36,7 +36,7 @@ namespace Bicep.Cli.IntegrationTests
 
         [DataTestMethod]
         // Missing input file (CommandLineException thrown from action)
-        [DataRow(new[] { "test" }, "The input file path was not specified")]
+        [DataRow(new[] { "test" }, "Either the input file path or the --pattern parameter must be specified")]
         [DataRow(new[] { "decompile" }, "The input file path was not specified")]
         [DataRow(new[] { "generate-params" }, "The input file path was not specified")]
         [DataRow(new[] { "publish" }, "The input file path was not specified")]

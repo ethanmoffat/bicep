@@ -77,7 +77,7 @@ Rules:
 
 These are two different things, and they are deliberately kept apart:
 
-- **Discovery** is how the CLI finds test files. Today you name the test file on the command line.
+- **Discovery** is how the CLI finds test files. You either name a test file on the command line or match several with `--pattern`.
 - **Selection** is how a test finds the files it applies to. That is what `match` does, and it is owned by the test file rather than by whoever invokes the CLI.
 
 Because selection lives in the test file, running the same test from a different working directory — or from CI — always covers the same set of files.
@@ -118,6 +118,37 @@ bicep test <path-to-test-file>
 ```
 
 The command accepts either a `.bicep` or a `.biceptest` file.
+
+### Running many test files with `--pattern`
+
+`--pattern` runs every test file matching a glob, relative to the current directory:
+
+```console
+bicep test --pattern "**/*.biceptest"
+```
+
+Files are processed in a stable, sorted order, and a single summary covers the whole run. When more
+than one file is involved each result names its test file, because test names are only unique within
+a file.
+
+A pattern that matches nothing is an error. An empty run is never reported as a run that passed.
+
+`--pattern` and a named input file are alternatives; supply one or the other.
+
+### Listing what would run with `--list`
+
+`--list` reports the inventory of a test file — which tests it declares and which targets each one
+resolves to — without restoring, compiling or evaluating any target:
+
+```console
+bicep test naming.biceptest --list
+```
+
+This answers "what would run". It deliberately says nothing about whether those targets compile or
+pass. `--list` combines with `--pattern` to inventory a whole suite.
+
+A test that resolves to no targets is reported on stderr and makes `--list` exit non-zero, so a
+selector that has silently stopped matching cannot hide behind an empty list.
 
 ## Worked example
 
@@ -168,6 +199,31 @@ All 2 evaluations passed!
 
 Adding another module to `modules/` puts it under the same policy automatically.
 
+Listing the same test file reports the targets without evaluating them:
+
+```console
+$ bicep test naming.biceptest --list
+naming.biceptest: namingPolicy -> modules/blobStorage.bicep
+naming.biceptest: namingPolicy -> modules/fileStorage.bicep
+```
+
+Running the whole example folder with a pattern gathers every test file into one run:
+
+```console
+$ bicep test --pattern "*.biceptest"
+[✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
+[✗] Evaluation storage-failing.biceptest: prefixTooLong (storage.bicep) Failed at 1 / 2 assertions!
+	[✗] Assertion nameWithinLengthLimit failed!
+[✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
+[✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
+Evaluation Summary: Failure!
+Total: 5 - Success: 4 - Skipped: 0 - Failed: 1
+```
+
+The command exits with code `1` because `storage-failing.biceptest` is expected to fail. The failure
+of one file does not stop the others from running, and one summary reports the aggregate.
+
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
 
 ```console
@@ -179,7 +235,6 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 
 - Assertions must be written in the Bicep file under test; they cannot yet be authored in the test file itself.
 - Parameter values are written inline in the test declaration, and the same values apply to every target a test selects.
-- Test file discovery is a single path on the command line; there is no glob over test files yet.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

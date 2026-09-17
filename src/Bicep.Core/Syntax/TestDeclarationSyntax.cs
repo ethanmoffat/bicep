@@ -72,6 +72,12 @@ namespace Bicep.Core.Syntax
         public ObjectPropertySyntax? TryGetMatchProperty()
             => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestMatchPropertyName);
 
+        /// <summary>
+        /// The literal target path as a string syntax node, or null when the test has no literal path
+        /// or the path could not be parsed.
+        /// </summary>
+        public StringSyntax? TryGetPath() => this.Path as StringSyntax;
+
         public ObjectSyntax? TryGetBody() =>
             this.Value switch
             {

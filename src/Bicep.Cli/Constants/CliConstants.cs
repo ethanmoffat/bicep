@@ -71,6 +71,9 @@ namespace Bicep.Cli.Constants
         public const string DocumentationUri = "--documentation-uri";
         public const string WithSource = "--with-source";
 
+        // Test
+        public const string List = "--list";
+
         // PublishExtension binaries
         public const string BinLinuxX64 = "--bin-linux-x64";
         public const string BinLinuxArm64 = "--bin-linux-arm64";

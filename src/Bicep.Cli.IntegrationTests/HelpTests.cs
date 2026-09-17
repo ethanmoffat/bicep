@@ -102,7 +102,9 @@ namespace Bicep.Cli.IntegrationTests
                 error.Should().BeEmpty();
                 output.Should().ContainAll(
                     "test",
-                    "Runs tests in a .bicep file.",
+                    "Runs tests in a .bicep or .biceptest file.",
+                    "--pattern",
+                    "--list",
                     "--no-restore",
                     "--diagnostics-format");
             }

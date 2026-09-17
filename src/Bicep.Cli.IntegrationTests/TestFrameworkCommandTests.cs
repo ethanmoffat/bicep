@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Text.RegularExpressions;
 using Bicep.Core;
 using Bicep.Core.UnitTests;
 using Bicep.Core.UnitTests.Assertions;
@@ -25,7 +26,7 @@ namespace Bicep.Cli.IntegrationTests
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain($"The input file path was not specified");
+                error.Should().Contain($"Either the input file path or the --pattern parameter must be specified");
             }
         }
 
@@ -416,8 +417,152 @@ assert isEqual = foo == extra", outputFileDir);
         }
 
         [TestMethod]
-        public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()
+        public async Task Test_Pattern_DiscoversEveryMatchingTestFile()
         {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "alpha.biceptest", @"test policy 'target.bicep' = {
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "beta.biceptest", @"test policy 'target.bicep' = {
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+
+                // Two files declare a test of the same name against the same target. The file must be
+                // named in the result, otherwise the two outcomes are indistinguishable.
+                output.Should().Contain("Evaluation alpha.biceptest: policy (target.bicep) Passed!");
+                output.Should().Contain("Evaluation beta.biceptest: policy (target.bicep) Passed!");
+
+                // One summary covers the whole run rather than one per file.
+                output.Should().Contain("All 2 evaluations passed!");
+                Regex.Matches(output, "evaluations passed").Should().HaveCount(1);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Pattern_ReportsFilesInAStableOrder()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+
+            foreach (var name in new[] { "c", "a", "b" })
+            {
+                FileHelper.SaveResultFile(TestContext, $"{name}.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
+            }
+
+            var (output, _, result) = await Bicep(settings, "test", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.IndexOf("a.biceptest").Should().BeLessThan(output.IndexOf("b.biceptest"));
+                output.IndexOf("b.biceptest").Should().BeLessThan(output.IndexOf("c.biceptest"));
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Pattern_MatchingNoFilesIsAnError()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+            var (output, error, result) = await Bicep(settings, "test", "--pattern", pattern);
+
+            using (new AssertionScope())
+            {
+                // An empty suite must never look like a suite that passed.
+                result.Should().Be(1);
+                output.Should().NotContain("passed");
+                error.Should().Contain($@"The pattern ""{pattern}"" did not match any test files.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_List_ReportsInventoryWithoutEvaluating()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            // This target would fail if it were evaluated. Listing must not evaluate it.
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), @"param foo string
+assert isEqual = foo == 'NeverMatches'", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "two.bicep"), @"param foo string
+assert isEqual = foo == 'NeverMatches'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("main.biceptest: policy -> modules/one.bicep");
+                output.Should().Contain("main.biceptest: policy -> modules/two.bicep");
+
+                // Listing answers "what would run". It must never claim a target compiles or passes.
+                output.Should().NotContain("Passed");
+                output.Should().NotContain("Failed");
+                output.Should().NotContain("evaluations");
+                error.Should().NotContain("Evaluation");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_List_ReportsTestsThatResolveToNoTargets()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    include: ['nothing/*.bicep']
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("main.biceptest: policy -> (no targets)");
+                error.Should().Contain("matched no files");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),
                 "test", "/dev/zero.bicep");
