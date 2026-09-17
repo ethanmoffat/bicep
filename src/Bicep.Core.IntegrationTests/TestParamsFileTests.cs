@@ -268,5 +268,84 @@ namespace Bicep.Core.IntegrationTests
                 ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
             });
         }
+
+        [TestMethod]
+        public void A_case_can_override_individual_deployment_context_properties()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    deploymentContext = {
+                      resourceGroup: 'rg-contoso'
+                      resourceGroupLocation: 'westus'
+                    }
+
+                    @resourceGroupLocation('westeurope')
+                    @subscriptionId('00000000-0000-0000-0000-000000000000')
+                    case westeurope = {
+                      location: 'westeurope'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void A_case_cannot_override_the_same_context_property_twice()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    @resourceGroupLocation('westus')
+                    @resourceGroupLocation('westeurope')
+                    case westus = {
+                      location: 'westus'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP166", DiagnosticLevel.Error, "Duplicate \"resourceGroupLocation\" decorator."),
+                ("BCP166", DiagnosticLevel.Error, "Duplicate \"resourceGroupLocation\" decorator."),
+            });
+        }
+
+        [TestMethod]
+        public void A_case_context_override_must_be_a_string()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    @resourceGroupLocation(42)
+                    case westus = {
+                      location: 'westus'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"42\" is not assignable to parameter of type \"string\"."),
+            });
+        }
+
+        [TestMethod]
+        public void Context_decorators_are_not_available_outside_input_files()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, """
+                @resourceGroupLocation('westus')
+                param location string = 'westus'
+                """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP057", DiagnosticLevel.Error, "The name \"resourceGroupLocation\" does not exist in the current context."),
+            });
+        }
     }
 }

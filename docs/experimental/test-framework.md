@@ -351,6 +351,75 @@ Total: 2 - Success: 1 - Skipped: 1 - Failed: 0
 `sizePolicy` still ran because it never reaches `namePrefix`; only the test that needed the missing
 value was affected.
 
+### Deployment context
+
+Templates frequently read ambient deployment information rather than parameters — `resourceGroup().location`,
+`subscription().subscriptionId` and so on. The input file supplies that context with a file-level
+`deploymentContext` assignment:
+
+[`context.biceptestparam`](./examples/test-framework/context.biceptestparam)
+
+```bicep
+using 'context.biceptest'
+
+deploymentContext = {
+  subscriptionId: '00000000-0000-0000-0000-000000000001'
+  resourceGroup: 'contoso-prod-rg'
+  resourceGroupLocation: 'eastus'
+}
+
+// Inherits the file defaults unchanged.
+case primaryRegion = {}
+
+// Replaces one property. Everything else is still inherited.
+@resourceGroupLocation('westus2')
+case secondaryRegion = {}
+
+@resourceGroupLocation('northeurope')
+case unapprovedRegion = {}
+```
+
+The available properties are `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup` and
+`resourceGroupLocation`. Each has a matching decorator that a single case may apply.
+
+A decorator **replaces one property** of the file defaults for that case only. There is no deep
+merge, a case cannot replace the context wholesale, and the case that overrides a property does not
+change what the next case inherits. Applying the same decorator twice to one case is an error:
+
+```
+Error BCP166: Duplicate "resourceGroupLocation" decorator.
+```
+
+The target in [`context.bicep`](./examples/test-framework/context.bicep) defaults its `location`
+parameter to `resourceGroup().location` and asserts that the result is an approved region, so each
+case exercises a different region without the test declaring a single input:
+
+```console
+$ bicep test context.biceptest --inputs context.biceptestparam
+[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: primaryRegion] Passed!
+[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: secondaryRegion] Passed!
+[✗] Evaluation regionPolicy (context.bicep) [context.biceptestparam: unapprovedRegion] Failed at 1 / 1 assertions!
+	[✗] Assertion locationIsApproved failed!
+Evaluation Summary: Failure!
+Total: 3 - Success: 2 - Skipped: 0 - Failed: 1
+```
+
+Two properties of this are worth stating plainly:
+
+- **Context is simulated, not deployed.** Setting a resource group location does not create anything,
+  does not contact Azure and does not validate that the region exists. It only decides what the
+  offline evaluator reports for the corresponding deployment function.
+- **Context is not a parameter source.** A production parameter named `resourceGroupLocation` is not
+  assigned by the context property of the same name. Parameters come only from the test's `params`
+  mapping, so a target with an unsatisfied required parameter is still skipped:
+
+  ```console
+  Reason: Evaluating template failed: The value for the template parameter 'resourceGroupLocation' at line '16' and column '30' is not provided.
+  ```
+
+A test run with no input file at all keeps the evaluator's own placeholder context rather than one
+invented by the runner.
+
 ## Running tests
 
 ```console
@@ -556,6 +625,9 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `storage-cases.biceptest` | A test that declares typed inputs and maps them into the target |
 | `storage-cases.biceptestparam` | Two passing input cases for that test |
 | `storage-cases-failing.biceptestparam` | Input cases where one violates a rule and one does not |
+| `context.bicep` | A template whose behavior depends on ambient deployment context |
+| `context.biceptest` | A test that declares no inputs at all |
+| `context.biceptestparam` | File-level `deploymentContext` defaults and per-case overrides |
 
 Running the passing tests:
 
@@ -673,7 +745,7 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 ## Current limitations
 
 - Test-owned assertions query source facts only. Evaluated values — what a target computes for a particular set of inputs — are not yet available to them.
-- Ambient deployment context (subscription, resource group, location) cannot yet be supplied per case.
+- Deployment context covers `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup` and `resourceGroupLocation`. Deployment name is not yet available.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

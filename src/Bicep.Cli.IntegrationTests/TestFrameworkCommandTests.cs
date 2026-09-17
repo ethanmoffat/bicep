@@ -1771,6 +1771,139 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_DeploymentContext_SuppliesAmbientValuesAndIsOverriddenPerCase()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-context");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param expectedLocation string
+                param expectedResourceGroup string
+
+                assert locationMatches = resourceGroup().location == expectedLocation
+                assert resourceGroupMatches = resourceGroup().name == expectedResourceGroup
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param expectedLocation string
+                param expectedResourceGroup string
+
+                test contextPolicy 'main.bicep' = {
+                  params: {
+                    expectedLocation: expectedLocation
+                    expectedResourceGroup: expectedResourceGroup
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  resourceGroup: 'rg-contoso'
+                  resourceGroupLocation: 'westus'
+                }
+
+                case usesFileDefaults = {
+                  expectedLocation: 'westus'
+                  expectedResourceGroup: 'rg-contoso'
+                }
+
+                @resourceGroupLocation('westeurope')
+                case overridesOneProperty = {
+                  expectedLocation: 'westeurope'
+                  expectedResourceGroup: 'rg-contoso'
+                }
+
+                case inheritsAfterAnOverride = {
+                  expectedLocation: 'westus'
+                  expectedResourceGroup: 'rg-contoso'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // File defaults reach every case, a decorator replaces only the property it names, and
+                // the overriding case never mutates the defaults the following case inherits.
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: usesFileDefaults] Passed!");
+                output.Should().Contain("[cases.biceptestparam: overridesOneProperty] Passed!");
+                output.Should().Contain("[cases.biceptestparam: inheritsAfterAnOverride] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-context-params");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param resourceGroupLocation string
+
+                assert locationIsSet = !empty(resourceGroupLocation)
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test contextIsNotAParameter 'main.bicep' = {
+                  params: {}
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  resourceGroupLocation: 'westus'
+                }
+
+                case onlyContext = {
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // Context is evaluation metadata, so a production parameter that happens to share its
+                // name is still unsatisfied rather than silently filled in.
+                result.Should().Be(1);
+                error.Should().Contain("[cases.biceptestparam: onlyContext] Skipped!");
+                error.Should().Contain("The value for the template parameter 'resourceGroupLocation'");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_WithoutAnInputFile_KeepsThePlaceholderContext()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-context-none");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                assert locationIsSet = !empty(resourceGroup().location)
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test contextPolicy 'main.bicep' = {}
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                // A test that states no context still evaluates, using the evaluator's own placeholders
+                // rather than a context invented by the runner.
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation contextPolicy (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

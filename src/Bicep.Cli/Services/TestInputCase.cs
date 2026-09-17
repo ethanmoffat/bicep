@@ -13,7 +13,8 @@ namespace Bicep.Cli.Services;
 /// <param name="InputFile">The file the case was declared in.</param>
 /// <param name="Name">The case name, unique within its file.</param>
 /// <param name="Values">The evaluated value of each input the case assigns.</param>
-public record TestInputCase(IOUri InputFile, string Name, ImmutableDictionary<string, JToken> Values)
+/// <param name="Context">The ambient deployment context this case is evaluated with.</param>
+public record TestInputCase(IOUri InputFile, string Name, ImmutableDictionary<string, JToken> Values, TestDeploymentContext Context)
 {
     public string InputFileName
     {

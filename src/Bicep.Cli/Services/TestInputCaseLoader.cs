@@ -52,6 +52,24 @@ public static class TestInputCaseLoader
 
         var context = new EmitterContext(inputFileModel);
         var cases = ImmutableArray.CreateBuilder<TestInputCase>();
+        var fileContext = TestDeploymentContext.Empty;
+
+        // File-level defaults are resolved once and never mutated, so one case's overrides can never
+        // leak into another.
+        foreach (var declaration in inputFileModel.SourceFile.ProgramSyntax.Children.OfType<DeploymentContextDeclarationSyntax>())
+        {
+            try
+            {
+                if (BicepValueEvaluator.Evaluate(context, declaration.Value, "object") is JObject declared)
+                {
+                    fileContext = fileContext.With(TestDeploymentContext.FromObject(declared));
+                }
+            }
+            catch (Exception exception)
+            {
+                return new(inputFileUri, [], $"The deployment context could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}");
+            }
+        }
 
         foreach (var declaration in inputFileModel.Root.TestCaseDeclarations)
         {
@@ -67,7 +85,7 @@ public static class TestInputCaseLoader
                     ? o.Properties().ToImmutableDictionary(p => p.Name, p => p.Value, LanguageConstants.IdentifierComparer)
                     : [];
 
-                cases.Add(new TestInputCase(inputFileUri, declaration.Name, values));
+                cases.Add(new TestInputCase(inputFileUri, declaration.Name, values, ResolveCaseContext(context, declaration.DeclaringTestCase, fileContext)));
             }
             catch (Exception exception)
             {
@@ -76,5 +94,29 @@ public static class TestInputCaseLoader
         }
 
         return new(inputFileUri, cases.ToImmutable(), null);
+    }
+
+    /// <summary>
+    /// Applies a case's property decorators over the file's defaults. Each decorator replaces exactly
+    /// one property; anything it does not name is inherited unchanged.
+    /// </summary>
+    private static TestDeploymentContext ResolveCaseContext(EmitterContext context, TestCaseDeclarationSyntax declaration, TestDeploymentContext fileContext)
+    {
+        var resolved = fileContext;
+
+        foreach (var decorator in declaration.Decorators)
+        {
+            if (decorator.Expression is not FunctionCallSyntax { Arguments.Length: 1 } call)
+            {
+                continue;
+            }
+
+            if (BicepValueEvaluator.Evaluate(context, call.Arguments[0].Expression, "string").Value<string>() is { } value)
+            {
+                resolved = resolved.WithProperty(call.Name.IdentifierName, value);
+            }
+        }
+
+        return resolved;
     }
 }

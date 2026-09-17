@@ -1,0 +1,7 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// The test supplies no parameters at all. Everything the target needs comes from the ambient
+// deployment context its input cases declare.
+
+test regionPolicy 'context.bicep' = {}

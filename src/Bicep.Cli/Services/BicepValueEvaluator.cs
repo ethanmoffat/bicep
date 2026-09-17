@@ -44,7 +44,8 @@ public static class BicepValueEvaluator
         SyntaxBase syntax,
         string outputType,
         JObject? seedVariables = null,
-        IReadOnlyDictionary<string, JToken>? inputValues = null)
+        IReadOnlyDictionary<string, JToken>? inputValues = null,
+        TestDeploymentContext? deploymentContext = null)
     {
         var expression = new ExpressionBuilder(context).Convert(syntax);
         var reachable = CollectReachable(context, expression);
@@ -74,12 +75,12 @@ public static class BicepValueEvaluator
             },
         };
 
-        if (BuildParameters(context, reachable.Parameters, inputValues) is { Count: > 0 } parameters)
+        if (BuildParameters(context, reachable.Parameters, inputValues, deploymentContext) is { Count: > 0 } parameters)
         {
             template["parameters"] = parameters;
         }
 
-        var evaluated = TemplateEvaluator.Evaluate(template).ToJToken();
+        var evaluated = TemplateEvaluator.Evaluate(template, configBuilder: (deploymentContext ?? TestDeploymentContext.Empty).Apply).ToJToken();
 
         return evaluated["outputs"]?["result"]?["value"] ?? JValue.CreateNull();
     }
@@ -92,13 +93,14 @@ public static class BicepValueEvaluator
     private static JObject BuildParameters(
         EmitterContext context,
         IEnumerable<ParameterSymbol> parameters,
-        IReadOnlyDictionary<string, JToken>? inputValues)
+        IReadOnlyDictionary<string, JToken>? inputValues,
+        TestDeploymentContext? deploymentContext)
     {
         var result = new JObject();
 
         foreach (var parameter in parameters)
         {
-            var value = ResolveInput(context, parameter, inputValues);
+            var value = ResolveInput(context, parameter, inputValues, deploymentContext);
 
             result[parameter.Name] = new JObject
             {
@@ -113,7 +115,8 @@ public static class BicepValueEvaluator
     private static JToken ResolveInput(
         EmitterContext context,
         ParameterSymbol parameter,
-        IReadOnlyDictionary<string, JToken>? inputValues)
+        IReadOnlyDictionary<string, JToken>? inputValues,
+        TestDeploymentContext? deploymentContext)
     {
         if (inputValues is not null && inputValues.TryGetValue(parameter.Name, out var supplied))
         {
@@ -122,7 +125,7 @@ public static class BicepValueEvaluator
 
         if (parameter.DeclaringParameter.Modifier is ParameterDefaultValueSyntax defaultValue)
         {
-            return Evaluate(context, defaultValue.DefaultValue, "string");
+            return Evaluate(context, defaultValue.DefaultValue, "string", deploymentContext: deploymentContext);
         }
 
         throw new MissingInputException(parameter.Name);

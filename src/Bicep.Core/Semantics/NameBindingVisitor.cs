@@ -267,8 +267,18 @@ namespace Bicep.Core.Semantics
             allowedFlags = FunctionFlags.Default;
         }
 
-        public override void VisitMissingDeclarationSyntax(MissingDeclarationSyntax syntax)
+        public override void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax)
         {
+            allowedFlags = FunctionFlags.TestCaseDecorator;
+            this.VisitNodes(syntax.LeadingNodes);
+            this.Visit(syntax.Keyword);
+            this.Visit(syntax.Name);
+            this.Visit(syntax.Assignment);
+            allowedFlags = FunctionFlags.Default;
+            this.Visit(syntax.Value);
+        }
+
+        public override void VisitMissingDeclarationSyntax(MissingDeclarationSyntax syntax)        {
             allowedFlags = FunctionFlags.AnyDecorator;
             base.VisitMissingDeclarationSyntax(syntax);
             allowedFlags = FunctionFlags.Default;

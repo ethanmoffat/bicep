@@ -654,6 +654,8 @@ namespace Bicep.Core.TypeSystem
                     return ErrorType.Empty();
                 }
 
+                this.ValidateDecorators(syntax.Decorators, declaredType, diagnostics);
+
                 if (declaredType is ErrorType)
                 {
                     return declaredType;
@@ -2449,6 +2451,7 @@ namespace Bicep.Core.TypeSystem
                 TypeDeclarationSyntax _ => FunctionFlags.TypeDecorator,
                 VariableDeclarationSyntax _ => FunctionFlags.VariableDecorator,
                 OutputDeclarationSyntax _ => FunctionFlags.OutputDecorator,
+                TestCaseDeclarationSyntax _ => FunctionFlags.TestCaseDecorator,
                 _ => FunctionFlags.AnyDecorator,
             };
 

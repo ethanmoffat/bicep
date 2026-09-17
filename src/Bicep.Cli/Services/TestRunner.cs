@@ -161,7 +161,7 @@ namespace Bicep.Cli.Services
             {
                 var parameters = TryGetParameters(testFileModel, testDeclaration, inputCase);
                 var templateJToken = GetTemplate(targetModel);
-                var template = TemplateEvaluator.Evaluate(templateJToken, parameters);
+                var template = TemplateEvaluator.Evaluate(templateJToken, parameters, configBuilder: (inputCase?.Context ?? TestDeploymentContext.Empty).Apply);
                 var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
                 var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
 
@@ -213,7 +213,7 @@ namespace Bicep.Cli.Services
             if (test.DeclaringTest.GetBody() is { } body &&
                 body.TryGetPropertyByName("params") is { } paramsProperty)
             {
-                var evaluated = BicepValueEvaluator.Evaluate(new EmitterContext(testFileModel), paramsProperty.Value, "object", inputValues: inputCase?.Values);
+                var evaluated = BicepValueEvaluator.Evaluate(new EmitterContext(testFileModel), paramsProperty.Value, "object", inputValues: inputCase?.Values, deploymentContext: inputCase?.Context);
 
                 if (evaluated is not JObject paramsObject)
                 {

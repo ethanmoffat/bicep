@@ -1,0 +1,23 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Deployment context is runner-owned metadata supplied by the input file. It is simulated, not
+// deployed: nothing here creates a subscription, a resource group or a region.
+
+using 'context.biceptest'
+
+deploymentContext = {
+  subscriptionId: '00000000-0000-0000-0000-000000000001'
+  resourceGroup: 'contoso-prod-rg'
+  resourceGroupLocation: 'eastus'
+}
+
+// Inherits the file defaults unchanged.
+case primaryRegion = {}
+
+// Replaces one property. Everything else is still inherited.
+@resourceGroupLocation('westus2')
+case secondaryRegion = {}
+
+@resourceGroupLocation('northeurope')
+case unapprovedRegion = {}

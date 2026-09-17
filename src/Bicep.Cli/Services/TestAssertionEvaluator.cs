@@ -133,7 +133,7 @@ public class TestAssertionEvaluator
             [TestAssertion.TargetVariableName] = TestTargetFactsSerializer.Serialize(facts),
         };
 
-        return BicepValueEvaluator.Evaluate(context, syntax, outputType, seed, inputs?.Values);
+        return BicepValueEvaluator.Evaluate(context, syntax, outputType, seed, inputs?.Values, inputs?.Context);
     }
 
     /// <summary>

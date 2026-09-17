@@ -2204,6 +2204,39 @@ namespace Bicep.Core.Semantics.Namespaces
                 }
             }
 
+            static IEnumerable<Decorator> GetTestCaseDecorators()
+            {
+                // Deployment context is runner-owned evaluation metadata, not data the test can read.
+                // Each decorator replaces one property of the input file's defaults for one case;
+                // there is no deep merge and no whole-object override.
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextTenantIdPropertyName,
+                    "Overrides the tenant ID this case is evaluated with.");
+
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextManagementGroupPropertyName,
+                    "Overrides the management group this case is evaluated with.");
+
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextSubscriptionIdPropertyName,
+                    "Overrides the subscription ID this case is evaluated with.");
+
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextResourceGroupPropertyName,
+                    "Overrides the resource group name this case is evaluated with.");
+
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextResourceGroupLocationPropertyName,
+                    "Overrides the resource group location this case is evaluated with. This is simulated context, not an automatic deployment parameter.");
+            }
+
+            static Decorator CreateDeploymentContextDecorator(string name, string description)
+                => new DecoratorBuilder(name)
+                    .WithDescription(description)
+                    .WithParameter("value", LanguageConstants.String, "The value to use for this case.", FunctionParameterFlags.Required | FunctionParameterFlags.Constant)
+                    .WithFlags(FunctionFlags.TestCaseDecorator)
+                    .Build();
+
             foreach (var decorator in GetAlwaysPermittedDecorators())
             {
                 yield return new(decorator, (_, _) => true);
@@ -2212,6 +2245,11 @@ namespace Bicep.Core.Semantics.Namespaces
             foreach (var decorator in GetBicepTemplateDecorators(featureProvider))
             {
                 yield return new(decorator, (_, sfk) => sfk == BicepSourceFileKind.BicepFile);
+            }
+
+            foreach (var decorator in GetTestCaseDecorators())
+            {
+                yield return new(decorator, (_, sfk) => sfk == BicepSourceFileKind.TestParamsFile);
             }
         }
 
