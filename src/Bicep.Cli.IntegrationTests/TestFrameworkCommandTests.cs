@@ -2597,6 +2597,568 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Mocks_ServeOrdinaryAndFullViewsOfOneResponse()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-views");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                output principalId string = identity.properties.principalId
+                output location string = identity.location
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                mocks = {
+                  identity: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      location: 'westus2'
+                      properties: {
+                        principalId: 'principal-1'
+                      }
+                    }
+                  }
+                }
+
+                test bothViews 'main.bicep' = {
+                  assertions: {
+                    servesEachViewFromTheSameResponse: {
+                      passWhen: target.evaluated.outputs.principalId == 'principal-1' && target.evaluated.outputs.location == 'westus2'
+                      message: 'One response should answer both the properties view and the full envelope.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_MatchTheDeclaredApiVersionRatherThanAnyVersion()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-apiversion");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                output principalId string = identity.properties.principalId
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var resourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+
+                mocks = {
+                  older: {
+                    operation: 'reference'
+                    resourceId: resourceId
+                    apiVersion: '2018-11-30'
+                    response: {
+                      properties: {
+                        principalId: 'from-the-older-version'
+                      }
+                    }
+                  }
+                  declared: {
+                    operation: 'reference'
+                    resourceId: resourceId
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: 'from-the-declared-version'
+                      }
+                    }
+                  }
+                }
+
+                test versioned 'main.bicep' = {
+                  assertions: {
+                    usesTheVersionTheSourceDeclares: {
+                      passWhen: target.evaluated.outputs.principalId == 'from-the-declared-version'
+                      message: 'The api version the source declares should decide which setup answers.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_DoNotMatchADifferentOperationOrRequestBody()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-nomatch");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contosodata'
+                }
+
+                #disable-next-line outputs-should-not-contain-secrets
+                output keyName string = account.listKeys().keys[0].keyName
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var resourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.Storage/storageAccounts/contosodata'
+
+                mocks = {
+                  wrongOperation: {
+                    operation: 'reference'
+                    resourceId: resourceId
+                    apiVersion: '2023-01-01'
+                    response: {
+                      properties: {
+                        keys: [
+                          {
+                            keyName: 'key1'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                  wrongBody: {
+                    operation: 'listKeys'
+                    resourceId: resourceId
+                    apiVersion: '2023-01-01'
+                    requestBody: {
+                      expand: 'kerb'
+                    }
+                    response: {
+                      keys: [
+                        {
+                          keyName: 'key1'
+                        }
+                      ]
+                    }
+                  }
+                }
+
+                test exactMatching 'main.bicep' = {
+                  assertions: {
+                    readsTheKeyName: {
+                      passWhen: target.evaluated.outputs.keyName == 'key1'
+                      message: 'The key name should be read.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("No mock answers listKeys");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_ThatAreNeverUsedAreNotAFailure()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-unused");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                resource unread 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contosodata'
+                }
+
+                output identityId string = identity.id
+                output unreadId string = unread.id
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                mocks = {
+                  neverRequested: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: 'principal-1'
+                      }
+                    }
+                  }
+                }
+
+                test unusedSetups 'main.bicep' = {
+                  assertions: {
+                    resolvesIdsWithoutAnyRuntimeRead: {
+                      passWhen: endsWith(target.evaluated.outputs.identityId, '/contoso-identity') && endsWith(target.evaluated.outputs.unreadId, '/contosodata')
+                      message: 'Resource IDs are computed from source, so neither a used nor an unused setup is required.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_AreBuiltFromEachCasesOwnInputs()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-per-case");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                output principalId string = identity.properties.principalId
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param principalId string
+
+                mocks = {
+                  identity: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: principalId
+                      }
+                    }
+                  }
+                }
+
+                test parameterized 'main.bicep' = {
+                  assertions: {
+                    readsThisCasesValue: {
+                      passWhen: target.evaluated.outputs.principalId == principalId
+                      message: 'Each case should read the value its own inputs configured.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                case first = {
+                  principalId: 'principal-from-the-first-case'
+                }
+
+                case second = {
+                  principalId: 'principal-from-the-second-case'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: first] Passed!");
+                output.Should().Contain("[cases.biceptestparam: second] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_AnswerEachModuleWithItsOwnResponse()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-two-modules");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, "reader.bicep", """
+                param identityName string
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: identityName
+                }
+
+                output principalId string = identity.properties.principalId
+                """, Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module csi 'modules/reader.bicep' = {
+                  name: 'csi'
+                  params: {
+                    identityName: 'csi-identity'
+                  }
+                }
+
+                module app 'modules/reader.bicep' = {
+                  name: 'app'
+                  params: {
+                    identityName: 'app-identity'
+                  }
+                }
+
+                output csiPrincipalId string = csi.outputs.principalId
+                output appPrincipalId string = app.outputs.principalId
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var scope = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities'
+
+                mocks = {
+                  csiIdentity: {
+                    operation: 'reference'
+                    resourceId: '${scope}/csi-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: 'csi-principal'
+                      }
+                    }
+                  }
+                  appIdentity: {
+                    operation: 'reference'
+                    resourceId: '${scope}/app-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: 'app-principal'
+                      }
+                    }
+                  }
+                }
+
+                test twoIdentities 'main.bicep' = {
+                  assertions: {
+                    eachModuleReadsItsOwnIdentity: {
+                      passWhen: target.evaluated.outputs.csiPrincipalId == 'csi-principal' && target.evaluated.outputs.appPrincipalId == 'app-principal'
+                      message: 'Two calls of one module should each read the identity they addressed.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_MissingFieldFailsOnlyTheCaseThatOmitsIt()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-case-isolation");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                output clientId string = identity.properties.clientId
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param response object
+
+                mocks = {
+                  identity: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: response
+                    }
+                  }
+                }
+
+                test readsClientId 'main.bicep' = {
+                  assertions: {
+                    clientIdIsAvailable: {
+                      passWhen: target.evaluated.outputs.clientId == 'client-1'
+                      message: 'The client ID should be the one the test configured.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                case incomplete = {
+                  response: {
+                    principalId: 'principal-1'
+                  }
+                }
+
+                case complete = {
+                  response: {
+                    principalId: 'principal-1'
+                    clientId: 'client-1'
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("[cases.biceptestparam: incomplete]");
+                error.Should().Contain("'clientId' doesn't exist");
+                output.Should().Contain("[cases.biceptestparam: complete] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_DoNotRequireFieldsOnABranchThatIsNotTaken()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-short-circuit");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param useIdentity bool
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                output value string = useIdentity ? identity.properties.principalId : 'none'
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param useIdentity bool
+
+                mocks = {
+                  identity: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        tenantId: 'tenant-1'
+                      }
+                    }
+                  }
+                }
+
+                test branch 'main.bicep' = {
+                  params: {
+                    useIdentity: useIdentity
+                  }
+                  assertions: {
+                    unreadFieldIsNotRequired: {
+                      passWhen: target.evaluated.outputs.value == 'none'
+                      message: 'A field on a branch that is not taken should not be required, and should not become empty.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                case off = {
+                  useIdentity: false
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: off] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Mocks_ResponseDataIsNotEchoedWhenEvaluationFails()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-no-echo");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contosodata'
+                }
+
+                #disable-next-line outputs-should-not-contain-secrets
+                output secondKey string = account.listKeys().keys[1].value
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                mocks = {
+                  accountKeys: {
+                    operation: 'listKeys'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.Storage/storageAccounts/contosodata'
+                    apiVersion: '2023-01-01'
+                    response: {
+                      keys: [
+                        {
+                          keyName: 'key1'
+                          value: 'synthetic-key-material-do-not-print'
+                        }
+                      ]
+                    }
+                  }
+                }
+
+                test readsAKeyThatIsNotThere 'main.bicep' = {
+                  assertions: {
+                    keyIsRead: {
+                      passWhen: target.evaluated.outputs.secondKey != ''
+                      message: 'The second key should be readable.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("out of bounds");
+                output.Should().NotContain("synthetic-key-material-do-not-print");
+                error.Should().NotContain("synthetic-key-material-do-not-print");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

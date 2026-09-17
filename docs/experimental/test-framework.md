@@ -695,6 +695,33 @@ A target compiled with symbolic names spells a runtime read as the declaration i
 than as a resource ID. That is a codegen detail, so it is translated back before matching: a mock is
 written against the resource ID either way.
 
+### One response answers both views of a resource
+
+Reading `identity.properties.principalId` asks Azure for the resource's properties. Reading
+`identity.location` asks for the whole resource, because `location` sits beside `properties` rather
+than inside it. Both are the same request, so both are answered by the same entry: write the response
+as the resource envelope, and the properties view is taken from within it.
+
+```bicep
+// docs/experimental/examples/test-framework/mocks.biceptest
+response: {
+  location: 'eastus'
+  properties: {
+    principalId: '11111111-1111-1111-1111-111111111111'
+    clientId: '22222222-2222-2222-2222-222222222222'
+  }
+}
+```
+
+```console
+$ bicep test mocks.biceptest --inputs mocks.biceptestparam
+[✓] Evaluation runtimeReads (mocks.bicep) [mocks.biceptestparam: eastus] Passed!
+All 1 evaluations passed!
+```
+
+Neither view eagerly reads a field the response does not have, so an envelope only needs to carry
+what the target actually reads.
+
 ### Unconfigured values are unset, not invented
 
 A response states only what the test cares about. A field it does not mention is simply absent, and
@@ -730,6 +757,20 @@ it needs fails; it does not quietly describe a deployment that was never compute
 Because `target.evaluated.outputs` is computed as a set, a target whose outputs read an unanswered
 value cannot report any of them for that case. Other tests and other cases still run, and the failure
 is attributed to the one that hit it.
+
+Absence only matters where a value is actually read, so the same three rules follow:
+
+- A mock that nothing requests is not an error. A test can describe more of the world than a
+  particular target happens to read.
+- A field on a branch the deployment does not take is never read, so it is never required. An
+  unevaluated branch does not turn into an empty or null result either; the branch that was taken is
+  the one that produces the value.
+- A resource the target only takes the ID of needs no mock at all. Resource IDs are computed from
+  source, not read from Azure.
+
+Failures name the request and the property path that could not be satisfied. They never echo the
+response, the request body or the parameters, because a synthetic value can read like a real secret
+and a test result travels further than the test does.
 
 ### A worked mock
 

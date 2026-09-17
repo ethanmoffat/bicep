@@ -22,6 +22,10 @@ output deployPrincipalId string = deployIdentity.properties.principalId
 
 output deployClientId string = deployIdentity.properties.clientId
 
+// Reading a field outside 'properties' asks Azure for the whole resource rather than its properties,
+// so one response has to cover both views.
+output deployIdentityLocation string = deployIdentity.location
+
 // The key itself is a secret, so the deployment publishes which key it selected rather than its value.
 #disable-next-line outputs-should-not-contain-secrets
 output artifactKeyName string = artifacts.listKeys().keys[0].keyName
