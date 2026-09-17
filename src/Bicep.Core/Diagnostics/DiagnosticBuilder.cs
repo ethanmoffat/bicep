@@ -2125,6 +2125,14 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic ExpectedTestCaseIdentifier() => CoreError(
                 "BCP465",
                 "Expected a test case identifier at this location.");
+
+            public Diagnostic UsingDeclarationMustReferenceTestFile() => CoreError(
+                "BCP466",
+                $"The \"{LanguageConstants.UsingKeyword}\" declaration of a \"{LanguageConstants.TestParamsFileExtension}\" file must reference a \"{LanguageConstants.TestFileExtension}\" file.");
+
+            public Diagnostic TestParamsFileMustDeclareACase() => CoreError(
+                "BCP467",
+                $"A \"{LanguageConstants.TestParamsFileExtension}\" file must declare at least one \"{LanguageConstants.TestCaseKeyword}\".");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

@@ -369,6 +369,7 @@ namespace Bicep.Core.Semantics
                 .Concat(this.externalInputReferencesLazy.Value.diagnostics)
                 // TODO: This could be eliminated if we change the params type checking code to operate more on symbols
                 .Concat(GetAdditionalParamsSemanticDiagnostics())
+                .Concat(GetAdditionalTestParamsSemanticDiagnostics())
                 .Distinct()
                 .OrderBy(diag => diag.Span.Position);
             var filteredDiagnostics = ImmutableArray.CreateBuilder<IDiagnostic>();
@@ -616,8 +617,32 @@ namespace Bicep.Core.Semantics
                     .Concat(GatherUsingModelInvalidDiagnostics(semanticModel));
         }
 
-        private IEnumerable<IDiagnostic> GatherUsingModelInvalidDiagnostics(ISemanticModel usingModel)
+        /// <summary>
+        /// Gets the file-level diagnostics that only apply to a test parameters file.
+        /// </summary>
+        private IEnumerable<IDiagnostic> GetAdditionalTestParamsSemanticDiagnostics()
         {
+            if (this.SourceFile.FileKind != BicepSourceFileKind.TestParamsFile)
+            {
+                return [];
+            }
+
+            if (!this.Root.TryGetTestFileSemanticModelViaUsing().IsSuccess(out _, out var failureDiagnostic))
+            {
+                return failureDiagnostic.AsEnumerable<IDiagnostic>();
+            }
+
+            if (this.Root.TestCaseDeclarations.IsEmpty)
+            {
+                // An input file with no cases silently contributes nothing, which looks like the
+                // test ran with these inputs when it did not.
+                return DiagnosticBuilder.ForDocumentStart().TestParamsFileMustDeclareACase().AsEnumerable<IDiagnostic>();
+            }
+
+            return [];
+        }
+
+        private IEnumerable<IDiagnostic> GatherUsingModelInvalidDiagnostics(ISemanticModel usingModel)        {
             // emit diagnostic only if there is a using statement
             var usingSyntax = this.Root.UsingDeclarationSyntax;
 

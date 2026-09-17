@@ -640,8 +640,42 @@ namespace Bicep.Core.TypeSystem
                 return valueType;
             });
 
-        public override void VisitUsingDeclarationSyntax(UsingDeclarationSyntax syntax)
+        /// <summary>
+        /// A case body is validated against the inputs the bound test file declares, so unknown or
+        /// mistyped values are reported at the case rather than when the test is eventually run.
+        /// </summary>
+        public override void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax)
             => AssignTypeWithDiagnostics(syntax, diagnostics =>
+            {
+                base.VisitTestCaseDeclarationSyntax(syntax);
+
+                if (typeManager.GetDeclaredType(syntax) is not { } declaredType)
+                {
+                    return ErrorType.Empty();
+                }
+
+                if (declaredType is ErrorType)
+                {
+                    return declaredType;
+                }
+
+                return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType, false);
+            });
+
+        public override void VisitDeploymentContextDeclarationSyntax(DeploymentContextDeclarationSyntax syntax)
+            => AssignTypeWithDiagnostics(syntax, diagnostics =>
+            {
+                base.VisitDeploymentContextDeclarationSyntax(syntax);
+
+                if (typeManager.GetDeclaredType(syntax) is not { } declaredType)
+                {
+                    return ErrorType.Empty();
+                }
+
+                return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType, false);
+            });
+
+        public override void VisitUsingDeclarationSyntax(UsingDeclarationSyntax syntax)            => AssignTypeWithDiagnostics(syntax, diagnostics =>
             {
                 if (this.model.SourceFile is BicepParamFile && syntax.Decorators.Any())
                 {

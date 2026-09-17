@@ -13,6 +13,7 @@ namespace Bicep.Core.Semantics
         Assert,
         Module,
         Test,
+        TestCase,
         Output,
         Namespace,
         ImportedNamespace,

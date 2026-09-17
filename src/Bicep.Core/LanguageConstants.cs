@@ -38,6 +38,12 @@ namespace Bicep.Core
         public const string TestCaseKeyword = "case";
         public const string DeploymentContextKeyword = "deploymentContext";
 
+        public const string DeploymentContextTenantIdPropertyName = "tenantId";
+        public const string DeploymentContextManagementGroupPropertyName = "managementGroup";
+        public const string DeploymentContextSubscriptionIdPropertyName = "subscriptionId";
+        public const string DeploymentContextResourceGroupPropertyName = "resourceGroup";
+        public const string DeploymentContextResourceGroupLocationPropertyName = "resourceGroupLocation";
+
         public static bool IsTestParamsLanguage(string? languageId) => string.Equals(TestParamsLanguageId, languageId, StringComparison.OrdinalIgnoreCase);
 
         public const string JsonLanguageId = "json";
@@ -422,9 +428,25 @@ namespace Bicep.Core
             return new ModuleType(typeName, moduleScope, moduleBody);
         }
 
-        public static TypeSymbol CreateUsingConfigType()
+        /// <summary>
+        /// The ambient deployment context a test input case is evaluated against. This is
+        /// evaluation metadata owned by the input file; it is not readable from the test body.
+        /// </summary>
+        public static TypeSymbol CreateDeploymentContextType()
         {
-            var optionalPropFlags = TypePropertyFlags.WriteOnly | TypePropertyFlags.DeployTimeConstant | TypePropertyFlags.ReadableAtDeployTime | TypePropertyFlags.DisallowAny;
+            NamedTypeProperty[] properties = [
+                new(DeploymentContextTenantIdPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The tenant the simulated deployment runs in."),
+                new(DeploymentContextManagementGroupPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The management group the simulated deployment runs in."),
+                new(DeploymentContextSubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The subscription the simulated deployment runs in."),
+                new(DeploymentContextResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The resource group the simulated deployment runs in."),
+                new(DeploymentContextResourceGroupLocationPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The location of the resource group the simulated deployment runs in."),
+            ];
+
+            return new ObjectType("DeploymentContext", TypeSymbolValidationFlags.Default, properties, null);
+        }
+
+        public static TypeSymbol CreateUsingConfigType()
+        {            var optionalPropFlags = TypePropertyFlags.WriteOnly | TypePropertyFlags.DeployTimeConstant | TypePropertyFlags.ReadableAtDeployTime | TypePropertyFlags.DisallowAny;
             var requiredPropFlags = optionalPropFlags | TypePropertyFlags.Required;
 
             var nameDescription = "The deployment name. Must be 1-64 characters, and can contain alphanumerics, underscores, parentheses, hyphens, and periods.";

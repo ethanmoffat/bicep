@@ -60,7 +60,7 @@ namespace Bicep.Core.UnitTests.Assertions
 
         private AndConstraint<CompilationResultAssertions> DoWithDiagnosticAnnotations(Action<IEnumerable<IDiagnostic>> action)
         {
-            DiagnosticAssertions.DoWithDiagnosticAnnotations(Subject.BicepFile, Subject.Diagnostics, action);
+            DiagnosticAssertions.DoWithDiagnosticAnnotations(Subject.SourceFile, Subject.Diagnostics, action);
 
             return new AndConstraint<CompilationResultAssertions>(this);
         }

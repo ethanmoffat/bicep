@@ -44,6 +44,7 @@ namespace Bicep.Core.Semantics
                         BicepFile bicepFile => CreateSemanticModel(bicepFile),
                         BicepParamFile bicepParamFile => CreateSemanticModel(bicepParamFile),
                         BicepTestFile bicepTestFile => CreateSemanticModel(bicepTestFile),
+                        BicepTestParamFile bicepTestParamFile => CreateSemanticModel(bicepTestParamFile),
                         ArmTemplateFile armTemplateFile => new ArmTemplateSemanticModel(armTemplateFile),
                         TemplateSpecFile templateSpecFile => new TemplateSpecSemanticModel(templateSpecFile),
                         BicepReplFile bicepReplFile => CreateSemanticModel(bicepReplFile),

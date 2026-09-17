@@ -123,6 +123,12 @@ namespace Bicep.Core.TypeSystem
                 case TestDeclarationSyntax test:
                     return GetTestType(test);
 
+                case TestCaseDeclarationSyntax testCase:
+                    return GetTestCaseType(testCase);
+
+                case DeploymentContextDeclarationSyntax deploymentContext:
+                    return new DeclaredTypeAssignment(LanguageConstants.CreateDeploymentContextType(), deploymentContext);
+
                 case VariableAccessSyntax variableAccess:
                     return GetVariableAccessType(variableAccess);
 
@@ -234,6 +240,28 @@ namespace Bicep.Core.TypeSystem
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// The shape of a test case is derived from the inputs its bound test file declares, so a
+        /// case can only ever supply values the test actually accepts.
+        /// </summary>
+        private DeclaredTypeAssignment? GetTestCaseType(TestCaseDeclarationSyntax syntax)
+        {
+            if (!binder.FileSymbol.TryGetTestFileSemanticModelViaUsing().IsSuccess(out var semanticModel, out var failureDiagnostic))
+            {
+                return failureDiagnostic.IsError() ? new(ErrorType.Create(failureDiagnostic), syntax) : null;
+            }
+
+            var properties = semanticModel.Parameters.Values
+                .Select(parameter => new NamedTypeProperty(
+                    parameter.Name,
+                    resourceDerivedTypeResolver.ResolveResourceDerivedTypes(parameter.TypeReference.Type),
+                    parameter.IsRequired ? TypePropertyFlags.Required : TypePropertyFlags.None,
+                    parameter.Description))
+                .ToArray();
+
+            return new(new ObjectType("TestCase", TypeSymbolValidationFlags.Default, properties, null), syntax);
         }
 
         private TypeSymbol? GetDeclaredParameterAssignmentType(ParameterAssignmentSyntax syntax)
@@ -1544,6 +1572,9 @@ namespace Bicep.Core.TypeSystem
                     return GetNonNullableTypeAssignment(parameterDeclaration)?.ReplaceDeclaringSyntax(syntax);
                 case ParameterAssignmentSyntax:
                     return GetNonNullableTypeAssignment(parent)?.ReplaceDeclaringSyntax(syntax);
+                case TestCaseDeclarationSyntax:
+                case DeploymentContextDeclarationSyntax:
+                    return GetNonNullableTypeAssignment(parent)?.ReplaceDeclaringSyntax(syntax);
                 case SpreadExpressionSyntax when GetClosestMaybeTypedAncestor(parent) is { } grandParent &&
                     GetDeclaredTypeAssignment(grandParent)?.Reference is ArrayType enclosingArrayType:
 
@@ -1882,6 +1913,15 @@ namespace Bicep.Core.TypeSystem
                     }
 
                     return TryCreateAssignment(ResolveDiscriminatedObjects(parameterAssignmentTypeAssignment.Reference.Type, syntax), syntax);
+
+                case TestCaseDeclarationSyntax:
+                case DeploymentContextDeclarationSyntax:
+                    if (GetDeclaredTypeAssignment(parent) is not { } testParamsTypeAssignment)
+                    {
+                        return null;
+                    }
+
+                    return TryCreateAssignment(ResolveDiscriminatedObjects(testParamsTypeAssignment.Reference.Type, syntax), syntax);
 
                 case ExtensionConfigAssignmentSyntax:
                     if (GetDeclaredTypeAssignment(parent) is not { } extConfigAssignment)

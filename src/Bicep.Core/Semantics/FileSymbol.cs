@@ -45,6 +45,7 @@ namespace Bicep.Core.Semantics
             var parameterAssignments = ImmutableArray.CreateBuilder<ParameterAssignmentSymbol>();
             var baseParametersDeclarations = ImmutableArray.CreateBuilder<BaseParametersSymbol>();
             var testDeclarations = ImmutableArray.CreateBuilder<TestSymbol>();
+            var testCaseDeclarations = ImmutableArray.CreateBuilder<TestCaseSymbol>();
             var importedTypes = ImmutableArray.CreateBuilder<ImportedTypeSymbol>();
             var importedVariables = ImmutableArray.CreateBuilder<ImportedVariableSymbol>();
             var importedFunctions = ImmutableArray.CreateBuilder<ImportedFunctionSymbol>();
@@ -101,6 +102,9 @@ namespace Bicep.Core.Semantics
                     case TestSymbol test:
                         testDeclarations.Add(test);
                         break;
+                    case TestCaseSymbol testCase:
+                        testCaseDeclarations.Add(testCase);
+                        break;
                     case ImportedTypeSymbol importedType:
                         importedTypes.Add(importedType);
                         break;
@@ -134,6 +138,7 @@ namespace Bicep.Core.Semantics
             ParameterAssignments = parameterAssignments.ToImmutable();
             BaseParametersDeclarations = baseParametersDeclarations.ToImmutable();
             TestDeclarations = testDeclarations.ToImmutable();
+            TestCaseDeclarations = testCaseDeclarations.ToImmutable();
             ImportedTypes = importedTypes.ToImmutable();
             ImportedVariables = importedVariables.ToImmutable();
             ImportedFunctions = importedFunctions.ToImmutable();
@@ -162,6 +167,7 @@ namespace Bicep.Core.Semantics
             .Concat(this.ParameterAssignments)
             .Concat(this.BaseParametersDeclarations)
             .Concat(this.TestDeclarations)
+            .Concat(this.TestCaseDeclarations)
             .Concat(this.ImportedTypes)
             .Concat(this.ImportedVariables)
             .Concat(this.ImportedFunctions)
@@ -207,6 +213,8 @@ namespace Bicep.Core.Semantics
         public ImmutableArray<AssertSymbol> AssertDeclarations { get; }
 
         public ImmutableArray<TestSymbol> TestDeclarations { get; }
+
+        public ImmutableArray<TestCaseSymbol> TestCaseDeclarations { get; }
 
         public ImmutableArray<ParameterAssignmentSymbol> ParameterAssignments { get; }
 
@@ -265,6 +273,32 @@ namespace Bicep.Core.Semantics
             }
 
             return usingDeclaration.TryGetReferencedModel(Context.SourceFileLookup, Context.ModelLookup, b => b.UsingDeclarationMustReferenceBicepFile());
+        }
+
+        /// <summary>
+        /// Tries to get the semantic model of the test file referenced via a using declaration from
+        /// a test parameters file. A test parameters file supplies inputs for exactly one test file,
+        /// so anything else is an error rather than a silently ignored reference.
+        /// </summary>
+        public ResultWithDiagnostic<SemanticModel> TryGetTestFileSemanticModelViaUsing()
+        {
+            var usingDeclaration = this.UsingDeclarationSyntax;
+            if (usingDeclaration is null)
+            {
+                return new(DiagnosticBuilder.ForDocumentStart().UsingDeclarationNotSpecified());
+            }
+
+            if (!Context.SourceFileLookup.TryGetSourceFile(usingDeclaration).IsSuccess(out var sourceFile, out var errorBuilder))
+            {
+                return new(errorBuilder(DiagnosticBuilder.ForPosition(((IArtifactReferenceSyntax)usingDeclaration).SourceSyntax)));
+            }
+
+            if (sourceFile is not BicepTestFile testFile || Context.ModelLookup.GetSemanticModel(testFile) is not SemanticModel model)
+            {
+                return new(DiagnosticBuilder.ForPosition(((IArtifactReferenceSyntax)usingDeclaration).SourceSyntax).UsingDeclarationMustReferenceTestFile());
+            }
+
+            return new(model);
         }
 
         private sealed class DuplicateIdentifierValidatorVisitor : SymbolVisitor

@@ -208,6 +208,13 @@ namespace Bicep.Core.Semantics
             DeclareSymbol(symbol);
         }
 
+        public override void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax)
+        {
+            base.VisitTestCaseDeclarationSyntax(syntax);
+
+            DeclareSymbol(new TestCaseSymbol(this.context, syntax.Name.IdentifierName, syntax));
+        }
+
         public override void VisitExtensionConfigAssignmentSyntax(ExtensionConfigAssignmentSyntax syntax)
         {
             base.VisitExtensionConfigAssignmentSyntax(syntax);
