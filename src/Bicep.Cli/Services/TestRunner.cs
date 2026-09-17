@@ -33,23 +33,34 @@ namespace Bicep.Cli.Services
     }
     public class TestRunner(BicepCompiler compiler)
     {
-        public async Task<TestResults> RunAsync(SemanticModel testFileModel)
+        /// <summary>
+        /// Runs every test in the file. When input cases are supplied, each test runs once per target per
+        /// case: cases supply values, and can never change which targets a test applies to.
+        /// </summary>
+        public async Task<TestResults> RunAsync(SemanticModel testFileModel, ImmutableArray<TestInputCase> inputCases = default)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var testResults = ImmutableArray.CreateBuilder<TestResult>();
 
+            // With no input file a test runs once against whatever defaults it declares, which is what
+            // every existing test file already relies on.
+            TestInputCase?[] cases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
+
             foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
             {
-                if (testDeclaration.DeclaringTest.IsTargetless)
+                foreach (var inputCase in cases)
                 {
-                    testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration));
-                }
-                else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
-                    semanticModel is SemanticModel testSemanticModel)
-                {
-                    // A literal target names one file, so the test file's own directory is the frame of
-                    // reference its facts are reported in.
-                    testResults.Add(Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri));
+                    if (testDeclaration.DeclaringTest.IsTargetless)
+                    {
+                        testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration, inputCase));
+                    }
+                    else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
+                        semanticModel is SemanticModel testSemanticModel)
+                    {
+                        // A literal target names one file, so the test file's own directory is the frame of
+                        // reference its facts are reported in.
+                        testResults.Add(Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri, inputCase));
+                    }
                 }
             }
 
@@ -60,34 +71,34 @@ namespace Bicep.Cli.Services
         /// Expands a body-owned selector into its targets and evaluates each one independently, so that
         /// a target which fails to compile or bind never hides the outcome of the others.
         /// </summary>
-        private async Task<IEnumerable<TestResult>> RunSelectedTargetsAsync(SemanticModel testFileModel, TestSymbol testDeclaration)
+        private async Task<IEnumerable<TestResult>> RunSelectedTargetsAsync(SemanticModel testFileModel, TestSymbol testDeclaration, TestInputCase? inputCase)
         {
             var testFileHandle = testFileModel.SourceFile.FileHandle;
             var testFileUri = testFileHandle.Uri;
 
             if (TestTargetSelectorBinder.TryBind(testDeclaration.DeclaringTest) is not { } selector)
             {
-                return [Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.")];
+                return [Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.", inputCase)];
             }
 
             var discovery = TestTargetDiscovery.Discover(testFileHandle.GetParent(), selector);
 
             if (discovery.Error is { } error)
             {
-                return [Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message)];
+                return [Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message, inputCase)];
             }
 
             var results = new List<TestResult>();
 
             foreach (var targetUri in discovery.Targets)
             {
-                results.Add(await EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri));
+                results.Add(await EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri, inputCase));
             }
 
             return results;
         }
 
-        private async Task<TestResult> EvaluateTargetAsync(SemanticModel testFileModel, TestSymbol testDeclaration, IOUri targetUri, IOUri factRoot)
+        private async Task<TestResult> EvaluateTargetAsync(SemanticModel testFileModel, TestSymbol testDeclaration, IOUri targetUri, IOUri factRoot, TestInputCase? inputCase)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             SemanticModel targetModel;
@@ -99,7 +110,7 @@ namespace Bicep.Cli.Services
             }
             catch (Exception exception)
             {
-                return Unevaluated(testFileUri, testDeclaration, targetUri, SanitizeEvaluationError(exception));
+                return Unevaluated(testFileUri, testDeclaration, targetUri, SanitizeEvaluationError(exception), inputCase);
             }
 
             if (targetModel.HasErrors())
@@ -107,7 +118,7 @@ namespace Bicep.Cli.Services
                 return Unevaluated(testFileUri, testDeclaration, targetUri, $"The target has compilation errors and cannot be evaluated.");
             }
 
-            return Evaluate(testFileModel, testDeclaration, targetModel, factRoot);
+            return Evaluate(testFileModel, testDeclaration, targetModel, factRoot, inputCase);
         }
 
         /// <summary>
@@ -115,25 +126,25 @@ namespace Bicep.Cli.Services
         /// otherwise. The two sets are never run together: which assertions a case ran is part of what
         /// its result means.
         /// </summary>
-        private static TestResult Evaluate(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot)
+        private static TestResult Evaluate(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot, TestInputCase? inputCase)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
-            var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri);
+            var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri, inputCase);
 
             if (testDeclaration.DeclaringTest.TryGetAssertionsSyntax() is { Properties: { } declared } && declared.Any())
             {
-                return new TestResult(testDeclaration, identity, EvaluateSemanticAssertions(testFileModel, testDeclaration, targetModel, factRoot));
+                return new TestResult(testDeclaration, identity, EvaluateSemanticAssertions(testFileModel, testDeclaration, targetModel, factRoot, inputCase));
             }
 
-            return new TestResult(testDeclaration, identity, EvaluateTargetTemplate(targetModel, testDeclaration));
+            return new TestResult(testDeclaration, identity, EvaluateTargetTemplate(testFileModel, targetModel, testDeclaration, inputCase));
         }
 
-        private static TestEvaluation EvaluateSemanticAssertions(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot)
+        private static TestEvaluation EvaluateSemanticAssertions(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot, TestInputCase? inputCase)
         {
             try
             {
                 var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
-                var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts);
+                var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts, inputCase);
                 var failedAssertions = allAssertions.Where(x => !x.Result).ToImmutableArray();
 
                 return new TestEvaluation(null, null, allAssertions, failedAssertions);
@@ -144,11 +155,11 @@ namespace Bicep.Cli.Services
             }
         }
 
-        private static TestEvaluation EvaluateTargetTemplate(SemanticModel targetModel, TestSymbol testDeclaration)
+        private static TestEvaluation EvaluateTargetTemplate(SemanticModel testFileModel, SemanticModel targetModel, TestSymbol testDeclaration, TestInputCase? inputCase)
         {
             try
             {
-                var parameters = TryGetParameters(targetModel, testDeclaration);
+                var parameters = TryGetParameters(testFileModel, testDeclaration, inputCase);
                 var templateJToken = GetTemplate(targetModel);
                 var template = TemplateEvaluator.Evaluate(templateJToken, parameters);
                 var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
@@ -175,8 +186,8 @@ namespace Bicep.Cli.Services
             return lineBreak < 0 ? message : message[..lineBreak].TrimEnd();
         }
 
-        private static TestResult Unevaluated(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri, string error)
-            => new(testDeclaration, new TestCaseIdentity(testFileUri, testDeclaration.Name, targetUri), new TestEvaluation(null, error, [], []));
+        private static TestResult Unevaluated(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri, string error, TestInputCase? inputCase = null)
+            => new(testDeclaration, new TestCaseIdentity(testFileUri, testDeclaration.Name, targetUri, inputCase), new TestEvaluation(null, error, [], []));
 
         private static JToken GetTemplate(SemanticModel model)
         {
@@ -192,25 +203,24 @@ namespace Bicep.Cli.Services
             return template;
         }
 
-        private static JObject? TryGetParameters(SemanticModel model, TestSymbol test)
+        /// <summary>
+        /// Resolves the production parameters the test maps in. The mapping is ordinary Bicep evaluated
+        /// against the test file, so a case's values reach the target through the test's own typed inputs
+        /// rather than being injected into the target directly.
+        /// </summary>
+        private static JObject? TryGetParameters(SemanticModel testFileModel, TestSymbol test, TestInputCase? inputCase)
         {
             if (test.DeclaringTest.GetBody() is { } body &&
                 body.TryGetPropertyByName("params") is { } paramsProperty)
             {
-                var textWriter = new StringWriter();
-                using var writer = new PositionTrackingJsonTextWriter(textWriter)
+                var evaluated = BicepValueEvaluator.Evaluate(new EmitterContext(testFileModel), paramsProperty.Value, "object", inputValues: inputCase?.Values);
+
+                if (evaluated is not JObject paramsObject)
                 {
-                    // don't close the textWriter when writer is disposed
-                    CloseOutput = false,
-                    Formatting = Formatting.Indented
-                };
+                    return null;
+                }
 
-                var emitter = new ExpressionEmitter(writer, new(model));
-                var parametersExpression = new ExpressionBuilder(new(model)).Convert(paramsProperty.Value);
-                new TemplateWriter(model).EmitTestParameters(emitter, parametersExpression);
-                writer.Flush();
-
-                var parameters = textWriter.ToString().FromJson<JObject>().Properties()
+                var parameters = paramsObject.Properties()
                     .ToDictionary(x => x.Name, x => new JObject()
                     {
                         ["value"] = x.Value,

@@ -9,7 +9,7 @@ namespace Bicep.Cli.Services;
 /// The immutable identity of a single test case: one declared test bound to one target file.
 /// A test that selects multiple targets produces one identity per target.
 /// </summary>
-public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile) : IComparable<TestCaseIdentity>
+public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile, TestInputCase? Inputs = null) : IComparable<TestCaseIdentity>
 {
     /// <summary>
     /// The file name of the test file, without any directory portion.
@@ -34,7 +34,9 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
     /// It is derived only from test-file-relative information, so it is unaffected by the
     /// working directory the CLI was invoked from.
     /// </summary>
-    public string CaseId => $"{TestFileName}#{TestName}#{RelativeTargetPath}";
+    public string CaseId => Inputs is { } inputs
+        ? $"{TestFileName}#{TestName}#{RelativeTargetPath}#{inputs.InputFileName}#{inputs.Name}"
+        : $"{TestFileName}#{TestName}#{RelativeTargetPath}";
 
     public int CompareTo(TestCaseIdentity? other)
     {
@@ -55,7 +57,12 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
             return testNameComparison;
         }
 
-        return pathComparer.Compare(TargetFile.ToString(), other.TargetFile.ToString());
+        if (pathComparer.Compare(TargetFile.ToString(), other.TargetFile.ToString()) is var targetComparison and not 0)
+        {
+            return targetComparison;
+        }
+
+        return string.CompareOrdinal(Inputs?.Name, other.Inputs?.Name);
     }
 
     private static string GetFileName(IOUri uri)

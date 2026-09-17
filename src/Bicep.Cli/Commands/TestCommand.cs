@@ -98,7 +98,18 @@ namespace Bicep.Cli.Commands
 
                 var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
                 var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
-                var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel());
+                var (inputCases, inputErrors) = await LoadInputCasesAsync(args, inputUri);
+
+                // A broken input file never stops the remaining ones from running: every case that can
+                // be evaluated still is, and the failure is reported and folded into the exit code.
+                foreach (var inputError in inputErrors)
+                {
+                    await io.Error.Writer.WriteLineAsync(inputError);
+                }
+
+                hasErrors |= inputErrors.Length > 0;
+
+                var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel(), inputCases);
 
                 if (!json)
                 {
@@ -135,6 +146,43 @@ namespace Bicep.Cli.Commands
             }
 
             return hasErrors ? 1 : 0;
+        }
+
+        /// <summary>
+        /// Compiles each supplied parameters file and collects the cases it declares for this test file.
+        /// A file that cannot contribute cases is reported and skipped rather than aborting the run, so
+        /// one bad input file never hides the outcome of the others.
+        /// </summary>
+        private async Task<(ImmutableArray<TestInputCase> Cases, ImmutableArray<string> Errors)> LoadInputCasesAsync(TestArguments args, IOUri testFileUri)
+        {
+            if (args.Inputs.IsDefaultOrEmpty)
+            {
+                return ([], []);
+            }
+
+            var cases = ImmutableArray.CreateBuilder<TestInputCase>();
+            var errors = ImmutableArray.CreateBuilder<string>();
+
+            foreach (var input in args.Inputs)
+            {
+                var inputUri = inputOutputArgumentsResolver.PathToUri(input);
+
+                ArgumentHelper.ValidateBicepTestParamFile(inputUri);
+
+                var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
+                var result = TestInputCaseLoader.Load(compilation.GetEntrypointSemanticModel(), testFileUri);
+
+                if (result.Error is { } error)
+                {
+                    diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+                    errors.Add($"{inputUri.GetFileName()}: {error}");
+                    continue;
+                }
+
+                cases.AddRange(result.Cases);
+            }
+
+            return (cases.ToImmutable(), errors.ToImmutable());
         }
 
         /// <summary>
@@ -183,6 +231,13 @@ namespace Bicep.Cli.Commands
                 var label = identity.IsSelfTargeted
                     ? name
                     : $"{name} ({identity.RelativeTargetPath})";
+
+                // The case is named so that two outcomes of the same test and target, differing only in
+                // the values they ran with, are never reported as the same thing.
+                if (identity.Inputs is { } inputs)
+                {
+                    label = $"{label} [{inputs.InputFileName}: {inputs.Name}]";
+                }
 
                 if (evaluation.Success)
                 {
@@ -264,6 +319,11 @@ namespace Bicep.Cli.Commands
             {
                 Description = "Runs tests in all files matching the specified glob pattern, relative to the current directory.",
             };
+            var inputsOption = new System.CommandLine.Option<string[]>(Option.Inputs)
+            {
+                Description = "Runs the tests once per case declared in the specified .biceptestparam file. May be specified more than once.",
+                AllowMultipleArgumentsPerToken = true,
+            };
             var listOption = new System.CommandLine.Option<bool>(Option.List)
             {
                 Description = "Lists the tests and targets that would run, without evaluating them.",
@@ -283,6 +343,7 @@ namespace Bicep.Cli.Commands
 
             command.Add(inputFileArgument);
             command.Add(filePatternOption);
+            command.Add(inputsOption);
             command.Add(listOption);
             command.Add(outputFormatOption);
             command.Add(noRestoreOption);
@@ -296,6 +357,7 @@ namespace Bicep.Cli.Commands
                     result.GetValue(filePatternOption),
                     result.GetValue(noRestoreOption),
                     result.GetValue(listOption),
+                    [.. result.GetValue(inputsOption) ?? []],
                     result.GetValue(outputFormatOption),
                     result.GetValue(diagnosticsFormatOption));
 

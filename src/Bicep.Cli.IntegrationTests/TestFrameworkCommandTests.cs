@@ -1453,6 +1453,324 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_InputCases_RunEveryCaseAgainstEveryTarget()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-matrix");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/first.bicep", "param unused string = ''", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "src/second.bicep", "param unused string = ''", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test sizePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['*.bicep']
+                  }
+                  assertions: {
+                    boundedResourceCount: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources} resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case strict = {
+                  maxResources: 0
+                }
+
+                case relaxed = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // Two targets times two cases. A case never changes which targets a test applies to.
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation sizePolicy (src/first.bicep) [policy.biceptestparam: strict] Passed!");
+                output.Should().Contain("Evaluation sizePolicy (src/first.bicep) [policy.biceptestparam: relaxed] Passed!");
+                output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: strict] Passed!");
+                output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: relaxed] Passed!");
+                output.Should().Contain("All 4 evaluations passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_SupplyTheProductionParametersTheTestMapsIn()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-params");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param namePrefix string
+                var accountName = toLower('${namePrefix}stg')
+                assert nameWithinLengthLimit = length(accountName) <= 24
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "naming.biceptest", """
+                param namePrefix string
+
+                test namingRules 'main.bicep' = {
+                  params: {
+                    namePrefix: namePrefix
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "naming.biceptestparam", """
+                using 'naming.biceptest'
+
+                case withinLimit = {
+                  namePrefix: 'contoso'
+                }
+
+                case tooLong = {
+                  namePrefix: 'contosoabcdefghijklmnopqrstuvwxyz'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // The case values reach the target through the test's own typed inputs, so the target's
+                // own assertion is what decides each outcome.
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation namingRules (main.bicep) [naming.biceptestparam: withinLimit] Passed!");
+                error.Should().Contain("Evaluation namingRules (main.bicep) [naming.biceptestparam: tooLong] Failed");
+                error.Should().Contain("Assertion nameWithinLengthLimit failed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_AreReportedIndividuallyInTheJsonContract()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-json");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test sizePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    boundedResourceCount: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources} resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case strict = {
+                  maxResources: 0
+                }
+
+                case relaxed = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+
+            var document = JsonDocument.Parse(output).RootElement;
+            var cases = document.GetProperty("cases").EnumerateArray().ToArray();
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Should().HaveCount(2);
+
+                // The identity distinguishes two runs of the same test and target that differ only in
+                // the values they ran with, and the message reflects the values it actually judged.
+                cases[0].GetProperty("caseId").GetString().Should().Be("policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam#strict");
+                cases[0].GetProperty("inputFile").GetString().Should().Be("policy.biceptestparam");
+                cases[0].GetProperty("inputCase").GetString().Should().Be("strict");
+                cases[0].GetProperty("status").GetString().Should().Be("failed");
+                cases[0].GetProperty("assertions").GetProperty("failures")[0].GetProperty("message").GetString().Should().Be("At most 0 resources.");
+
+                cases[1].GetProperty("inputCase").GetString().Should().Be("relaxed");
+                cases[1].GetProperty("status").GetString().Should().Be("passed");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_WithoutInputCases_KeepsTheExistingReportShape()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-absent");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sizePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            var document = JsonDocument.Parse(output).RootElement;
+            var single = document.GetProperty("cases").EnumerateArray().Single();
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                single.GetProperty("caseId").GetString().Should().Be("policy.biceptest#sizePolicy#main.bicep");
+                single.GetProperty("inputFile").ValueKind.Should().Be(JsonValueKind.Null);
+                single.GetProperty("inputCase").ValueKind.Should().Be(JsonValueKind.Null);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCasesBoundToAnotherTestFile_AreReportedWithoutStoppingTheRun()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-mismatch");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "other.biceptest", "param maxResources int = 0", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sizePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "other.biceptestparam", """
+                using 'other.biceptest'
+
+                case strict = {
+                  maxResources: 0
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // The mismatch is attributed and folded into the exit code, but the tests that can still
+                // run do run.
+                result.Should().Be(1);
+                error.Should().Contain("other.biceptestparam: The input file supplies cases for \"other.biceptest\", not the test file being run.");
+                output.Should().Contain("Evaluation sizePolicy (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputFileWithWrongExtension_IsRejected()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-extension");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sizePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "values.bicepparam", "using none", outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("was not recognized as a Bicep test parameters file");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MissingInputValue_SkipsOnlyTheAffectedEvaluation()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-missing");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test needsInput = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    boundedResourceCount: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'Too many resources.'
+                    }
+                  }
+                }
+
+                test needsNothing = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                // An input with no value fails its own assertion and says what is missing; the test that
+                // needs no values still runs.
+                result.Should().Be(1);
+                error.Should().Contain("The input \"maxResources\" has no value. Supply it from a test case or give it a default.");
+                output.Should().Contain("Evaluation needsNothing (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

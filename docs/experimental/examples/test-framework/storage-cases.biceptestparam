@@ -1,0 +1,18 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Input cases for storage-cases.biceptest. Each case supplies values for that file's parameters;
+// every case runs against every target the test selected.
+
+using 'storage-cases.biceptest'
+
+case shortPrefix = {
+  namePrefix: 'contoso'
+  location: 'eastus'
+}
+
+case prefixAtLengthLimit = {
+  namePrefix: 'abcdefghijklmnopqrstu'
+  location: 'westus2'
+  maxResources: 1
+}

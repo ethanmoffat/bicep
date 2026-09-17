@@ -1,0 +1,36 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// A test file that declares its own typed inputs. The inputs are ordinary Bicep parameters: the
+// test decides which of them reach the target's production `params`, and which only shape its own
+// policy. Values come from a `.biceptestparam` file supplied with `--inputs`.
+
+@description('Prefix the target builds its storage account name from.')
+param namePrefix string
+
+@description('Location the deployment targets.')
+param location string = 'eastus'
+
+@description('Largest number of resources a single target may declare.')
+param maxResources int = 1
+
+// Inputs are mapped explicitly into the target's parameters. Nothing is forwarded implicitly.
+test namingRules 'storage.bicep' = {
+  params: {
+    namePrefix: namePrefix
+    location: location
+  }
+}
+
+// Inputs can also parameterize a source policy, which needs no deployment values at all.
+test sizePolicy = {
+  match: {
+    include: ['storage.bicep']
+  }
+  assertions: {
+    boundedResourceCount: {
+      passWhen: length(target.resources) <= maxResources
+      message: 'A target may declare at most ${maxResources} resources.'
+    }
+  }
+}

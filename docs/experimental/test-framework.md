@@ -37,6 +37,9 @@ test validPrefix 'storage.bicep' = {
 
 The target path is a literal path relative to the test file.
 
+Values for a test's own parameters live in a separate `.biceptestparam` file, described under
+[Input cases](#input-cases).
+
 A `.biceptest` file is not a deployable template. Referencing one from a `module` declaration, or
 using one as the target of a test, is an error:
 
@@ -221,6 +224,133 @@ When comparing `file` or `resolvedFile` against a directory, include the trailin
 `sqlbackup/`. Paths always use `/` separators and are normalized, so the same policy means the same
 thing on every platform.
 
+## Input cases
+
+A test file can declare its own typed inputs as ordinary Bicep parameters. Values for them come from
+a `.biceptestparam` file, which binds to exactly one test file and declares one or more named cases.
+
+```bicep
+// storage-cases.biceptest
+@description('Prefix the target builds its storage account name from.')
+param namePrefix string
+
+@description('Location the deployment targets.')
+param location string = 'eastus'
+
+@description('Largest number of resources a single target may declare.')
+param maxResources int = 1
+
+// Inputs are mapped explicitly into the target's parameters. Nothing is forwarded implicitly.
+test namingRules 'storage.bicep' = {
+  params: {
+    namePrefix: namePrefix
+    location: location
+  }
+}
+
+// Inputs can also parameterize a source policy, which needs no deployment values at all.
+test sizePolicy = {
+  match: {
+    include: ['storage.bicep']
+  }
+  assertions: {
+    boundedResourceCount: {
+      passWhen: length(target.resources) <= maxResources
+      message: 'A target may declare at most ${maxResources} resources.'
+    }
+  }
+}
+```
+
+```bicep
+// storage-cases.biceptestparam
+using 'storage-cases.biceptest'
+
+case shortPrefix = {
+  namePrefix: 'contoso'
+  location: 'eastus'
+}
+
+case prefixAtLengthLimit = {
+  namePrefix: 'abcdefghijklmnopqrstu'
+  location: 'westus2'
+  maxResources: 1
+}
+```
+
+The test file's parameters are a real, checked contract. A case that sets a property the test does
+not declare, omits one it requires, or supplies the wrong type is a compile error in the input file,
+reported against the case that caused it — not a silently ignored value.
+
+A test file's inputs are its own. It decides which of them reach a target's production `params`, and
+which only shape its own policy. There is no implicit forwarding: a value a target never receives
+cannot influence what it computes.
+
+### Running with `--inputs`
+
+```console
+$ bicep test storage-cases.biceptest --inputs storage-cases.biceptestparam
+[✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
+[✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
+[✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
+[✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
+All 4 evaluations passed!
+```
+
+`--inputs` may be given more than once to combine several input files into one run.
+
+### Cases and targets multiply
+
+Every case applies to the complete set of targets a test selected: a test covering M targets, run
+with N cases, produces M × N evaluations. Cases supply values; they can never change which targets a
+test applies to. A different set of targets is a different test file.
+
+Each evaluation is judged on its own, and its identity names the case it ran with, so two runs of the
+same test and target that differ only in their values are never reported as the same thing:
+
+```console
+$ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestparam
+[✗] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: prefixTooLong] Failed at 1 / 2 assertions!
+	[✗] Assertion nameWithinLengthLimit failed!
+[✓] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
+[✗] Evaluation sizePolicy (storage.bicep) [storage-cases-failing.biceptestparam: prefixTooLong] Failed at 1 / 1 assertions!
+	[✗] Assertion boundedResourceCount failed!
+		A target may declare at most 0 resources.
+[✓] Evaluation sizePolicy (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
+Evaluation Summary: Failure!
+Total: 4 - Success: 2 - Skipped: 0 - Failed: 2
+```
+
+An assertion's `message` is ordinary Bicep and may interpolate the values the assertion actually ran
+with, so a threshold stated in the message cannot drift away from the condition that enforced it.
+
+### Failures are attributed, not fatal
+
+An input file that cannot contribute cases — because it fails to compile, or because it binds to a
+different test file — is reported and skipped. Everything else still runs, and the aggregate exit
+code is non-zero:
+
+```console
+$ bicep test storage.biceptest --inputs storage-cases.biceptestparam
+storage-cases.biceptestparam: The input file supplies cases for "storage-cases.biceptest", not the test file being run.
+[✓] Evaluation validPrefix (storage.bicep) Passed!
+[✓] Evaluation prefixAtLengthLimit (storage.bicep) Passed!
+```
+
+The same applies within a run. An input with no value from any case and no declared default fails
+only the evaluations that actually reach it:
+
+```console
+$ bicep test storage-cases.biceptest
+[-] Evaluation namingRules (storage.bicep) Skipped!
+Reason: The input "namePrefix" has no value. Supply it from a test case or give it a default.
+[✓] Evaluation sizePolicy (storage.bicep) Passed!
+Evaluation Summary: Failure!
+Total: 2 - Success: 1 - Skipped: 1 - Failed: 0
+```
+`sizePolicy` still ran because it never reaches `namePrefix`; only the test that needed the missing
+value was affected.
+
 ## Running tests
 
 ```console
@@ -277,6 +407,8 @@ $ bicep test storage-failing.biceptest --output-format json
       "testFile": "storage-failing.biceptest",
       "testName": "prefixTooLong",
       "target": "storage.bicep",
+      "inputFile": null,
+      "inputCase": null,
       "status": "failed",
       "error": null,
       "assertions": {
@@ -319,6 +451,8 @@ $ bicep test source-policy-failing.biceptest --output-format json
       "testFile": "source-policy-failing.biceptest",
       "testName": "forbidStorageAccounts",
       "target": "modules/blobStorage.bicep",
+      "inputFile": null,
+      "inputCase": null,
       "status": "failed",
       "error": null,
       "assertions": {
@@ -392,6 +526,8 @@ Notes on the contract:
 - `caseId` is built from test-file-relative information only, so the same case has the same identity
   regardless of the directory the CLI was invoked from.
 - `target` is `null` when a test could not be resolved to any target; there is no target to name.
+- `inputFile` and `inputCase` name the case a run used. Both are `null` when no input file was
+  supplied, so a host that never passes `--inputs` sees exactly the document it saw before.
 - `assertions` is present only for cases that were actually evaluated. A skipped case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares
   none.
@@ -417,6 +553,9 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `app.bicep` | A composition entrypoint that declares no resources of its own |
 | `source-policy.biceptest` | Test-owned source policies, including a `withModules` query |
 | `source-policy-failing.biceptest` | A source policy that is violated on purpose |
+| `storage-cases.biceptest` | A test that declares typed inputs and maps them into the target |
+| `storage-cases.biceptestparam` | Two passing input cases for that test |
+| `storage-cases-failing.biceptestparam` | Input cases where one violates a rule and one does not |
 
 Running the passing tests:
 
@@ -508,16 +647,20 @@ $ bicep test --pattern "*.biceptest"
 [✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/fileStorage.bicep) Passed!
 [✓] Evaluation source-policy.biceptest: compositionPolicy (app.bicep) Passed!
+[-] Evaluation storage-cases.biceptest: namingRules (storage.bicep) Skipped!
+Reason: The input "namePrefix" has no value. Supply it from a test case or give it a default.
+[✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) Passed!
 [✗] Evaluation storage-failing.biceptest: prefixTooLong (storage.bicep) Failed at 1 / 2 assertions!
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
 Evaluation Summary: Failure!
-Total: 10 - Success: 7 - Skipped: 0 - Failed: 3
+Total: 12 - Success: 8 - Skipped: 1 - Failed: 3
 ```
 
 The command exits with code `1` because `storage-failing.biceptest` and
-`source-policy-failing.biceptest` are expected to fail. The failure of one file does not stop the
+`source-policy-failing.biceptest` are expected to fail, and because `storage-cases.biceptest` was run
+without the `--inputs` file its `namingRules` test needs. The failure of one file does not stop the
 others from running, and one summary reports the aggregate.
 
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
@@ -529,8 +672,8 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 
 ## Current limitations
 
-- Parameter values are written inline in the test declaration, and the same values apply to every target a test selects.
 - Test-owned assertions query source facts only. Evaluated values — what a target computes for a particular set of inputs — are not yet available to them.
+- Ambient deployment context (subscription, resource group, location) cannot yet be supplied per case.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

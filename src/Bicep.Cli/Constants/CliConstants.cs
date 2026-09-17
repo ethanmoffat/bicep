@@ -48,6 +48,7 @@ namespace Bicep.Cli.Constants
         public const string OutDir = "--outdir";
         public const string OutFile = "--outfile";
         public const string Pattern = "--pattern";
+        public const string Inputs = "--inputs";
         public const string NoRestore = "--no-restore";
         public const string Force = "--force";
         public const string DiagnosticsFormat = "--diagnostics-format";

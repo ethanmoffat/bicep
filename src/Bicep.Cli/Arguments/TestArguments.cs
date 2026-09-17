@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Immutable;
+
 namespace Bicep.Cli.Arguments;
 
 public record TestArguments(
@@ -8,5 +10,6 @@ public record TestArguments(
     string? FilePattern,
     bool NoRestore,
     bool List,
+    ImmutableArray<string> Inputs,
     TestOutputFormat? OutputFormat,
     DiagnosticsFormat? DiagnosticsFormat) : IFilePatternInputArguments;

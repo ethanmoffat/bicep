@@ -110,6 +110,10 @@ public static class TestReportSerializer
             // A case with no resolved target is attributed to the test itself rather than to a
             // target that does not exist.
             ["target"] = identity.IsSelfTargeted ? null : identity.RelativeTargetPath,
+            // Present only when the run supplied input cases, so an existing host that never passes
+            // --inputs sees exactly the document it saw before.
+            ["inputFile"] = identity.Inputs?.InputFileName,
+            ["inputCase"] = identity.Inputs?.Name,
             ["status"] = status,
             ["error"] = error,
         };

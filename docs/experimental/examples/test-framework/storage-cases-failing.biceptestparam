@@ -1,0 +1,18 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// The same test file with values chosen to fail. Only the case that violates a rule fails; the
+// other cases and targets still run and still report their own outcome.
+
+using 'storage-cases.biceptest'
+
+case prefixTooLong = {
+  namePrefix: 'contosoabcdefghijklmnopqrstuvwxyz'
+  location: 'eastus'
+  maxResources: 0
+}
+
+case withinLimits = {
+  namePrefix: 'contoso'
+  location: 'eastus'
+}
