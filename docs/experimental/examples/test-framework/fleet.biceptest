@@ -1,0 +1,60 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Assertions over what the target would actually deploy for one case. `target.resources` describes
+// declarations in the source; `target.evaluated.resources` describes the instances those
+// declarations produce once this case's inputs and context are applied.
+
+@description('Environment the case deploys.')
+param environment string
+
+@description('Regions the case spans.')
+param regions string[]
+
+@description('Whether the case deploys the backup account.')
+param enableBackup bool = false
+
+test fleetShape 'fleet.bicep' = {
+  params: {
+    environment: environment
+    regions: regions
+    enableBackup: enableBackup
+  }
+  assertions: {
+    // Source: two declarations, whatever the case supplies.
+    declaresTwoAccounts: {
+      passWhen: length(target.resources) == 2
+      message: 'The target declares the loop and the conditional account regardless of inputs.'
+    }
+
+    // Evaluated: the loop is expanded and the condition is applied.
+    deploysOneAccountPerRegion: {
+      passWhen: length(target.evaluated.resources) == length(regions) + (enableBackup ? 1 : 0)
+      message: 'Expected one data account per region, plus the backup account only when enabled.'
+    }
+
+    // Every evaluated instance carries the name the deployment would really use.
+    accountNamesAreLowerCase: {
+      failOn: filter(target.evaluated.resources, r => r.name != toLower(r.name))
+      message: 'Storage account names must be lower case.'
+    }
+
+    // Two calls to the same module stay distinct once evaluated.
+    stampsAreDistinct: {
+      passWhen: length(union(map(filter(target.evaluated.withModules.resources, r => startsWith(r.type, 'Microsoft.Web/')), r => r.name), [])) == 4
+      message: 'Each module call must produce its own stamp resources.'
+    }
+
+    // Source deduplicates the module: the same file is only reported once.
+    sourceDeduplicatesTheModule: {
+      passWhen: length(target.withModules.resources) == 4
+      message: 'The shared module contributes its declarations once, not once per call.'
+    }
+
+    // Outputs are computed offline too.
+    primarySiteIsNamedForItsRole: {
+      passWhen: endsWith(target.evaluated.outputs.primarySiteName, '-primary-site')
+      message: 'The primary stamp must expose the primary site name.'
+    }
+  }
+}

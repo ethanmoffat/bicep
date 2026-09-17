@@ -452,8 +452,127 @@ test foo = {
         }
 
         [TestMethod]
-        public void An_empty_assertions_object_is_an_authoring_error()
+        public void Assertions_can_query_evaluated_instances_and_outputs()
         {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework,
+                ("main.bicep", @"
+test foo 'testMain.bicep' = {
+  params: {
+    name: 'contoso'
+  }
+  assertions: {
+    oneInstancePerRegion: {
+      passWhen: length(target.evaluated.resources) == 2
+      message: 'Expected one instance per region.'
+    }
+    everythingIsAccountedFor: {
+      failOn: filter(target.evaluated.withModules.resources, r => empty(r.name) || empty(r.instanceId) || empty(r.symbolicName) || empty(r.file) || r.line < 1 || empty(r.type))
+      message: 'Every evaluated instance is attributed to a declaration.'
+    }
+    outputIsComputed: {
+      passWhen: target.evaluated.outputs.accountName == 'contoso'
+      message: 'The output is computed offline.'
+    }
+  }
+}
+"),
+                ("testMain.bicep", @"
+param name string
+"));
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void An_evaluated_instance_fact_is_closed_to_misspelling()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      failOn: filter(target.evaluated.resources, r => r.nam == 'x')
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"evaluatedResourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP083", DiagnosticLevel.Error, "The type \"evaluatedResourceFact\" does not contain property \"nam\". Did you mean \"name\"?"),
+            });
+        }
+
+        [TestMethod]
+        public void The_evaluated_branch_itself_is_closed_to_misspelling()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      passWhen: empty(target.evaluated.resource)
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP083", DiagnosticLevel.Error, "The type \"evaluated\" does not contain property \"resource\". Did you mean \"resources\"?"),
+            });
+        }
+
+        [TestMethod]
+        public void Evaluated_outputs_are_open_because_output_names_depend_on_the_bound_target()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    anyOutputNameCompiles: {
+      passWhen: target.evaluated.outputs.whateverTheTargetDeclares != null
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void An_evaluated_instance_does_not_expose_source_only_facts()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      failOn: filter(target.evaluated.resources, r => r.existing)
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"evaluatedResourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP053", DiagnosticLevel.Error, "The type \"evaluatedResourceFact\" does not contain property \"existing\". Available properties include \"file\", \"instanceId\", \"line\", \"name\", \"symbolicName\", \"type\"."),
+            });
+        }
+
+        [TestMethod]
+        public void An_empty_assertions_object_is_an_authoring_error()        {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
 test foo = {
   match: {

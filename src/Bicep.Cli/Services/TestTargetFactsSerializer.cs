@@ -53,4 +53,38 @@ public static class TestTargetFactsSerializer
         [TestTargetType.FilePropertyName] = import.File,
         [TestTargetType.LinePropertyName] = import.Line,
     }).ToArray<object>());
+
+    /// <summary>
+    /// Renders the evaluated branch. The module-inclusive collection is only computed when the assertion
+    /// asked for it, so a policy about the selected file alone is never failed by a module it never
+    /// mentioned.
+    /// </summary>
+    public static JObject SerializeEvaluated(TestEvaluatedFactsProvider evaluated, bool includeWithModules)
+    {
+        var result = new JObject
+        {
+            [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local),
+            [TestTargetType.OutputsPropertyName] = evaluated.Outputs,
+        };
+
+        if (includeWithModules)
+        {
+            result[TestTargetType.WithModulesPropertyName] = new JObject
+            {
+                [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.WithModules),
+            };
+        }
+
+        return result;
+    }
+
+    private static JArray SerializeEvaluatedResources(IEnumerable<TestEvaluatedResource> resources) => new(resources.Select(resource => new JObject
+    {
+        [TestTargetType.NamePropertyName] = resource.Name,
+        [TestTargetType.TypePropertyName] = resource.Type,
+        [TestTargetType.SymbolicNamePropertyName] = resource.SymbolicName,
+        [TestTargetType.InstanceIdPropertyName] = resource.InstanceId,
+        [TestTargetType.FilePropertyName] = resource.File,
+        [TestTargetType.LinePropertyName] = resource.Line,
+    }).ToArray<object>());
 }

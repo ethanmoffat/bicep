@@ -10,9 +10,14 @@ namespace Bicep.Core.Emit
 {
     public class EmitterContext
     {
-        public EmitterContext(SemanticModel semanticModel)
+        /// <param name="settings">
+        /// Overrides the model's own emitter settings. Offline tooling that has to attribute an emitted
+        /// resource back to the declaration it came from needs symbolic names even when the model would
+        /// not otherwise emit them.
+        /// </param>
+        public EmitterContext(SemanticModel semanticModel, EmitterSettings? settings = null)
         {
-            Settings = semanticModel.EmitterSettings;
+            Settings = settings ?? semanticModel.EmitterSettings;
             SemanticModel = semanticModel;
             DataFlowAnalyzer = new(semanticModel);
             ResourceDependencies = ResourceDependencyVisitor.GetResourceDependencies(semanticModel);

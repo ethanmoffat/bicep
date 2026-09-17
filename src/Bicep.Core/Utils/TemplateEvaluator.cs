@@ -102,6 +102,11 @@ namespace Bicep.Core.Utils
                     {
                         return fullBody ? foundResource.ToJToken() : foundResource.Properties.ToJToken();
                     }
+
+                    if (this.config.OnUnresolvedReferenceFunc?.Invoke(resourceId, apiVersion, fullBody) is { } supplied)
+                    {
+                        return supplied;
+                    }
                 }
 
                 return this.context.EvaluateFunction(functionExpression, parameters, context, additionalnfo);
@@ -125,6 +130,13 @@ namespace Bicep.Core.Utils
 
         public delegate JToken OnReferenceDelegate(string resourceId, string apiVersion, bool fullBody);
 
+        /// <summary>
+        /// Supplies a reference the template itself cannot resolve, such as a symbolic reference to a
+        /// nested deployment whose outputs were computed separately. Returning null leaves the
+        /// reference unresolved so the engine's own behavior is preserved.
+        /// </summary>
+        public delegate JToken? OnUnresolvedReferenceDelegate(string reference, string? apiVersion, bool fullBody);
+
         public record EvaluationConfiguration(
             string TenantId,
             string ManagementGroup,
@@ -135,6 +147,8 @@ namespace Bicep.Core.Utils
             OnListDelegate? OnListFunc,
             OnReferenceDelegate? OnReferenceFunc)
         {
+            public OnUnresolvedReferenceDelegate? OnUnresolvedReferenceFunc { get; init; }
+
             public static EvaluationConfiguration Default = new(
                 DummyTenantId,
                 DummyManagementGroupName,

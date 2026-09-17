@@ -50,7 +50,7 @@ public static class BicepValueEvaluator
         var expression = new ExpressionBuilder(context).Convert(syntax);
         var reachable = CollectReachable(context, expression);
 
-        var variables = seedVariables is null ? new JObject() : (JObject)seedVariables.DeepClone();
+        var variables = seedVariables is null ? new JObject() : (JObject)Escape(seedVariables);
 
         foreach (var variable in reachable.Variables)
         {
@@ -83,6 +83,39 @@ public static class BicepValueEvaluator
         var evaluated = TemplateEvaluator.Evaluate(template, configBuilder: (deploymentContext ?? TestDeploymentContext.Empty).Apply).ToJToken();
 
         return evaluated["outputs"]?["result"]?["value"] ?? JValue.CreateNull();
+    }
+
+    /// <summary>
+    /// Copies seed data into the synthetic template as literal data.
+    ///
+    /// Seed values are facts, not expressions. A value that happens to read like a template expression -
+    /// an output the target could not compute offline, for instance - would otherwise be evaluated a
+    /// second time here and fail for reasons that have nothing to do with the assertion, so it is
+    /// escaped and reaches the assertion as the text it is.
+    /// </summary>
+    private static JToken Escape(JToken token)
+    {
+        switch (token)
+        {
+            case JObject source:
+                var mapped = new JObject();
+
+                foreach (var property in source.Properties())
+                {
+                    mapped[property.Name] = Escape(property.Value);
+                }
+
+                return mapped;
+
+            case JArray array:
+                return new JArray(array.Select(Escape));
+
+            case JValue { Type: JTokenType.String } value when value.Value<string>() is { Length: > 1 } text && text[0] == '[' && text[^1] == ']':
+                return new JValue($"[{text}");
+
+            default:
+                return token.DeepClone();
+        }
     }
 
     /// <summary>

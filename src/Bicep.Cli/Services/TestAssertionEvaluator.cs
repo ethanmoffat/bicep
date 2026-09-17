@@ -6,6 +6,7 @@ using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
+using Bicep.Core.Syntax.Visitors;
 using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
 using Newtonsoft.Json;
@@ -31,7 +32,8 @@ public class TestAssertionEvaluator
         SemanticModel testFileModel,
         TestDeclarationSyntax testDeclaration,
         TestTargetFacts facts,
-        TestInputCase? inputs = null)
+        TestInputCase? inputs = null,
+        TestEvaluatedFactsProvider? evaluated = null)
     {
         if (testDeclaration.TryGetAssertionsSyntax() is not { } assertions)
         {
@@ -48,24 +50,24 @@ public class TestAssertionEvaluator
                 continue;
             }
 
-            results.Add(EvaluateOne(context, name, assertion.Value as ObjectSyntax, facts, inputs));
+            results.Add(EvaluateOne(context, name, assertion.Value as ObjectSyntax, facts, inputs, evaluated));
         }
 
         return results.ToImmutable();
     }
 
-    private static AssertionResult EvaluateOne(EmitterContext context, string name, ObjectSyntax? body, TestTargetFacts facts, TestInputCase? inputs)
+    private static AssertionResult EvaluateOne(EmitterContext context, string name, ObjectSyntax? body, TestTargetFacts facts, TestInputCase? inputs, TestEvaluatedFactsProvider? evaluated)
     {
         var messageSyntax = body?.TryGetPropertyByName(TestAssertion.MessagePropertyName)?.Value;
         var passWhen = body?.TryGetPropertyByName(TestAssertion.PassWhenPropertyName)?.Value;
         var failOn = body?.TryGetPropertyByName(TestAssertion.FailOnPropertyName)?.Value;
-        var message = ResolveMessage(context, messageSyntax, facts, inputs);
+        var message = ResolveMessage(context, messageSyntax, facts, inputs, evaluated);
 
         try
         {
             if (passWhen is not null)
             {
-                var value = EvaluateExpression(context, passWhen, facts, "bool", inputs);
+                var value = EvaluateExpression(context, passWhen, facts, "bool", inputs, evaluated);
 
                 return new AssertionResult(name, value.Type == JTokenType.Boolean && value.Value<bool>())
                 {
@@ -75,7 +77,7 @@ public class TestAssertionEvaluator
 
             if (failOn is not null)
             {
-                var value = EvaluateExpression(context, failOn, facts, "array", inputs);
+                var value = EvaluateExpression(context, failOn, facts, "array", inputs, evaluated);
                 var violations = value is JArray array ? array : [];
 
                 return new AssertionResult(name, violations.Count == 0)
@@ -100,7 +102,7 @@ public class TestAssertionEvaluator
     /// to keep it in step with the condition by hand. A message that cannot be evaluated is dropped
     /// rather than being allowed to decide the assertion's outcome.
     /// </summary>
-    private static string? ResolveMessage(EmitterContext context, SyntaxBase? syntax, TestTargetFacts facts, TestInputCase? inputs)
+    private static string? ResolveMessage(EmitterContext context, SyntaxBase? syntax, TestTargetFacts facts, TestInputCase? inputs, TestEvaluatedFactsProvider? evaluated)
     {
         if (syntax is null)
         {
@@ -114,7 +116,7 @@ public class TestAssertionEvaluator
 
         try
         {
-            return EvaluateExpression(context, syntax, facts, "string", inputs).Value<string>();
+            return EvaluateExpression(context, syntax, facts, "string", inputs, evaluated).Value<string>();
         }
         catch (Exception)
         {
@@ -125,16 +127,43 @@ public class TestAssertionEvaluator
     /// <summary>
     /// Evaluates one assertion expression with the target facts in scope, along with the variables and
     /// case inputs the test file contributes to that expression.
+    ///
+    /// Evaluated values are supplied only to expressions that ask for them. Reading source facts never
+    /// triggers an evaluation, so a source policy still needs no deployment inputs at all.
     /// </summary>
-    private static JToken EvaluateExpression(EmitterContext context, SyntaxBase syntax, TestTargetFacts facts, string outputType, TestInputCase? inputs)
+    private static JToken EvaluateExpression(EmitterContext context, SyntaxBase syntax, TestTargetFacts facts, string outputType, TestInputCase? inputs, TestEvaluatedFactsProvider? evaluated)
     {
+        var target = TestTargetFactsSerializer.Serialize(facts);
+
+        if (References(syntax, TestTargetType.EvaluatedPropertyName))
+        {
+            if (evaluated is null)
+            {
+                throw new InvalidOperationException("Evaluated values are not available for this target.");
+            }
+
+            target[TestTargetType.EvaluatedPropertyName] = TestTargetFactsSerializer.SerializeEvaluated(
+                evaluated,
+                References(syntax, TestTargetType.WithModulesPropertyName));
+        }
+
         var seed = new JObject
         {
-            [TestAssertion.TargetVariableName] = TestTargetFactsSerializer.Serialize(facts),
+            [TestAssertion.TargetVariableName] = target,
         };
 
         return BicepValueEvaluator.Evaluate(context, syntax, outputType, seed, inputs?.Values, inputs?.Context);
     }
+
+    /// <summary>
+    /// Whether the expression reads the named branch of the target anywhere, including inside lambdas.
+    /// </summary>
+    private static bool References(SyntaxBase syntax, string propertyName) => SyntaxAggregator.Aggregate(
+        syntax,
+        seed: false,
+        function: (found, node) => found || (node is PropertyAccessSyntax access && access.PropertyName.IdentifierName == propertyName),
+        resultSelector: result => result,
+        continuationFunction: (found, _) => !found);
 
     /// <summary>
     /// Renders one offending fact as a source location. Facts carry their declaring file and line, so a

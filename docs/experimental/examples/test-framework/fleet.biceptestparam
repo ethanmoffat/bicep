@@ -1,0 +1,18 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Two cases over the same target. The same assertions describe a different deployed shape for each,
+// because `target.evaluated` is computed per case.
+
+using 'fleet.biceptest'
+
+case twoRegionsNoBackup = {
+  environment: 'dev'
+  regions: ['eastus', 'westus2']
+}
+
+case threeRegionsWithBackup = {
+  environment: 'prod'
+  regions: ['eastus', 'westus2', 'northeurope']
+  enableBackup: true
+}

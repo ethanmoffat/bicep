@@ -1,0 +1,19 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// A deliberately failing policy. It exists to show how an evaluated instance is reported: each
+// violation names the instance the deployment would create and points at the declaration that
+// produced it, including declarations inside a module.
+
+test storageOnly 'fleet.bicep' = {
+  params: {
+    environment: 'dev'
+    regions: ['eastus', 'westus2']
+  }
+  assertions: {
+    onlyStorageIsDeployed: {
+      failOn: filter(target.evaluated.withModules.resources, r => !startsWith(r.type, 'Microsoft.Storage/'))
+      message: 'This fleet is only allowed to deploy storage accounts.'
+    }
+  }
+}

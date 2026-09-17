@@ -1904,6 +1904,277 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_ExpandsLoopsAndExcludesFalseConditions()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-loop");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param regions string[]
+                param enableBackup bool
+
+                resource accounts 'Microsoft.Storage/storageAccounts@2023-01-01' = [for (region, index) in regions: {
+                  name: 'data${index}'
+                  location: region
+                }]
+
+                resource backup 'Microsoft.Storage/storageAccounts@2023-01-01' = if (enableBackup) {
+                  name: 'backup'
+                  location: regions[0]
+                }
+
+                resource shared 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'shared'
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test shape 'main.bicep' = {
+                  params: {
+                    regions: ['eastus', 'westus2', 'northeurope']
+                    enableBackup: false
+                  }
+                  assertions: {
+                    threeDeclarations: {
+                      passWhen: length(target.resources) == 3
+                      message: 'Source counts declarations.'
+                    }
+                    threeInstances: {
+                      passWhen: length(target.evaluated.resources) == 3
+                      message: 'One instance per region, no backup and no existing reference.'
+                    }
+                    namesAreResolved: {
+                      passWhen: join(map(target.evaluated.resources, r => r.name), ',') == 'data0,data1,data2'
+                      message: 'Each instance carries its resolved name.'
+                    }
+                    instancesShareOneDeclaration: {
+                      passWhen: length(union(map(target.evaluated.resources, r => r.symbolicName), [])) == 1
+                      message: 'All three instances come from the same declaration.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation shape (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_KeepsEachModuleCallDistinctAndResolvesItsOutputs()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-modules");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "stamp.bicep", """
+                param role string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: '${role}data'
+                  location: 'eastus'
+                }
+
+                output accountName string = account.name
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module primary 'stamp.bicep' = {
+                  name: 'primary'
+                  params: {
+                    role: 'primary'
+                  }
+                }
+
+                module secondary 'stamp.bicep' = {
+                  name: 'secondary'
+                  params: {
+                    role: 'secondary'
+                  }
+                }
+
+                output primaryAccountName string = primary.outputs.accountName
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test shape 'main.bicep' = {
+                  assertions: {
+                    localDeclaresNothing: {
+                      passWhen: empty(target.evaluated.resources)
+                      message: 'The entrypoint deploys nothing of its own.'
+                    }
+                    sourceDeduplicatesTheModule: {
+                      passWhen: length(target.withModules.resources) == 1
+                      message: 'The shared module contributes its declaration once.'
+                    }
+                    eachCallIsItsOwnInstance: {
+                      passWhen: join(map(target.evaluated.withModules.resources, r => r.name), ',') == 'primarydata,secondarydata'
+                      message: 'Each module call is evaluated with its own arguments.'
+                    }
+                    instanceIdsAreDistinct: {
+                      passWhen: length(union(map(target.evaluated.withModules.resources, r => r.instanceId), [])) == 2
+                      message: 'Two calls to the same module are two instances.'
+                    }
+                    moduleOutputsFlowBack: {
+                      passWhen: target.evaluated.outputs.primaryAccountName == 'primarydata'
+                      message: 'A module output is computed offline and read by the caller.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation shape (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_ViolationsPointAtTheDeclaringModuleLine()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-violations");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "stamp.bicep", """
+                resource plan 'Microsoft.Web/serverfarms@2022-09-01' = {
+                  name: 'plan'
+                  location: 'eastus'
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module stamp 'stamp.bicep' = {
+                  name: 'stamp'
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test storageOnly 'main.bicep' = {
+                  assertions: {
+                    onlyStorage: {
+                      failOn: filter(target.evaluated.withModules.resources, r => !startsWith(r.type, 'Microsoft.Storage/'))
+                      message: 'Only storage may be deployed.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Only storage may be deployed.");
+                error.Should().Contain("stamp.bicep(1): plan");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_IsOnlyComputedWhenAnAssertionAsksForIt()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-lazy");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The target cannot be evaluated at all without a value for `required`.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param required string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: required
+                  location: 'eastus'
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    oneDeclaration: {
+                      passWhen: length(target.resources) == 1
+                      message: 'A source policy needs no deployment inputs.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation sourcePolicy (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_IsComputedPerInputCase()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-cases");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param prefix string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: '${prefix}data'
+                  location: resourceGroup().location
+                }
+
+                output accountLocation string = 'eastus'
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param prefix string
+
+                test naming 'main.bicep' = {
+                  params: {
+                    prefix: prefix
+                  }
+                  assertions: {
+                    nameFollowsTheCase: {
+                      passWhen: target.evaluated.resources[0].name == '${prefix}data'
+                      message: 'The evaluated name follows the case that produced it.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                case contoso = {
+                  prefix: 'contoso'
+                }
+
+                case fabrikam = {
+                  prefix: 'fabrikam'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: contoso] Passed!");
+                output.Should().Contain("[cases.biceptestparam: fabrikam] Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

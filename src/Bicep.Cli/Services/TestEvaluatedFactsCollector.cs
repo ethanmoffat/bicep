@@ -1,0 +1,298 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using System.Collections.Immutable;
+using Bicep.Core.Semantics;
+using Bicep.Core.TestFramework;
+using Bicep.Core.Utils;
+using Newtonsoft.Json.Linq;
+
+namespace Bicep.Cli.Services;
+
+/// <summary>
+/// Works out what a target would actually deploy for one input case, offline.
+///
+/// Every branch is computed on demand and only once. A policy that asks about source declarations never
+/// causes an evaluation, and a policy that asks only about the selected file is never held up - or
+/// failed - by a module it did not ask about.
+/// </summary>
+public sealed class TestEvaluatedFactsProvider(
+    SemanticModel targetModel,
+    Func<JObject?> parameters,
+    TestDeploymentContext? deploymentContext,
+    TestTargetFacts sourceFacts,
+    string targetFile)
+{
+    private const string DeploymentResourceType = "Microsoft.Resources/deployments";
+    private const string DeploymentParametersSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#";
+
+    /// <summary>
+    /// One evaluated deployment: the template as this case computes it, plus the module calls it makes.
+    /// Each module call is kept separately, because two calls to the same file with different arguments
+    /// deploy different things.
+    /// </summary>
+    private sealed record EvaluatedDeployment(
+        JObject Template,
+        string File,
+        TestDeploymentContext Context,
+        ImmutableDictionary<string, EvaluatedDeployment> Modules);
+
+    private EvaluatedDeployment? root;
+    private ImmutableArray<TestEvaluatedResource>? local;
+    private ImmutableArray<TestEvaluatedResource>? withModules;
+    private JObject? outputs;
+
+    public ImmutableArray<TestEvaluatedResource> Local => local ??= Collect(Root(), string.Empty, recurse: false);
+
+    public ImmutableArray<TestEvaluatedResource> WithModules => withModules ??= Collect(Root(), string.Empty, recurse: true);
+
+    public JObject Outputs => outputs ??= CollectOutputs(Root());
+
+    private EvaluatedDeployment Root() => root ??= Evaluate(
+        TestTemplateEmitter.Emit(targetModel, forceSymbolicNames: true),
+        parameters(),
+        deploymentContext ?? TestDeploymentContext.Empty,
+        targetFile);
+
+    /// <summary>
+    /// Evaluates one template and everything it deploys.
+    ///
+    /// A module's arguments are only known once the calling template has been evaluated, and the
+    /// caller's outputs are only knowable once the modules it reads have been. So the template is
+    /// evaluated, its modules are evaluated with the arguments that produced, and the template is then
+    /// evaluated again with those module outputs available.
+    /// </summary>
+    private EvaluatedDeployment Evaluate(JToken template, JObject? inputs, TestDeploymentContext context, string file)
+    {
+        var first = EvaluateTemplate(template, inputs, context, null);
+        var modules = EvaluateModules(first, context, file);
+
+        if (modules.IsEmpty)
+        {
+            return new EvaluatedDeployment(first, file, context, modules);
+        }
+
+        var moduleOutputs = modules.ToDictionary(
+            module => module.Key,
+            module => (JToken)new JObject { [TestTargetType.OutputsPropertyName] = module.Value.Template[TestTargetType.OutputsPropertyName] ?? new JObject() },
+            StringComparer.OrdinalIgnoreCase);
+
+        var second = EvaluateTemplate(
+            template,
+            inputs,
+            context,
+            (reference, _, _) => moduleOutputs.TryGetValue(reference, out var resolved) ? resolved : null);
+
+        return new EvaluatedDeployment(second, file, context, modules);
+    }
+
+    private static JObject EvaluateTemplate(
+        JToken template,
+        JObject? inputs,
+        TestDeploymentContext context,
+        TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference)
+        => (JObject)TemplateEvaluator.Evaluate(
+            template,
+            inputs,
+            configuration => context.Apply(configuration) with { OnUnresolvedReferenceFunc = onUnresolvedReference }).ToJToken();
+
+    /// <summary>
+    /// Evaluates each module call this template makes, keyed by the symbolic name the caller used so
+    /// the caller can read the outputs back.
+    /// </summary>
+    private ImmutableDictionary<string, EvaluatedDeployment> EvaluateModules(JObject template, TestDeploymentContext context, string file)
+    {
+        var modules = ImmutableDictionary.CreateBuilder<string, EvaluatedDeployment>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, deployment) in Deployments(template))
+        {
+            if (TryGetModuleFile(file, BaseSymbolicName(key)) is not { } moduleFile)
+            {
+                continue;
+            }
+
+            if (deployment["properties"]?["template"] is not JObject nestedTemplate)
+            {
+                throw new InvalidOperationException($"The module deployed by '{key}' has no inline template to evaluate.");
+            }
+
+            var nestedInputs = new JObject
+            {
+                ["$schema"] = DeploymentParametersSchema,
+                ["contentVersion"] = "1.0.0.0",
+                ["parameters"] = deployment["properties"]?["parameters"] as JObject ?? [],
+            };
+
+            modules.Add(key, Evaluate(nestedTemplate, nestedInputs, ScopeOf(deployment, context), moduleFile));
+        }
+
+        return modules.ToImmutable();
+    }
+
+    private static JObject CollectOutputs(EvaluatedDeployment deployment)
+    {
+        var result = new JObject();
+
+        if (deployment.Template[TestTargetType.OutputsPropertyName] is JObject declared)
+        {
+            foreach (var output in declared.Properties())
+            {
+                result[output.Name] = (output.Value as JObject)?["value"] ?? JValue.CreateNull();
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Reads the instances out of one evaluated template. Loops have already been expanded by the
+    /// evaluator, so the work here is deciding what counts as a deployed instance and attributing each
+    /// one to the declaration it came from.
+    /// </summary>
+    private ImmutableArray<TestEvaluatedResource> Collect(EvaluatedDeployment deployment, string instancePrefix, bool recurse)
+    {
+        if (deployment.Template[TestTargetType.ResourcesPropertyName] is not JObject resources)
+        {
+            throw new InvalidOperationException("The evaluated template does not use symbolic resource names, so its instances cannot be attributed to declarations.");
+        }
+
+        var collected = ImmutableArray.CreateBuilder<TestEvaluatedResource>();
+
+        foreach (var property in resources.Properties())
+        {
+            if (property.Value is not JObject resource)
+            {
+                continue;
+            }
+
+            var symbolicName = BaseSymbolicName(property.Name);
+
+            // An existing reference reads state that something else owns; it is not deployed by this file.
+            if (resource["existing"] is { Type: JTokenType.Boolean } existing && existing.Value<bool>())
+            {
+                continue;
+            }
+
+            if (resource["condition"] is { } condition)
+            {
+                if (condition.Type is not JTokenType.Boolean)
+                {
+                    // An unevaluatable condition is not a false one. Saying "not deployed" here would let a
+                    // policy pass by describing a smaller deployment than the case actually produces.
+                    throw new InvalidOperationException($"The condition on '{symbolicName}' could not be evaluated for this case.");
+                }
+
+                if (!condition.Value<bool>())
+                {
+                    continue;
+                }
+            }
+
+            var type = resource[TestTargetType.TypePropertyName]?.Value<string>() ?? string.Empty;
+            var instanceId = instancePrefix + property.Name;
+
+            if (deployment.Modules.TryGetValue(property.Name, out var module))
+            {
+                if (recurse)
+                {
+                    collected.AddRange(Collect(module, $"{instanceId}/", recurse: true));
+                }
+
+                continue;
+            }
+
+            var (declaringFile, line) = ResolveDeclaration(deployment.File, symbolicName);
+
+            collected.Add(new TestEvaluatedResource(
+                resource[TestTargetType.NamePropertyName]?.Value<string>() ?? string.Empty,
+                type,
+                symbolicName,
+                instanceId,
+                declaringFile,
+                line));
+        }
+
+        return collected.ToImmutable();
+    }
+
+    /// <summary>
+    /// The deployment resources of an evaluated template, in declaration order. A false condition is
+    /// skipped here as well: a module that is not deployed contributes neither instances nor outputs.
+    /// </summary>
+    private static IEnumerable<(string Key, JObject Deployment)> Deployments(JObject template)
+    {
+        if (template[TestTargetType.ResourcesPropertyName] is not JObject resources)
+        {
+            yield break;
+        }
+
+        foreach (var property in resources.Properties())
+        {
+            if (property.Value is not JObject resource ||
+                !string.Equals(resource[TestTargetType.TypePropertyName]?.Value<string>(), DeploymentResourceType, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (resource["condition"] is { Type: JTokenType.Boolean } condition && !condition.Value<bool>())
+            {
+                continue;
+            }
+
+            yield return (property.Name, resource);
+        }
+    }
+
+    /// <summary>
+    /// A module deployed to another scope is evaluated in that scope, so the case's own context is not a
+    /// blanket override of where the module's resources actually go.
+    /// </summary>
+    private static TestDeploymentContext ScopeOf(JObject deployment, TestDeploymentContext context)
+    {
+        var scoped = context;
+
+        if (deployment["subscriptionId"]?.Value<string>() is { } subscriptionId)
+        {
+            scoped = scoped with { SubscriptionId = subscriptionId };
+        }
+
+        if (deployment["resourceGroup"]?.Value<string>() is { } resourceGroup)
+        {
+            scoped = scoped with { ResourceGroup = resourceGroup };
+        }
+
+        return scoped;
+    }
+
+    private string? TryGetModuleFile(string file, string symbolicName)
+        => sourceFacts.WithModules.Modules
+            .FirstOrDefault(module => module.File == file && module.Name == symbolicName)
+            ?.ResolvedFile is { Length: > 0 } resolved ? resolved : null;
+
+    /// <summary>
+    /// Maps an emitted resource back to the declaration that produced it. A child resource is emitted
+    /// under its full path, so the innermost segment is what the declaring file named it.
+    /// </summary>
+    private (string File, int Line) ResolveDeclaration(string file, string symbolicName)
+    {
+        var candidates = sourceFacts.WithModules.Resources.Where(resource => resource.File == file).ToArray();
+        var match = candidates.FirstOrDefault(resource => resource.Name == symbolicName)
+            ?? candidates.FirstOrDefault(resource => resource.Name == LastSegment(symbolicName));
+
+        return match is null ? (file, 0) : (match.File, match.Line);
+    }
+
+    private static string BaseSymbolicName(string key)
+    {
+        var index = key.IndexOf('[');
+
+        return index < 0 ? key : key[..index];
+    }
+
+    private static string LastSegment(string symbolicName)
+    {
+        var index = symbolicName.LastIndexOf("::", StringComparison.Ordinal);
+
+        return index < 0 ? symbolicName : symbolicName[(index + 2)..];
+    }
+}

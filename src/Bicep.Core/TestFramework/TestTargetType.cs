@@ -22,6 +22,9 @@ public static class TestTargetType
 
     public const string NamePropertyName = "name";
     public const string SymbolicNamePropertyName = "symbolicName";
+    public const string EvaluatedPropertyName = "evaluated";
+    public const string OutputsPropertyName = "outputs";
+    public const string InstanceIdPropertyName = "instanceId";
     public const string TypePropertyName = "type";
     public const string ExistingPropertyName = "existing";
     public const string PathPropertyName = "path";
@@ -70,6 +73,64 @@ public static class TestTargetType
 
     private static readonly ObjectType FactSet = CreateFactSet(WithModulesPropertyName);
 
+    /// <summary>
+    /// One resource instance the target would deploy for the case being run. Unlike a source fact this
+    /// has a resolved ARM <c>name</c>, because a name only exists once inputs, conditions and loops have
+    /// actually been computed.
+    /// </summary>
+    private static readonly ObjectType EvaluatedResourceFact = new(
+        "evaluatedResourceFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resolved ARM name, including parent name segments for child resources."),
+            new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource type without its API version, for example 'Microsoft.Sql/servers'."),
+            new NamedTypeProperty(SymbolicNamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the declaration this instance came from."),
+            new NamedTypeProperty(InstanceIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "Identifies this instance among the others the same declaration produced, including module call and loop indices."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+        ],
+        null);
+
+    private static readonly ObjectType EvaluatedWithModules = new(
+        "evaluatedWithModules",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(
+                ResourcesPropertyName,
+                new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Evaluated instances from the selected file together with every local module reachable from it."),
+        ],
+        null);
+
+    /// <summary>
+    /// Values computed offline for one input case and its deployment context. Nothing here is deployed,
+    /// queried from Azure or populated from provider-returned state.
+    /// </summary>
+    private static readonly ObjectType Evaluated = new(
+        EvaluatedPropertyName,
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(
+                ResourcesPropertyName,
+                new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Resource instances the selected file would deploy. Loops are expanded, false conditions are excluded and existing references are not instances."),
+            new NamedTypeProperty(
+                OutputsPropertyName,
+                // The selected file is not known until a target is bound, and one test may cover many
+                // targets, so output names are resolved when the case runs rather than at compile time.
+                new ObjectType(OutputsPropertyName, TypeSymbolValidationFlags.Default, [], new TypeProperty(LanguageConstants.Any)),
+                TypePropertyFlags.ReadOnly,
+                "Evaluated values of the outputs the selected file declares, by output name."),
+            new NamedTypeProperty(
+                WithModulesPropertyName,
+                EvaluatedWithModules,
+                TypePropertyFlags.ReadOnly,
+                "Evaluated instances across the selected file and every local module reachable from it."),
+        ],
+        null);
+
     private static readonly ObjectType Target = new(
         LanguageConstants.TestTargetName,
         TypeSymbolValidationFlags.Default,
@@ -80,6 +141,11 @@ public static class TestTargetType
                 FactSet,
                 TypePropertyFlags.ReadOnly,
                 "The same facts for the selected file together with every local module reachable from it."),
+            new NamedTypeProperty(
+                EvaluatedPropertyName,
+                Evaluated,
+                TypePropertyFlags.ReadOnly,
+                "What the selected file would actually produce for this input case, computed offline."),
         ],
         null);
 

@@ -196,6 +196,7 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.modules` | Module declarations in the file |
 | `target.imports` | Compile-time `import` statements in the file |
 | `target.withModules` | The same three collections for the file **plus every module it transitively reaches** |
+| `target.evaluated` | What the file would actually produce for this input case, computed offline — see [Evaluated values](#evaluated-values) |
 
 Each resource carries `symbolicName`, `type` (without the API version), `existing`, `file` and `line`.
 Each module carries `symbolicName`, `path` (as written), `resolvedFile`, `file` and `line`. Each
@@ -424,6 +425,136 @@ Two properties of this are worth stating plainly:
 A test run with no input file at all keeps the evaluator's own placeholder context rather than one
 invented by the runner.
 
+## Evaluated values
+
+`target.evaluated` describes what the selected file would **actually deploy** for the case being run.
+
+`evaluated` means computed offline, for this case and this deployment context. Nothing is deployed,
+nothing is queried from Azure and no provider-returned state is involved. It is the compiler and the
+offline evaluator working out the consequences of the source and the values supplied to it.
+
+| Property | Description |
+|----------|-------------|
+| `target.evaluated.resources` | Resource instances the selected file would deploy |
+| `target.evaluated.outputs` | Evaluated values of the outputs the selected file declares, by name |
+| `target.evaluated.withModules.resources` | The same instances for the selected file **plus every local module reachable from it** |
+
+Each instance carries:
+
+| Fact | Description |
+|------|-------------|
+| `name` | The resolved ARM name, including parent segments for child resources |
+| `type` | The resource type without its API version |
+| `symbolicName` | The symbolic name of the declaration this instance came from |
+| `instanceId` | Distinguishes instances of the same declaration, including module call and loop indices |
+| `file`, `line` | The declaration that produced the instance |
+
+### Source facts and evaluated instances are different questions
+
+`target.resources` answers *what does this file declare*. `target.evaluated.resources` answers *what
+would this case deploy*. The two differ wherever the source is conditional:
+
+- A `for` loop is **one** source declaration and **one instance per iteration**.
+- A resource whose `if (...)` condition evaluates to `false` is still a source declaration, but it is
+  **not** an evaluated instance.
+- An `existing` reference is a source declaration but never an evaluated instance: it reads state
+  something else owns.
+- A module is **deduplicated in source** — the same file contributes its declarations once, however
+  many times it is called — but **each call is its own evaluated instance**, evaluated with the
+  arguments that call actually passed.
+
+`fleet.bicep` exercises all four. It declares one looped storage account and one conditional one, and
+calls `fleet/regionStamp.bicep` twice:
+
+[fleet.bicep](examples/test-framework/fleet.bicep)
+
+[fleet/regionStamp.bicep](examples/test-framework/fleet/regionStamp.bicep)
+
+[fleet.biceptest](examples/test-framework/fleet.biceptest) asserts over both views, and
+[fleet.biceptestparam](examples/test-framework/fleet.biceptestparam) supplies two cases: two regions
+without the backup account, and three regions with it.
+
+```bicep
+// Source: two declarations, whatever the case supplies.
+declaresTwoAccounts: {
+  passWhen: length(target.resources) == 2
+  message: 'The target declares the loop and the conditional account regardless of inputs.'
+}
+
+// Evaluated: the loop is expanded and the condition is applied.
+deploysOneAccountPerRegion: {
+  passWhen: length(target.evaluated.resources) == length(regions) + (enableBackup ? 1 : 0)
+  message: 'Expected one data account per region, plus the backup account only when enabled.'
+}
+```
+
+```console
+$ bicep test fleet.biceptest --inputs fleet.biceptestparam
+[✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: twoRegionsNoBackup] Passed!
+[✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: threeRegionsWithBackup] Passed!
+All 2 evaluations passed!
+```
+
+The same assertions describe a two-region deployment without a backup account in the first case and a
+four-resource one in the second, because `target.evaluated` is recomputed for each case.
+
+### Module outputs are computed too
+
+A module's outputs are evaluated offline and flow back to the caller, so an output that reads
+`primaryStamp.outputs.siteName` resolves:
+
+```bicep
+primarySiteIsNamedForItsRole: {
+  passWhen: endsWith(target.evaluated.outputs.primarySiteName, '-primary-site')
+  message: 'The primary stamp must expose the primary site name.'
+}
+```
+
+`target.evaluated.outputs` accepts any output name, because one test may cover many targets and the
+declared outputs are only known once a target is bound. An output the target does not declare
+evaluates to null rather than failing to compile.
+
+### Violations name the instance and the declaration
+
+Because every instance is attributed, a `failOn` over evaluated instances reports the name the
+deployment would really use alongside the declaration that produced it — including declarations
+inside a module. [fleet-failing.biceptest](examples/test-framework/fleet-failing.biceptest) rejects
+anything that is not storage:
+
+```bicep
+onlyStorageIsDeployed: {
+  failOn: filter(target.evaluated.withModules.resources, r => !startsWith(r.type, 'Microsoft.Storage/'))
+  message: 'This fleet is only allowed to deploy storage accounts.'
+}
+```
+
+```console
+$ bicep test fleet-failing.biceptest
+[✗] Evaluation storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion onlyStorageIsDeployed failed!
+		This fleet is only allowed to deploy storage accounts.
+		fleet/regionStamp.bicep(16): fleetdev-primary-plan
+		fleet/regionStamp.bicep(24): fleetdev-primary-site
+		fleet/regionStamp.bicep(16): fleetdev-secondary-plan
+		fleet/regionStamp.bicep(24): fleetdev-secondary-site
+Evaluation Summary: Failure!
+Total: 1 - Success: 0 - Skipped: 0 - Failed: 1
+```
+
+Two calls to the same module produce four findings, not two: the module file declares the same two
+resources once, but the deployment creates them twice under different names.
+
+### Evaluation happens only when it is asked for
+
+Evaluating a target needs values for its parameters; reading source facts does not. A source policy
+that never mentions `target.evaluated` is therefore never held up by a target it could not evaluate,
+and `target.evaluated.withModules` is only computed when an assertion actually reads it — a policy
+about the selected file alone is not failed by a module it did not ask about.
+
+An unevaluatable condition is an error rather than a silent exclusion. Reporting "not deployed" for a
+condition that could not be computed would let a policy pass by describing a smaller deployment than
+the case actually produces.
+
 ## Running tests
 
 ```console
@@ -632,6 +763,11 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `context.bicep` | A template whose behavior depends on ambient deployment context |
 | `context.biceptest` | A test that declares no inputs at all |
 | `context.biceptestparam` | File-level `deploymentContext` defaults and per-case overrides |
+| `fleet.bicep` | A target with a loop, a condition and two calls to the same module |
+| `fleet/regionStamp.bicep` | The module `fleet.bicep` calls twice |
+| `fleet.biceptest` | Source facts and evaluated instances asserted side by side |
+| `fleet.biceptestparam` | Two cases that deploy different shapes from the same source |
+| `fleet-failing.biceptest` | An evaluated-instance policy that is violated on purpose |
 
 Running the passing tests:
 
@@ -748,7 +884,9 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 
 ## Current limitations
 
-- Test-owned assertions query source facts only. Evaluated values — what a target computes for a particular set of inputs — are not yet available to them.
+- Evaluated values cover resource instances and outputs. Individual resource properties are not yet exposed.
+- A module argument that itself depends on another module's output is evaluated before that output is available, so chained module-to-module argument flow is not yet resolved.
+- Runtime data is not simulated. A target that consumes `reference()` or `listKeys()` values cannot be evaluated offline.
 - Deployment context covers `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup` and `resourceGroupLocation`. Deployment name is not yet available.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 

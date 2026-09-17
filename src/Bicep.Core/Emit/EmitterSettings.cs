@@ -11,12 +11,24 @@ namespace Bicep.Core.Emit
     public class EmitterSettings
     {
         public EmitterSettings(SemanticModel model)
+            : this(model, forceSymbolicNames: false)
+        {
+        }
+
+        /// <param name="forceSymbolicNames">
+        /// Emits symbolic names even when the model would not otherwise require them. Tooling that maps
+        /// an emitted resource back to its declaration cannot do so without them.
+        /// </param>
+        public EmitterSettings(SemanticModel model, bool forceSymbolicNames)
         {
             FileKind = model.SourceFileKind;
+            ForceSymbolicNames = forceSymbolicNames;
             UseExperimentalTemplateLanguageVersion = model.Features.EnabledFeatureMetadata.Any(feature => feature.usesExperimentalArmEngineFeature);
 
             // Symbolic names are used if (evaluated in increasing order of computational cost):
             EnableSymbolicNames =
+                // the caller requires them
+                forceSymbolicNames ||
                 // we're targeting an experimental language version
                 UseExperimentalTemplateLanguageVersion ||
                 // symbolic name codegen has been explicitly enabled
@@ -76,6 +88,13 @@ namespace Bicep.Core.Emit
         /// Generate symbolic names in template output?
         /// </summary>
         public bool EnableSymbolicNames { get; }
+
+        /// <summary>
+        /// Whether symbolic names were requested by the caller rather than required by the model. This
+        /// propagates to nested module templates, which are otherwise emitted with their own settings
+        /// and would lose the attribution the caller asked for.
+        /// </summary>
+        public bool ForceSymbolicNames { get; }
 
         /// <summary>
         /// Use an experimental version of the ARM JSON template syntax. Only used if an experimental Bicep feature has been explicitly enabled.

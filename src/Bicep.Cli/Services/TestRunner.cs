@@ -144,7 +144,17 @@ namespace Bicep.Cli.Services
             try
             {
                 var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
-                var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts, inputCase);
+
+                // Built here but not used unless an assertion actually reads an evaluated value: source
+                // policies must keep working without any deployment inputs.
+                var evaluated = new TestEvaluatedFactsProvider(
+                    targetModel,
+                    () => TryGetParameters(testFileModel, testDeclaration, inputCase),
+                    inputCase?.Context,
+                    facts,
+                    targetModel.SourceFile.FileHandle.Uri.GetPathRelativeTo(factRoot));
+
+                var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts, inputCase, evaluated);
                 var failedAssertions = allAssertions.Where(x => !x.Result).ToImmutableArray();
 
                 return new TestEvaluation(null, null, allAssertions, failedAssertions);
@@ -160,7 +170,7 @@ namespace Bicep.Cli.Services
             try
             {
                 var parameters = TryGetParameters(testFileModel, testDeclaration, inputCase);
-                var templateJToken = GetTemplate(targetModel);
+                var templateJToken = TestTemplateEmitter.Emit(targetModel);
                 var template = TemplateEvaluator.Evaluate(templateJToken, parameters, configBuilder: (inputCase?.Context ?? TestDeploymentContext.Empty).Apply);
                 var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
                 var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
@@ -189,19 +199,7 @@ namespace Bicep.Cli.Services
         private static TestResult Unevaluated(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri, string error, TestInputCase? inputCase = null)
             => new(testDeclaration, new TestCaseIdentity(testFileUri, testDeclaration.Name, targetUri, inputCase), new TestEvaluation(null, error, [], []));
 
-        private static JToken GetTemplate(SemanticModel model)
-        {
-            var textWriter = new StringWriter();
-            using var writer = new SourceAwareJsonTextWriter(textWriter)
-            {
-                // don't close the textWriter when writer is disposed
-                CloseOutput = false,
-                Formatting = Formatting.Indented
-            };
-            var (_, template) = new TemplateWriter(model).GetTemplate(writer);
 
-            return template;
-        }
 
         /// <summary>
         /// Resolves the production parameters the test maps in. The mapping is ordinary Bicep evaluated
