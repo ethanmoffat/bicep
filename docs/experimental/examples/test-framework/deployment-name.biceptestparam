@@ -1,0 +1,7 @@
+using 'deployment-name.biceptest'
+
+deploymentContext = {
+  deploymentName: 'contoso-2024-06-01'
+}
+
+case release = {}

@@ -1836,6 +1836,98 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_DeploymentName_ComesFromContextAtTheRootAndFromTheDeclarationInModules()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-deployment-name");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "child.bicep", """
+                param tag string
+
+                output stamp string = '${deployment().name}-${tag}'
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module child 'child.bicep' = {
+                  name: '${deployment().name}-child'
+                  params: {
+                    tag: 'leaf'
+                  }
+                }
+
+                output rootName string = deployment().name
+                output childStamp string = child.outputs.stamp
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test names 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    rootUsesTheSuppliedName: {
+                      passWhen: target.evaluated.outputs.rootName == 'contoso-deploy'
+                      message: 'The root deployment name should come from the case context.'
+                    }
+                    moduleUsesItsOwnName: {
+                      passWhen: target.evaluated.outputs.childStamp == 'contoso-deploy-child-leaf'
+                      message: 'A module should see the name its own declaration computed.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  deploymentName: 'contoso-deploy'
+                }
+
+                case named = {
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // The root takes the name the case supplied, and the module takes the name its own
+                // declaration computed rather than reusing the root's.
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: named] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_DeploymentName_WhenNotSupplied_ReportsTheMissingContext()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-deployment-name-missing");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                assert namedDeployment = !empty(deployment().name)
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test names 'main.bicep' = {
+                  params: {}
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                // No name was stated, so the failure names the missing context rather than inventing a
+                // deployment name nobody chose.
+                result.Should().Be(1);
+                error.Should().Contain("Skipped!");
+                error.Should().Contain("no deployment name was supplied");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

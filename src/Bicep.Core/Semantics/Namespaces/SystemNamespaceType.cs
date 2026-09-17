@@ -2228,6 +2228,10 @@ namespace Bicep.Core.Semantics.Namespaces
                 yield return CreateDeploymentContextDecorator(
                     LanguageConstants.DeploymentContextResourceGroupLocationPropertyName,
                     "Overrides the resource group location this case is evaluated with. This is simulated context, not an automatic deployment parameter.");
+
+                yield return CreateDeploymentContextDecorator(
+                    LanguageConstants.DeploymentContextDeploymentNamePropertyName,
+                    "Overrides the root deployment name this case is evaluated with. A module's own deployment name still comes from its declaration.");
             }
 
             static Decorator CreateDeploymentContextDecorator(string name, string description)

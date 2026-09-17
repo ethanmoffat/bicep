@@ -265,8 +265,34 @@ namespace Bicep.Core.IntegrationTests
                 ("app.bicep", DefaultTargetFile));
 
             result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
-                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
+                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"deploymentName\", \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
             });
+        }
+
+        [TestMethod]
+        public void A_deployment_name_can_be_supplied_and_overridden()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    deploymentContext = {
+                      deploymentName: 'contoso-deploy'
+                    }
+
+                    case usesFileDefault = {
+                      location: 'westus'
+                    }
+
+                    @deploymentName('contoso-deploy-2')
+                    case overridesTheName = {
+                      location: 'westus'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
         }
 
         [TestMethod]

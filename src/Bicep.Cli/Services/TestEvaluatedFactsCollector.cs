@@ -153,6 +153,13 @@ public sealed class TestEvaluatedFactsProvider(
     {
         if (deployment.Template[TestTargetType.ResourcesPropertyName] is not JObject resources)
         {
+            // A template that declares nothing emits an empty array, which carries no attribution problem.
+            // Anything else non-symbolic cannot be mapped back to declarations.
+            if (deployment.Template[TestTargetType.ResourcesPropertyName] is null or JArray { Count: 0 })
+            {
+                return [];
+            }
+
             throw new InvalidOperationException("The evaluated template does not use symbolic resource names, so its instances cannot be attributed to declarations.");
         }
 
@@ -260,6 +267,9 @@ public sealed class TestEvaluatedFactsProvider(
         {
             scoped = scoped with { ResourceGroup = resourceGroup };
         }
+
+        // A module's own deployment name is the name its declaration computed, never the root's.
+        scoped = scoped with { DeploymentName = deployment["name"]?.Value<string>() };
 
         return scoped;
     }

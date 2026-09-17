@@ -19,7 +19,8 @@ public record TestDeploymentContext(
     string? ManagementGroup = null,
     string? SubscriptionId = null,
     string? ResourceGroup = null,
-    string? ResourceGroupLocation = null)
+    string? ResourceGroupLocation = null,
+    string? DeploymentName = null)
 {
     public static readonly TestDeploymentContext Empty = new();
 
@@ -33,7 +34,8 @@ public record TestDeploymentContext(
             overrides.ManagementGroup ?? ManagementGroup,
             overrides.SubscriptionId ?? SubscriptionId,
             overrides.ResourceGroup ?? ResourceGroup,
-            overrides.ResourceGroupLocation ?? ResourceGroupLocation);
+            overrides.ResourceGroupLocation ?? ResourceGroupLocation,
+            overrides.DeploymentName ?? DeploymentName);
 
     public TestDeploymentContext WithProperty(string name, string value) => name switch
     {
@@ -42,6 +44,7 @@ public record TestDeploymentContext(
         LanguageConstants.DeploymentContextSubscriptionIdPropertyName => this with { SubscriptionId = value },
         LanguageConstants.DeploymentContextResourceGroupPropertyName => this with { ResourceGroup = value },
         LanguageConstants.DeploymentContextResourceGroupLocationPropertyName => this with { ResourceGroupLocation = value },
+        LanguageConstants.DeploymentContextDeploymentNamePropertyName => this with { DeploymentName = value },
         _ => this,
     };
 
@@ -66,7 +69,8 @@ public record TestDeploymentContext(
     /// a context cannot silently depend on one.
     /// </summary>
     public TemplateEvaluator.EvaluationConfiguration Apply(TemplateEvaluator.EvaluationConfiguration configuration)
-        => configuration with
+    {
+        var applied = configuration with
         {
             TenantId = TenantId ?? configuration.TenantId,
             ManagementGroup = ManagementGroup ?? configuration.ManagementGroup,
@@ -74,4 +78,29 @@ public record TestDeploymentContext(
             ResourceGroup = ResourceGroup ?? configuration.ResourceGroup,
             RgLocation = ResourceGroupLocation ?? configuration.RgLocation,
         };
+
+        if (DeploymentName is null)
+        {
+            // No deployment name was stated, so `deployment()` stays unavailable rather than resolving
+            // to a name nobody chose.
+            return applied;
+        }
+
+        return applied with
+        {
+            Metadata = new Dictionary<string, JToken>(applied.Metadata)
+            {
+                [DeploymentMetadataName] = new JObject
+                {
+                    ["name"] = DeploymentName,
+                    ["properties"] = new JObject
+                    {
+                        ["mode"] = "Incremental",
+                    },
+                },
+            },
+        };
+    }
+
+    private const string DeploymentMetadataName = "deployment";
 }

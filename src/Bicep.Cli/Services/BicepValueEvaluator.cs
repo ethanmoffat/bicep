@@ -263,8 +263,24 @@ public static class BicepValueEvaluator
             message = message[staging.Length..];
         }
 
+        if (message.Contains("deployment metadata 'DEPLOYMENT'", StringComparison.OrdinalIgnoreCase))
+        {
+            // The engine only knows a metadata key is absent. The author needs to know which piece of
+            // simulated context they never supplied.
+            return Translate(message);
+        }
+
         return message.TrimEnd();
     }
+
+    /// <summary>
+    /// Rewrites engine messages whose wording describes an internal metadata lookup rather than the
+    /// authoring mistake that caused it.
+    /// </summary>
+    public static string Translate(string message)
+        => message.Contains("deployment metadata 'DEPLOYMENT'", StringComparison.OrdinalIgnoreCase)
+            ? "deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName()."
+            : message;
 
     private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters);
 

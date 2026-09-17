@@ -1,0 +1,13 @@
+test deploymentNames 'deployment-name.bicep' = {
+  params: {}
+  assertions: {
+    rootUsesTheSuppliedName: {
+      passWhen: target.evaluated.outputs.rootName == 'contoso-2024-06-01'
+      message: 'The root deployment should use the name the case supplied.'
+    }
+    modulesUseTheirOwnNames: {
+      passWhen: target.evaluated.outputs.primaryStamp == 'contoso-2024-06-01-primary/primary' && target.evaluated.outputs.secondaryStamp == 'contoso-2024-06-01-secondary/secondary'
+      message: 'Each module should see the deployment name its own declaration computed.'
+    }
+  }
+}

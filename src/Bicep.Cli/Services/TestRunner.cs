@@ -193,7 +193,7 @@ namespace Bicep.Cli.Services
             var message = exception.Message;
             var lineBreak = message.IndexOfAny(['\r', '\n']);
 
-            return lineBreak < 0 ? message : message[..lineBreak].TrimEnd();
+            return BicepValueEvaluator.Translate(lineBreak < 0 ? message : message[..lineBreak].TrimEnd());
         }
 
         private static TestResult Unevaluated(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri, string error, TestInputCase? inputCase = null)

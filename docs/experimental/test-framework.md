@@ -395,8 +395,9 @@ case secondaryRegion = {}
 case unapprovedRegion = {}
 ```
 
-The available properties are `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup` and
-`resourceGroupLocation`. Each has a matching decorator that a single case may apply.
+The available properties are `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup`,
+`resourceGroupLocation` and `deploymentName`. Each has a matching decorator that a single case may
+apply.
 
 A decorator **replaces one property** of the file defaults for that case only. There is no deep
 merge, a case cannot replace the context wholesale, and the case that overrides a property does not
@@ -435,6 +436,71 @@ Two properties of this are worth stating plainly:
 
 A test run with no input file at all keeps the evaluator's own placeholder context rather than one
 invented by the runner.
+
+### Deployment names
+
+`deployment().name` is commonly used to derive module names so that concurrent deployments of the
+same template do not collide. Supplying `deploymentName` makes that name deterministic for a case:
+
+[`deployment-name.biceptestparam`](./examples/test-framework/deployment-name.biceptestparam)
+
+```bicep
+using 'deployment-name.biceptest'
+
+deploymentContext = {
+  deploymentName: 'contoso-2024-06-01'
+}
+
+case release = {}
+```
+
+Only the **root** deployment takes its name from the context. A module's name is whatever its own
+declaration computed, which is what makes name-derivation chains observable:
+
+[`deployment-name.bicep`](./examples/test-framework/deployment-name.bicep)
+
+```bicep
+module primary 'deployment-name/stamp.bicep' = {
+  name: '${deployment().name}-primary'
+  params: {
+    role: 'primary'
+  }
+}
+```
+
+[`deployment-name/stamp.bicep`](./examples/test-framework/deployment-name/stamp.bicep) reads
+`deployment().name` again, and reports the name of *its own* deployment:
+
+[`deployment-name.biceptest`](./examples/test-framework/deployment-name.biceptest)
+
+```bicep
+test deploymentNames 'deployment-name.bicep' = {
+  params: {}
+  assertions: {
+    rootUsesTheSuppliedName: {
+      passWhen: target.evaluated.outputs.rootName == 'contoso-2024-06-01'
+      message: 'The root deployment should use the name the case supplied.'
+    }
+    modulesUseTheirOwnNames: {
+      passWhen: target.evaluated.outputs.primaryStamp == 'contoso-2024-06-01-primary/primary' && target.evaluated.outputs.secondaryStamp == 'contoso-2024-06-01-secondary/secondary'
+      message: 'Each module should see the deployment name its own declaration computed.'
+    }
+  }
+}
+```
+
+```console
+$ bicep test deployment-name.biceptest --inputs deployment-name.biceptestparam
+[✓] Evaluation deploymentNames (deployment-name.bicep) [deployment-name.biceptestparam: release] Passed!
+All 1 evaluations passed!
+```
+
+There is no implicit default. A target that reads `deployment()` without a name being supplied is
+not given an invented one:
+
+```console
+Reason: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
+```
 
 ## Evaluated values
 
@@ -779,6 +845,10 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `fleet.biceptest` | Source facts and evaluated instances asserted side by side |
 | `fleet.biceptestparam` | Two cases that deploy different shapes from the same source |
 | `fleet-failing.biceptest` | An evaluated-instance policy that is violated on purpose |
+| `deployment-name.bicep` | A target whose module names derive from `deployment().name` |
+| `deployment-name/stamp.bicep` | A module that reports the deployment name it was given |
+| `deployment-name.biceptest` | Asserts the root and module deployment names |
+| `deployment-name.biceptestparam` | Supplies a deterministic `deploymentName` |
 
 Running the passing tests:
 
