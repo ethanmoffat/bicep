@@ -22,7 +22,7 @@ Download them anonymously; no token is required:
 ```console
 $ curl -Lo bicep.exe https://github.com/ethanmoffat/bicep/releases/download/<tag>/bicep-win-x64.exe
 $ ./bicep.exe --version
-Bicep CLI version 0.47.93 (978b41ee5e)
+Bicep CLI version 0.47.97 (2ceadcb79b)
 ```
 
 The version string ends with the commit the binary was built from. Pin that revision and check it, rather than assuming whichever `bicep` is on the path has the feature. A pipeline that quietly falls back to another `bicep` will otherwise appear to pass without having run any of these tests.
