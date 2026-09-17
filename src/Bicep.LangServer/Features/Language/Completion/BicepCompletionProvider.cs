@@ -226,6 +226,29 @@ namespace Bicep.LanguageServer.Features.Language.Completion
 
                         break;
 
+                    case BicepSourceFileKind.TestParamsFile:
+                        // Test parameters files bind to one test file and supply named input cases for
+                        // it. They declare no production parameters and are never deployed.
+                        if (model.Root.UsingDeclarationSyntax is null)
+                        {
+                            yield return CreateKeywordCompletion(LanguageConstants.UsingKeyword, "Using keyword", context.ReplacementRange);
+                        }
+
+                        if (model.Features.TestFrameworkEnabled)
+                        {
+                            yield return CreateKeywordCompletion(LanguageConstants.TestCaseKeyword, "Input case keyword", context.ReplacementRange, priority: CompletionPriority.High);
+
+                            // The ambient context is a file-level singleton; per-case overrides are decorators.
+                            if (!model.Root.Syntax.Children.OfType<DeploymentContextDeclarationSyntax>().Any())
+                            {
+                                yield return CreateKeywordCompletion(LanguageConstants.DeploymentContextKeyword, "Deployment context keyword", context.ReplacementRange);
+                            }
+                        }
+
+                        yield return CreateKeywordCompletion(LanguageConstants.VariableKeyword, "Variable keyword", context.ReplacementRange);
+
+                        break;
+
                     default:
                         throw new NotImplementedException($"Unexpected source file kind '{model.SourceFileKind}'.");
                 }

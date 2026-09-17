@@ -600,6 +600,46 @@ output length int =
             return completions.Where(c => c.Kind == CompletionItemKind.Keyword || c.Kind == CompletionItemKind.Snippet).ToList();
         }
 
+        [TestMethod]
+        public async Task TestParamsFileDeclarationContextShouldReturnCaseAndContextKeywords()
+        {
+            var completions = await GetTestParamsFileDeclarationCompletions(testFrameworkEnabled: true);
+            var labels = completions.Select(c => c.Label).ToList();
+
+            labels.Should().Contain(["using", "case", "deploymentContext", "var"]);
+        }
+
+        [TestMethod]
+        public async Task TestParamsFileDeclarationContextShouldNotReturnDeploymentOnlyKeywordCompletions()
+        {
+            var completions = await GetTestParamsFileDeclarationCompletions(testFrameworkEnabled: true);
+
+            completions.Select(c => c.Label).Should().NotContain(["resource", "module", "output", "targetScope", "extension", "param", "test", "extends"]);
+        }
+
+        [TestMethod]
+        public async Task TestParamsFileDeclarationContextWithoutTestFrameworkShouldNotReturnCaseKeyword()
+        {
+            var completions = await GetTestParamsFileDeclarationCompletions(testFrameworkEnabled: false);
+
+            completions.Select(c => c.Label).Should().NotContain(["case", "deploymentContext"]);
+        }
+
+        private static async Task<List<CompletionItem>> GetTestParamsFileDeclarationCompletions(bool testFrameworkEnabled)
+        {
+            var entryFileUri = TestFileUri.FromInMemoryPath("main.biceptestparam");
+            var compilation = Services
+                .WithFeatureOverrides(new(TestFrameworkEnabled: testFrameworkEnabled))
+                .BuildCompilation(new Dictionary<IOUri, string> { [entryFileUri] = string.Empty }, entryFileUri);
+
+            compilation.GetEntrypointSemanticModel().SourceFileKind.Should().Be(BicepSourceFileKind.TestParamsFile);
+
+            var completionProvider = CreateProvider();
+            var completions = await completionProvider.GetFilteredCompletions(compilation, BicepCompletionContext.Create(compilation, 0), CancellationToken.None);
+
+            return completions.Where(c => c.Kind == CompletionItemKind.Keyword || c.Kind == CompletionItemKind.Snippet).ToList();
+        }
+
         private static void AssertExpectedFunctions(List<CompletionItem> completions, bool expectParamDefaultFunctions, IEnumerable<string>? fullyQualifiedFunctionNames = null)
         {
             fullyQualifiedFunctionNames ??= [];

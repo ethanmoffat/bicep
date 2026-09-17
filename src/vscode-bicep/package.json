@@ -170,6 +170,20 @@
           "light": "./resources/icons/bicep-file.svg",
           "dark": "./resources/icons/bicep-file.svg"
         }
+      },
+      {
+        "id": "bicep-testparams",
+        "aliases": [
+          "Bicep Test Params"
+        ],
+        "extensions": [
+          ".biceptestparam"
+        ],
+        "configuration": "./resources/language/language-configuration.json",
+        "icon": {
+          "light": "./resources/icons/bicepparam-file.svg",
+          "dark": "./resources/icons/bicepparam-file.svg"
+        }
       }
     ],
     "grammars": [
@@ -195,6 +209,11 @@
       },
       {
         "language": "bicep-test",
+        "scopeName": "source.bicep",
+        "path": "./resources/language/bicep.tmlanguage"
+      },
+      {
+        "language": "bicep-testparams",
         "scopeName": "source.bicep",
         "path": "./resources/language/bicep.tmlanguage"
       }

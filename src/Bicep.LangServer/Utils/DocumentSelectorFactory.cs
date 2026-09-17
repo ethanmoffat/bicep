@@ -19,8 +19,8 @@ namespace Bicep.LanguageServer.Utils
         public TextDocumentSelector CreateForBicepAndParams() => new(
             langServerOptions?.VsCompatibilityMode == true
               // VS doesn't currently support language filters in the document selector, so we must give it a file pattern
-              ? [TextDocumentFilter.ForPattern(Glob(LanguageConstants.LanguageFileExtension, LanguageConstants.ParamsFileExtension, LanguageConstants.TestFileExtension))]
-              : [TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.TestLanguageId)]
+              ? [TextDocumentFilter.ForPattern(Glob(LanguageConstants.LanguageFileExtension, LanguageConstants.ParamsFileExtension, LanguageConstants.TestFileExtension, LanguageConstants.TestParamsFileExtension))]
+              : [TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.TestLanguageId), TextDocumentFilter.ForLanguage(LanguageConstants.TestParamsLanguageId)]
             );
 
         public TextDocumentSelector CreateForAllSupportedLangIds() => new(
@@ -31,6 +31,7 @@ namespace Bicep.LanguageServer.Utils
                     LanguageConstants.LanguageFileExtension,
                     LanguageConstants.ParamsFileExtension,
                     LanguageConstants.TestFileExtension,
+                    LanguageConstants.TestParamsFileExtension,
                     LanguageConstants.JsoncFileExtension,
                     LanguageConstants.JsonFileExtension,
                     LanguageConstants.ArmTemplateFileExtension))
@@ -38,6 +39,7 @@ namespace Bicep.LanguageServer.Utils
                     TextDocumentFilter.ForLanguage(LanguageConstants.LanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.ParamsLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.TestLanguageId),
+                  TextDocumentFilter.ForLanguage(LanguageConstants.TestParamsLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.JsoncLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.JsonLanguageId),
                   TextDocumentFilter.ForLanguage(LanguageConstants.ArmTemplateLanguageId)

@@ -123,6 +123,17 @@ Top-level completions in a `.biceptest` file are scoped to what a test file can 
 
 Deployment-only declarations are omitted because a test file is never deployed. The `test` keyword is hidden unless the `testFramework` experimental feature is enabled, so the completion list matches what will actually compile.
 
+`.biceptestparam` files are registered the same way, as the `bicep-testparams` language. Their
+top-level completions are scoped to what an input file can declare:
+
+| Offered | Not offered |
+|---------|-------------|
+| `using` (once), `case` and `deploymentContext` (only when `testFramework` is enabled), `var` | `param`, `test`, `extends`, `resource`, `module`, `output`, `targetScope`, `extension` |
+
+`using` is offered only until one is declared, and `deploymentContext` only until the file declares
+its ambient context, because both are file-level singletons. `param` is not offered: an input file
+supplies values for the test file's parameters through its cases, and declares none of its own.
+
 `bicep lint` and `bicep format` also accept `.biceptest` files. Both analyse or rewrite the source
 only; neither evaluates the tests, and formatting preserves the `.biceptest` extension.
 
