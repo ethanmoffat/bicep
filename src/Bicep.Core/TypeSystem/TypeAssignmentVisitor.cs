@@ -14,6 +14,7 @@ using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.SourceGraph;
 using Bicep.Core.Syntax;
 using Bicep.Core.Syntax.Visitors;
+using Bicep.Core.TestFramework;
 using Bicep.Core.Text;
 using Bicep.Core.TypeSystem.Providers;
 using Bicep.Core.TypeSystem.Types;
@@ -376,17 +377,71 @@ namespace Bicep.Core.TypeSystem
                 }
 
                 if (this.binder.GetSymbolInfo(syntax) is TestSymbol testSymbol &&
+                   !syntax.IsTargetless &&
                    testSymbol.TryGetSemanticModel().IsSuccess(out var testSemanticModel, out var _) &&
                    testSemanticModel.HasErrors())
                 {
                     diagnostics.Write(testSemanticModel is ArmTemplateSemanticModel
-                        ? DiagnosticBuilder.ForPosition(syntax.Path).ReferencedArmTemplateHasErrors()
-                        : DiagnosticBuilder.ForPosition(syntax.Path).ReferencedModuleHasErrors());
+                        ? DiagnosticBuilder.ForPosition(syntax.TargetDiagnosticSyntax).ReferencedArmTemplateHasErrors()
+                        : DiagnosticBuilder.ForPosition(syntax.TargetDiagnosticSyntax).ReferencedModuleHasErrors());
                 }
+
+                ValidateTestMatchSelector(syntax, diagnostics);
 
                 return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType);
 
             });
+
+        /// <summary>
+        /// Checks the statically declared parts of a body-owned target selector. Discovery itself happens
+        /// at run time, but a selector that cannot possibly select anything is a source error and is worth
+        /// reporting before the test is ever run.
+        /// </summary>
+        private static void ValidateTestMatchSelector(TestDeclarationSyntax syntax, IDiagnosticWriter diagnostics)
+        {
+            if (syntax.TryGetMatchProperty() is not { } matchProperty)
+            {
+                return;
+            }
+
+            if (!syntax.IsTargetless)
+            {
+                diagnostics.Write(DiagnosticBuilder.ForPosition(matchProperty.Key).TestTargetPathAndMatchSelectorAreExclusive());
+                return;
+            }
+
+            if (syntax.TryGetMatchSelectorSyntax() is not { } selector)
+            {
+                return;
+            }
+
+            if (selector.TryGetPropertyByName(TestTargetSelector.IncludePropertyName)?.Value is ArraySyntax include &&
+                !include.Items.Any())
+            {
+                diagnostics.Write(DiagnosticBuilder.ForPosition(include).TestMatchSelectorRequiresIncludePattern());
+            }
+
+            foreach (var propertyName in new[] { TestTargetSelector.IncludePropertyName, TestTargetSelector.ExcludePropertyName })
+            {
+                if (selector.TryGetPropertyByName(propertyName)?.Value is not ArraySyntax patterns)
+                {
+                    continue;
+                }
+
+                foreach (var item in patterns.Items)
+                {
+                    if (item.Value is not StringSyntax pattern)
+                    {
+                        continue;
+                    }
+
+                    if (pattern.TryGetLiteralValue() is { } patternValue && TestTargetSelector.PatternEscapesRoot(patternValue))
+                    {
+                        diagnostics.Write(DiagnosticBuilder.ForPosition(pattern).TestMatchSelectorPatternEscapesRoot(patternValue));
+                    }
+                }
+            }
+        }
 
         public override void VisitModuleDeclarationSyntax(ModuleDeclarationSyntax syntax)
             => AssignTypeWithDiagnostics(syntax, diagnostics =>

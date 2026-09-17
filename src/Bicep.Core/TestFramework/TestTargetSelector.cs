@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Bicep.IO.Abstraction;
 
 namespace Bicep.Core.TestFramework;
 
@@ -44,4 +45,22 @@ public record TestTargetSelector(
         IEnumerable<string>? exclude = null,
         bool allowEmpty = false)
         => new(root ?? DefaultRoot, [.. include], [.. exclude ?? []], allowEmpty);
+
+    /// <summary>
+    /// Whether an include or exclude pattern would reach outside the selector root. Only the root may
+    /// widen the search, so that reading a selector is enough to know the bounds of the walk.
+    /// </summary>
+    public static bool PatternEscapesRoot(string pattern)
+    {
+        var normalized = NormalizeSeparators(pattern);
+
+        if (normalized.StartsWith('/') || IOUri.IsAbsoluteFilePath(normalized))
+        {
+            return true;
+        }
+
+        return normalized.Split('/').Any(segment => segment == "..");
+    }
+
+    public static string NormalizeSeparators(string pattern) => pattern.Replace('\\', '/');
 }

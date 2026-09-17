@@ -223,13 +223,20 @@ namespace Bicep.Core.Parsing
             var keyword = ExpectKeyword(LanguageConstants.TestKeyword);
             var name = this.IdentifierWithRecovery(b => b.ExpectedTestIdentifier(), RecoveryFlags.None, TokenType.StringComplete, TokenType.StringLeftPiece, TokenType.NewLine);
 
-            // TODO: Unify StringSyntax with TypeSyntax
-            var path = this.WithRecovery(
-                () => ThrowIfSkipped(this.InterpolableString, b => b.ExpectedTestPathString()),
-                GetSuppressionFlag(name),
-                TokenType.Assignment, TokenType.NewLine);
+            // A test may omit the literal target path and instead select its targets in the body.
+            // 'test <name> = {' is therefore valid, and the path is only parsed when one is present.
+            SyntaxBase? path = null;
 
-            var assignment = this.WithRecovery(this.Assignment, GetSuppressionFlag(path), TokenType.LeftBrace, TokenType.NewLine);
+            if (!this.Check(TokenType.Assignment))
+            {
+                // TODO: Unify StringSyntax with TypeSyntax
+                path = this.WithRecovery(
+                    () => ThrowIfSkipped(this.InterpolableString, b => b.ExpectedTestPathString()),
+                    GetSuppressionFlag(name),
+                    TokenType.Assignment, TokenType.NewLine);
+            }
+
+            var assignment = this.WithRecovery(this.Assignment, path is null ? GetSuppressionFlag(name) : GetSuppressionFlag(path), TokenType.LeftBrace, TokenType.NewLine);
 
             var value = this.WithRecovery(() =>
                 {

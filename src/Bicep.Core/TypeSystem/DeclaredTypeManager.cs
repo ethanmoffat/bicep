@@ -16,6 +16,7 @@ using Bicep.Core.Semantics;
 using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.Syntax;
 using Bicep.Core.Syntax.Visitors;
+using Bicep.Core.TestFramework;
 using Bicep.Core.Text;
 using Bicep.Core.TypeSystem.Types;
 
@@ -2229,6 +2230,11 @@ namespace Bicep.Core.TypeSystem
                 return ErrorType.Empty();
             }
 
+            if (test.IsTargetless)
+            {
+                return CreateSelectorTestType();
+            }
+
             if (!testSymbol.TryGetSemanticModel().IsSuccess(out var testSemanticModel, out var failureDiagnostic))
             {
                 return ErrorType.Create(failureDiagnostic);
@@ -2249,6 +2255,66 @@ namespace Bicep.Core.TypeSystem
                 LanguageConstants.TypeNameTest);
         }
 
+        /// <summary>
+        /// The body type of a test that selects its targets through a <c>match</c> selector.
+        ///
+        /// Such a test has many targets, each with its own parameter list, so there is no single set of
+        /// parameter types to check <c>params</c> against here. Deliberately typing <c>params</c> as an
+        /// open object keeps the compiler from inventing a merged, permissive union of every target's
+        /// parameters; each target validates the same assignments independently when the test runs.
+        /// </summary>
+        private static TypeSymbol CreateSelectorTestType()
+        {
+            var paramsType = new ObjectType(
+                LanguageConstants.TestParamsPropertyName,
+                TypeSymbolValidationFlags.Default,
+                [],
+                new TypeProperty(LanguageConstants.Any));
+
+            var testBody = new ObjectType(
+                LanguageConstants.TypeNameTest,
+                TypeSymbolValidationFlags.Default,
+                [
+                    new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Required | TypePropertyFlags.Constant),
+                    new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, TypePropertyFlags.WriteOnly),
+                ],
+                null);
+
+            return new TestType(LanguageConstants.TypeNameTest, testBody);
+        }
+
+        private static ObjectType CreateTargetSelectorType()
+        {
+            var stringArray = new TypedArrayType(LanguageConstants.String, TypeSymbolValidationFlags.Default);
+
+            return new ObjectType(
+                LanguageConstants.TestMatchPropertyName,
+                TypeSymbolValidationFlags.Default,
+                [
+                    new NamedTypeProperty(
+                        TestTargetSelector.RootPropertyName,
+                        LanguageConstants.String,
+                        TypePropertyFlags.Constant,
+                        "The directory that include and exclude patterns are relative to, itself relative to the directory containing this test file. Defaults to the test file's own directory."),
+                    new NamedTypeProperty(
+                        TestTargetSelector.IncludePropertyName,
+                        stringArray,
+                        TypePropertyFlags.Required | TypePropertyFlags.Constant,
+                        "Glob patterns selecting the files this test applies to, relative to the root."),
+                    new NamedTypeProperty(
+                        TestTargetSelector.ExcludePropertyName,
+                        stringArray,
+                        TypePropertyFlags.Constant,
+                        "Glob patterns removing files from the included set. Excludes always win over includes."),
+                    new NamedTypeProperty(
+                        TestTargetSelector.AllowEmptyPropertyName,
+                        LanguageConstants.Bool,
+                        TypePropertyFlags.Constant,
+                        "Whether matching no files at all is acceptable. Defaults to false."),
+                ],
+                null);
+        }
+
         private TypeSymbol CreateTestType(IEnumerable<NamedTypeProperty> paramsProperties, string typeName)
         {
             var paramsType = new ObjectType(LanguageConstants.TestParamsPropertyName, TypeSymbolValidationFlags.Default, paramsProperties, null);
@@ -2261,6 +2327,9 @@ namespace Bicep.Core.TypeSystem
                 new[]
                 {
                     new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, paramsRequiredFlag | TypePropertyFlags.WriteOnly),
+                    // 'match' is recognised here purely so that combining it with a literal target path is
+                    // reported once, as the specific conflict it is, instead of as an unknown property.
+                    new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Constant),
                 },
                 null);
 

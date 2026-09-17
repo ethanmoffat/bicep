@@ -90,17 +90,11 @@ test sample 'samples/sample1.bicep'{
 
 test sample ={
 //@[05:11) [BCP028 (Error)] Identifier "sample" is declared multiple times. Remove or rename the duplicates. (bicep https://aka.ms/bicep/core-diagnostics#BCP028) |sample|
-//@[12:13) [BCP347 (Error)] Expected a test path string at this location. (bicep https://aka.ms/bicep/core-diagnostics#BCP347) |=|
-//@[12:14) [BCP358 (Error)] This declaration is missing a template file path reference. (bicep https://aka.ms/bicep/core-diagnostics#BCP358) |={|
-//@[14:14) [BCP018 (Error)] Expected the "=" character at this location. (bicep https://aka.ms/bicep/core-diagnostics#BCP018) ||
+//@[05:11) [BCP035 (Error)] The specified "test" declaration is missing the following required properties: "match". (bicep https://aka.ms/bicep/core-diagnostics#BCP035) |sample|
     params: {
-//@[04:10) [BCP007 (Error)] This declaration type is not recognized. Specify a metadata, parameter, variable, resource, or output declaration. (bicep https://aka.ms/bicep/core-diagnostics#BCP007) |params|
       location: 'westus'
-//@[06:14) [BCP007 (Error)] This declaration type is not recognized. Specify a metadata, parameter, variable, resource, or output declaration. (bicep https://aka.ms/bicep/core-diagnostics#BCP007) |location|
     }
-//@[04:05) [BCP007 (Error)] This declaration type is not recognized. Specify a metadata, parameter, variable, resource, or output declaration. (bicep https://aka.ms/bicep/core-diagnostics#BCP007) |}|
   }
-//@[02:03) [BCP007 (Error)] This declaration type is not recognized. Specify a metadata, parameter, variable, resource, or output declaration. (bicep https://aka.ms/bicep/core-diagnostics#BCP007) |}|
 
 test sample 'samples/sample1.bicep'{
 //@[05:11) [BCP028 (Error)] Identifier "sample" is declared multiple times. Remove or rename the duplicates. (bicep https://aka.ms/bicep/core-diagnostics#BCP028) |sample|

@@ -1,0 +1,17 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// A single test applied to every module under `modules/`. Adding a new module to that folder
+// puts it under test automatically; nothing here has to be updated.
+
+test namingPolicy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+    exclude: ['_*.bicep']
+  }
+  params: {
+    namePrefix: 'contoso'
+    location: 'eastus'
+  }
+}

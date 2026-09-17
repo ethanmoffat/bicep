@@ -343,6 +343,11 @@ namespace Bicep.Core.SourceGraph
         };
 
         private static IEnumerable<IArtifactReferenceSyntax> GetArtifactReferences(ProgramSyntax program)
-            => program.Declarations.OfType<IArtifactReferenceSyntax>();
+            => program.Declarations
+                .OfType<IArtifactReferenceSyntax>()
+                // A targetless test selects its targets from the filesystem at run time, so there is no
+                // single artifact to resolve or restore here. Including it would report a spurious
+                // "path has not been specified" error against a perfectly valid declaration.
+                .Where(reference => reference is not TestDeclarationSyntax { IsTargetless: true });
     }
 }

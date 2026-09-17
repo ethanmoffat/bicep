@@ -162,6 +162,128 @@ test test1 ''
         });
         }
 
+        [TestMethod]
+        public void Targetless_test_requires_a_match_selector()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"test\" declaration is missing the following required properties: \"match\"."),
+            });
+        }
+
+        [TestMethod]
+        public void Match_selector_requires_include_patterns()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"object\" declaration is missing the following required properties: \"include\"."),
+            });
+        }
+
+        [TestMethod]
+        public void Match_selector_rejects_an_empty_include_list()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: []
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP459", DiagnosticLevel.Error, "The \"match\" selector must declare at least one \"include\" pattern."),
+            });
+        }
+
+        [TestMethod]
+        public void Match_selector_rejects_patterns_that_escape_the_root()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['../*.bicep', '/rooted.bicep']
+    exclude: ['sub/../../*.bicep']
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP460", DiagnosticLevel.Error, "The pattern \"../*.bicep\" must not be rooted or contain \"..\" segments. Use \"root\" to select a different directory."),
+                ("BCP460", DiagnosticLevel.Error, "The pattern \"/rooted.bicep\" must not be rooted or contain \"..\" segments. Use \"root\" to select a different directory."),
+                ("BCP460", DiagnosticLevel.Error, "The pattern \"sub/../../*.bicep\" must not be rooted or contain \"..\" segments. Use \"root\" to select a different directory."),
+            });
+        }
+
+        [TestMethod]
+        public void Match_selector_cannot_be_combined_with_a_literal_target_path()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework,
+                ("main.bicep", @"
+test foo 'testMain.bicep' = {
+  match: {
+    include: ['*.bicep']
+  }
+  params: {
+    name: 'us'
+  }
+}
+"), ("testMain.bicep", @"
+param name string
+"));
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP458", DiagnosticLevel.Error, "A test declares its targets either as a literal path or through a \"match\" selector, but not both. Remove the literal path to select targets dynamically."),
+            });
+        }
+
+        [TestMethod]
+        public void Targetless_test_with_a_valid_selector_has_no_diagnostics()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+    exclude: ['skip.bicep']
+    allowEmpty: true
+  }
+  params: {
+    name: 'us'
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void Targetless_test_selector_values_must_be_compile_time_constants()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+param patterns array = []
+
+test foo = {
+  match: {
+    include: patterns
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP032", DiagnosticLevel.Error, "The value must be a compile-time constant."),
+            });
+        }
     }
 
 }

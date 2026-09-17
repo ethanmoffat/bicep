@@ -62,7 +62,7 @@ public static class TestTargetDiscovery
 
         foreach (var pattern in selector.Include.Concat(selector.Exclude))
         {
-            if (EscapesRoot(pattern))
+            if (TestTargetSelector.PatternEscapesRoot(pattern))
             {
                 return Failure(
                     TestTargetDiscoveryErrorKind.PatternEscapesRoot,
@@ -172,19 +172,7 @@ public static class TestTargetDiscovery
     private static string Combine(string relativeDirectory, string name)
         => relativeDirectory.Length == 0 ? name : $"{relativeDirectory}/{name}";
 
-    private static string NormalizeSeparators(string pattern) => pattern.Replace('\\', '/');
-
-    private static bool EscapesRoot(string pattern)
-    {
-        var normalized = NormalizeSeparators(pattern);
-
-        if (normalized.StartsWith('/') || IOUri.IsAbsoluteFilePath(normalized))
-        {
-            return true;
-        }
-
-        return normalized.Split('/').Any(segment => segment == "..");
-    }
+    private static string NormalizeSeparators(string pattern) => TestTargetSelector.NormalizeSeparators(pattern);
 
     private static TestTargetDiscoveryResult Failure(TestTargetDiscoveryErrorKind kind, string message)
         => new([], [], new(kind, message));

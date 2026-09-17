@@ -193,13 +193,13 @@ namespace Bicep.Core.PrettyPrintV2
 
         private IEnumerable<Document> LayoutTestDeclarationSyntax(TestDeclarationSyntax syntax)
         {
+            // The path is absent for tests that select their targets through a body-owned selector.
+            SyntaxBase[] parts = syntax.Path is { } path
+                ? [syntax.Keyword, syntax.Name, path, syntax.Assignment, syntax.Value]
+                : [syntax.Keyword, syntax.Name, syntax.Assignment, syntax.Value];
+
             return this.LayoutLeadingNodes(syntax.LeadingNodes)
-                .Concat(this.Spread(
-                    syntax.Keyword,
-                    syntax.Name,
-                    syntax.Path,
-                    syntax.Assignment,
-                    syntax.Value));
+                .Concat(this.Spread(parts));
         }
 
         private IEnumerable<Document> LayoutNonNullAssertionSyntax(NonNullAssertionSyntax syntax) =>

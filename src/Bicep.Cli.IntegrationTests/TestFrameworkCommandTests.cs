@@ -70,7 +70,7 @@ namespace Bicep.Cli.IntegrationTests
             using (new AssertionScope())
             {
                 result.Should().Be(0);
-                output.Should().Contain("Evaluation passing Passed!");
+                output.Should().Contain("Evaluation passing (main.bicep) Passed!");
                 output.Should().Contain("All 1 evaluations passed!");
             }
         }
@@ -99,7 +99,7 @@ namespace Bicep.Cli.IntegrationTests
             using (new AssertionScope())
             {
                 result.Should().Be(1);
-                error.Should().Contain("Evaluation failing Failed");
+                error.Should().Contain("Evaluation failing (main.bicep) Failed");
                 error.Should().Contain("Assertion isPositive failed!");
             }
         }
@@ -139,7 +139,7 @@ test missing 'missing.bicep' = {}", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(1);
-                output.Should().Contain("Evaluation valid Passed!");
+                output.Should().Contain("Evaluation valid (test.bicep) Passed!");
                 output.Should().NotContain("All 1 evaluations passed!");
                 error.Should().Contain("Error BCP091");
             }
@@ -236,7 +236,7 @@ test missing 'missing.bicep' = {}", outputFileDir);
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain("Evaluation foo Skipped!");
+                error.Should().Contain("Evaluation foo (test.bicep) Skipped!");
             }
 
         }
@@ -261,7 +261,7 @@ test missing 'missing.bicep' = {}", outputFileDir);
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain("Evaluation foo Skipped!");
+                error.Should().Contain("Evaluation foo (test.bicep) Skipped!");
             }
         }
 
@@ -286,7 +286,132 @@ test missing 'missing.bicep' = {}", outputFileDir);
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain("Evaluation foo Failed");
+                error.Should().Contain("Evaluation foo (test.bicep) Failed");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_RunsEveryMatchedTarget()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            var target = @"param foo string
+assert isEqual = foo == 'ShouldSucceed'";
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), target, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "two.bicep"), target, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "_skipped.bicep"), target, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+    exclude: ['_*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation policy (modules/one.bicep) Passed!");
+                output.Should().Contain("Evaluation policy (modules/two.bicep) Passed!");
+                output.Should().NotContain("_skipped.bicep");
+                output.Should().Contain("All 2 evaluations passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_BindsEachTargetIndependently()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            // This target needs a parameter the test does not supply. It must fail on its own without
+            // hiding the outcome of the target that can be evaluated.
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "two.bicep"), @"param foo string
+param extra string
+assert isEqual = foo == extra", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation policy (modules/one.bicep) Passed!");
+                error.Should().Contain("Evaluation policy (modules/two.bicep) Skipped!");
+
+                // An evaluation failure must never echo the parameters or template it was given.
+                error.Should().NotContain("ShouldSucceed");
+                error.Should().NotContain("$schema");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_MatchingNothingIsAnError()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    include: ['nothing/*.bicep']
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Evaluation policy Skipped!");
+                error.Should().Contain("matched no files");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_MatchingNothingIsAllowedWhenOptedIn()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    include: ['nothing/*.bicep']
+    allowEmpty: true
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                error.Should().NotContain("Skipped");
             }
         }
 

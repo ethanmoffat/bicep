@@ -3,11 +3,14 @@
 
 using System.Collections.Immutable;
 using Azure.Deployments.Core.Definitions.Schema;
+using Bicep.Core;
 using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
+using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
+using Bicep.IO.Abstraction;
 using Microsoft.WindowsAzure.ResourceStack.Common.Json;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -20,51 +23,128 @@ namespace Bicep.Cli.Services
     {
         public int TotalEvaluations => Results.Length;
 
-        public int SuccessfulEvaluations => Results.Count(x => x.Result.Success);
+        public int SuccessfulEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Passed);
 
-        public int FailedEvaluations => Results.Count(x => !x.Result.Success);
+        public int FailedEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Failed);
 
-        public int SkippedEvaluations => Results.Count(x => x.Result.Skip);
+        public int SkippedEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Skipped);
 
         public bool Success => FailedEvaluations == 0 && SkippedEvaluations == 0;
     }
-    public class TestRunner
+    public class TestRunner(BicepCompiler compiler)
     {
-        public static TestResults Run(SemanticModel testFileModel)
+        public async Task<TestResults> RunAsync(SemanticModel testFileModel)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var testResults = ImmutableArray.CreateBuilder<TestResult>();
 
             foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
             {
-                if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var failureDiagnostic) &&
+                if (testDeclaration.DeclaringTest.IsTargetless)
+                {
+                    testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration));
+                }
+                else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
                     semanticModel is SemanticModel testSemanticModel)
                 {
-                    var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, testSemanticModel.SourceFile.FileHandle.Uri);
-                    var parameters = TryGetParameters(testSemanticModel, testDeclaration);
-                    var templateJToken = GetTemplate(testSemanticModel);
-                    TestEvaluation evaluation;
-
-                    try
-                    {
-                        var template = TemplateEvaluator.Evaluate(templateJToken, parameters);
-                        var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
-                        var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
-
-                        evaluation = new TestEvaluation(template, null, allAssertions, failedAssertions);
-                    }
-                    catch (Exception exception)
-                    {
-                        var error = exception.Message;
-                        evaluation = new TestEvaluation(null, error, [], []);
-                    }
-
-                    testResults.Add(new TestResult(testDeclaration, identity, evaluation));
+                    testResults.Add(Evaluate(testFileUri, testDeclaration, testSemanticModel));
                 }
             }
 
             return new TestResults(testResults.ToImmutable());
         }
+
+        /// <summary>
+        /// Expands a body-owned selector into its targets and evaluates each one independently, so that
+        /// a target which fails to compile or bind never hides the outcome of the others.
+        /// </summary>
+        private async Task<IEnumerable<TestResult>> RunSelectedTargetsAsync(SemanticModel testFileModel, TestSymbol testDeclaration)
+        {
+            var testFileHandle = testFileModel.SourceFile.FileHandle;
+            var testFileUri = testFileHandle.Uri;
+
+            if (TestTargetSelectorBinder.TryBind(testDeclaration.DeclaringTest) is not { } selector)
+            {
+                return [Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.")];
+            }
+
+            var discovery = TestTargetDiscovery.Discover(testFileHandle.GetParent(), selector);
+
+            if (discovery.Error is { } error)
+            {
+                return [Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message)];
+            }
+
+            var results = new List<TestResult>();
+
+            foreach (var targetUri in discovery.Targets)
+            {
+                results.Add(await EvaluateTargetAsync(testFileUri, testDeclaration, targetUri));
+            }
+
+            return results;
+        }
+
+        private async Task<TestResult> EvaluateTargetAsync(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri)
+        {
+            SemanticModel targetModel;
+
+            try
+            {
+                var targetCompilation = await compiler.CreateCompilation(targetUri, skipRestore: true);
+                targetModel = targetCompilation.GetEntrypointSemanticModel();
+            }
+            catch (Exception exception)
+            {
+                return Unevaluated(testFileUri, testDeclaration, targetUri, SanitizeEvaluationError(exception));
+            }
+
+            if (targetModel.HasErrors())
+            {
+                return Unevaluated(testFileUri, testDeclaration, targetUri, $"The target has compilation errors and cannot be evaluated.");
+            }
+
+            return Evaluate(testFileUri, testDeclaration, targetModel);
+        }
+
+        private static TestResult Evaluate(IOUri testFileUri, TestSymbol testDeclaration, SemanticModel targetModel)
+        {
+            var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri);
+            TestEvaluation evaluation;
+
+            try
+            {
+                var parameters = TryGetParameters(targetModel, testDeclaration);
+                var templateJToken = GetTemplate(targetModel);
+                var template = TemplateEvaluator.Evaluate(templateJToken, parameters);
+                var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
+                var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
+
+                evaluation = new TestEvaluation(template, null, allAssertions, failedAssertions);
+            }
+            catch (Exception exception)
+            {
+                evaluation = new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
+            }
+
+            return new TestResult(testDeclaration, identity, evaluation);
+        }
+
+        /// <summary>
+        /// Reduces an evaluation exception to its first line. The ARM evaluator appends the full template
+        /// and parameters payload to its messages, and a test result must never become a transcript of the
+        /// parameter values it was given.
+        /// </summary>
+        private static string SanitizeEvaluationError(Exception exception)
+        {
+            var message = exception.Message;
+            var lineBreak = message.IndexOfAny(['\r', '\n']);
+
+            return lineBreak < 0 ? message : message[..lineBreak].TrimEnd();
+        }
+
+        private static TestResult Unevaluated(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri, string error)
+            => new(testDeclaration, new TestCaseIdentity(testFileUri, testDeclaration.Name, targetUri), new TestEvaluation(null, error, [], []));
 
         private static JToken GetTemplate(SemanticModel model)
         {

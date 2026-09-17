@@ -978,7 +978,7 @@ namespace Bicep.LanguageServer.Features.Language.Completion
 
         private static bool IsTestPathContext(IList<SyntaxBase> matchingNodes, int offset) =>
             // test foo | =
-            SyntaxMatcher.IsTailMatch<TestDeclarationSyntax>(matchingNodes, test => IsBetweenNodes(offset, test.Name, test.Path)) ||
+            SyntaxMatcher.IsTailMatch<TestDeclarationSyntax>(matchingNodes, test => test.Path is { } path && IsBetweenNodes(offset, test.Name, path)) ||
             // test foo 'f|oo'
             SyntaxMatcher.IsTailMatch<TestDeclarationSyntax, StringSyntax, Token>(matchingNodes, (test, @string, _) => test.Path == @string) ||
             // test foo fo|o
@@ -1038,7 +1038,7 @@ namespace Bicep.LanguageServer.Features.Language.Completion
             // tests only allow {} as the body so we don't need to worry about
             // providing completions for a partially-typed identifier
             SyntaxMatcher.IsTailMatch<TestDeclarationSyntax>(matchingNodes, test =>
-                !test.Path.Span.ContainsInclusive(offset) &&
+                test.Path?.Span.ContainsInclusive(offset) is not true &&
                 !test.Assignment.Span.ContainsInclusive(offset) &&
                 test.Value is SkippedTriviaSyntax && offset == test.Value.Span.Position) ||
             // cursor is after the = token

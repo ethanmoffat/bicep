@@ -10,7 +10,7 @@ namespace Bicep.Core.Syntax
 {
     public class TestDeclarationSyntax : StatementSyntax, ITopLevelNamedDeclarationSyntax, IArtifactReferenceSyntax
     {
-        public TestDeclarationSyntax(IEnumerable<SyntaxBase> leadingNodes, Token keyword, IdentifierSyntax name, SyntaxBase path, SyntaxBase assignment, SyntaxBase value)
+        public TestDeclarationSyntax(IEnumerable<SyntaxBase> leadingNodes, Token keyword, IdentifierSyntax name, SyntaxBase? path, SyntaxBase assignment, SyntaxBase value)
             : base(leadingNodes)
         {
             AssertKeyword(keyword, nameof(keyword), LanguageConstants.TestKeyword);
@@ -31,7 +31,17 @@ namespace Bicep.Core.Syntax
 
         public IdentifierSyntax Name { get; }
 
-        public SyntaxBase Path { get; }
+        /// <summary>
+        /// The literal target path, or null when the test selects its targets through a body-owned
+        /// <see cref="LanguageConstants.TestMatchPropertyName"/> selector instead.
+        /// </summary>
+        public SyntaxBase? Path { get; }
+
+        /// <summary>
+        /// Whether this test declares no literal target path. Such a test selects its targets through
+        /// a body-owned selector, so it resolves to zero or more targets rather than exactly one.
+        /// </summary>
+        public bool IsTargetless => this.Path is null;
 
         public SyntaxBase Assignment { get; }
 
@@ -41,7 +51,26 @@ namespace Bicep.Core.Syntax
 
         public override TextSpan Span => TextSpan.Between(this.LeadingNodes.FirstOrDefault() ?? this.Keyword, this.Value);
 
-        SyntaxBase IArtifactReferenceSyntax.SourceSyntax => Path;
+        // Diagnostics about the target are reported on the path when there is one, and on the test
+        // name otherwise, so that a targetless test never reports errors at an arbitrary position.
+        SyntaxBase IArtifactReferenceSyntax.SourceSyntax => Path ?? Name;
+
+        /// <summary>
+        /// The position to report target-related diagnostics at.
+        /// </summary>
+        public SyntaxBase TargetDiagnosticSyntax => Path ?? Name;
+
+        /// <summary>
+        /// The body-owned target selector object, if one was declared.
+        /// </summary>
+        public ObjectSyntax? TryGetMatchSelectorSyntax()
+            => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestMatchPropertyName)?.Value as ObjectSyntax;
+
+        /// <summary>
+        /// The <c>match</c> property, if declared, regardless of whether its value is a valid object.
+        /// </summary>
+        public ObjectPropertySyntax? TryGetMatchProperty()
+            => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestMatchPropertyName);
 
         public ObjectSyntax? TryGetBody() =>
             this.Value switch

@@ -424,35 +424,35 @@ test sample 'samples/sample1.bicep'{
 //@[03:0007) ├─Token(NewLine) |\r\n\r\n|
 
 test sample ={
-//@[00:0014) ├─TestDeclarationSyntax
+//@[00:0067) ├─TestDeclarationSyntax
 //@[00:0004) | ├─Token(Identifier) |test|
 //@[05:0011) | ├─IdentifierSyntax
 //@[05:0011) | | └─Token(Identifier) |sample|
-//@[12:0014) | ├─SkippedTriviaSyntax
-//@[12:0013) | | ├─Token(Assignment) |=|
-//@[13:0014) | | └─Token(LeftBrace) |{|
-//@[14:0014) | ├─SkippedTriviaSyntax
-//@[14:0014) | └─SkippedTriviaSyntax
-//@[14:0016) ├─Token(NewLine) |\r\n|
+//@[12:0013) | ├─Token(Assignment) |=|
+//@[13:0067) | └─ObjectSyntax
+//@[13:0014) |   ├─Token(LeftBrace) |{|
+//@[14:0016) |   ├─Token(NewLine) |\r\n|
     params: {
-//@[04:0013) ├─SkippedTriviaSyntax
-//@[04:0010) | ├─Token(Identifier) |params|
-//@[10:0011) | ├─Token(Colon) |:|
-//@[12:0013) | └─Token(LeftBrace) |{|
-//@[13:0015) ├─Token(NewLine) |\r\n|
+//@[04:0046) |   ├─ObjectPropertySyntax
+//@[04:0010) |   | ├─IdentifierSyntax
+//@[04:0010) |   | | └─Token(Identifier) |params|
+//@[10:0011) |   | ├─Token(Colon) |:|
+//@[12:0046) |   | └─ObjectSyntax
+//@[12:0013) |   |   ├─Token(LeftBrace) |{|
+//@[13:0015) |   |   ├─Token(NewLine) |\r\n|
       location: 'westus'
-//@[06:0024) ├─SkippedTriviaSyntax
-//@[06:0014) | ├─Token(Identifier) |location|
-//@[14:0015) | ├─Token(Colon) |:|
-//@[16:0024) | └─Token(StringComplete) |'westus'|
-//@[24:0026) ├─Token(NewLine) |\r\n|
+//@[06:0024) |   |   ├─ObjectPropertySyntax
+//@[06:0014) |   |   | ├─IdentifierSyntax
+//@[06:0014) |   |   | | └─Token(Identifier) |location|
+//@[14:0015) |   |   | ├─Token(Colon) |:|
+//@[16:0024) |   |   | └─StringSyntax
+//@[16:0024) |   |   |   └─Token(StringComplete) |'westus'|
+//@[24:0026) |   |   ├─Token(NewLine) |\r\n|
     }
-//@[04:0005) ├─SkippedTriviaSyntax
-//@[04:0005) | └─Token(RightBrace) |}|
-//@[05:0007) ├─Token(NewLine) |\r\n|
+//@[04:0005) |   |   └─Token(RightBrace) |}|
+//@[05:0007) |   ├─Token(NewLine) |\r\n|
   }
-//@[02:0003) ├─SkippedTriviaSyntax
-//@[02:0003) | └─Token(RightBrace) |}|
+//@[02:0003) |   └─Token(RightBrace) |}|
 //@[03:0007) ├─Token(NewLine) |\r\n\r\n|
 
 test sample 'samples/sample1.bicep'{

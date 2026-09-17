@@ -84,7 +84,7 @@ test sample 'samples/sample1.bicep'{
   }
 
 test sample ={
-//@[5:11) Test sample. Type: error. Declaration start char: 0, length: 14
+//@[5:11) Test sample. Type: test. Declaration start char: 0, length: 67
     params: {
       location: 'westus'
     }

@@ -64,7 +64,7 @@ namespace Bicep.Cli.Commands
 
             var semanticModel = compilation.GetEntrypointSemanticModel();
 
-            var testResults = TestRunner.Run(semanticModel);
+            var testResults = await new TestRunner(compiler).RunAsync(semanticModel);
 
             LogResults(testResults, summary.HasErrors);
 
@@ -74,20 +74,26 @@ namespace Bicep.Cli.Commands
 
         private void LogResults(TestResults testResults, bool hasCompilationErrors)
         {
-            foreach (var (testDeclaration, _, evaluation) in testResults.Results)
+            foreach (var (testDeclaration, identity, evaluation) in testResults.Results)
             {
+                // A test may resolve to several targets, so the target is always named: without it two
+                // outcomes of the same declaration would be indistinguishable.
+                var label = identity.IsSelfTargeted
+                    ? testDeclaration.Name
+                    : $"{testDeclaration.Name} ({identity.RelativeTargetPath})";
+
                 if (evaluation.Success)
                 {
-                    io.Output.Writer.WriteLine($"{SuccessSymbol} Evaluation {testDeclaration.Name} Passed!");
+                    io.Output.Writer.WriteLine($"{SuccessSymbol} Evaluation {label} Passed!");
                 }
                 else if (evaluation.Skip)
                 {
-                    io.Error.Writer.WriteLine($"{SkippedSymbol} Evaluation {testDeclaration.Name} Skipped!");
+                    io.Error.Writer.WriteLine($"{SkippedSymbol} Evaluation {label} Skipped!");
                     io.Error.Writer.WriteLine($"Reason: {evaluation.Error}");
                 }
                 else
                 {
-                    io.Error.Writer.WriteLine($"{FailureSymbol} Evaluation {testDeclaration.Name} Failed at {evaluation.FailedAssertions.Length} / {evaluation.AllAssertions.Length} assertions!");
+                    io.Error.Writer.WriteLine($"{FailureSymbol} Evaluation {label} Failed at {evaluation.FailedAssertions.Length} / {evaluation.AllAssertions.Length} assertions!");
                     foreach (var (assertion, _) in evaluation.FailedAssertions)
                     {
                         io.Error.Writer.WriteLine($"\t{FailureSymbol} Assertion {assertion} failed!");

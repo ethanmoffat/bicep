@@ -70,10 +70,10 @@ test sample 'samples/sample1.bicep'{
     }
   }
 
-test sample ={
-params: {
-location: 'westus'
-}
+test sample = {
+  params: {
+    location: 'westus'
+  }
 }
 
 test sample 'samples/sample1.bicep'{

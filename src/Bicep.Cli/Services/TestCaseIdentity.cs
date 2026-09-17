@@ -24,6 +24,12 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
     public string RelativeTargetPath => TargetFile.GetPathRelativeTo(TestFile);
 
     /// <summary>
+    /// Whether this identity describes the test itself rather than a resolved target. This happens when
+    /// target selection failed, so there is no target to attribute the outcome to.
+    /// </summary>
+    public bool IsSelfTargeted => TargetFile == TestFile;
+
+    /// <summary>
     /// A stable, human-readable identifier for this case.
     /// It is derived only from test-file-relative information, so it is unaffected by the
     /// working directory the CLI was invoked from.

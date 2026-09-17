@@ -13,6 +13,7 @@ using Bicep.Core.Semantics;
 using Bicep.Core.Semantics.Metadata;
 using Bicep.Core.SourceGraph;
 using Bicep.Core.Syntax;
+using Bicep.Core.TestFramework;
 using Bicep.Core.Text;
 using Bicep.Core.TypeSystem;
 using Bicep.IO.Abstraction;
@@ -2092,6 +2093,18 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic BicepVersionConstraintCouldNotBeChecked(string constraint, string runningVersion, IOUri? configFileUri) => CoreWarning(
                 "BCP457",
                 $"The installed Bicep CLI version \"{runningVersion}\" could not be parsed, so the \"bicep.version\" constraint \"{constraint}\" specified by the {BuildBicepConfigurationClause(configFileUri)} could not be checked.");
+
+            public Diagnostic TestTargetPathAndMatchSelectorAreExclusive() => CoreError(
+                "BCP458",
+                $"A test declares its targets either as a literal path or through a \"{LanguageConstants.TestMatchPropertyName}\" selector, but not both. Remove the literal path to select targets dynamically.");
+
+            public Diagnostic TestMatchSelectorRequiresIncludePattern() => CoreError(
+                "BCP459",
+                $"The \"{LanguageConstants.TestMatchPropertyName}\" selector must declare at least one \"{TestTargetSelector.IncludePropertyName}\" pattern.");
+
+            public Diagnostic TestMatchSelectorPatternEscapesRoot(string pattern) => CoreError(
+                "BCP460",
+                $"The pattern \"{pattern}\" must not be rooted or contain \"..\" segments. Use \"{TestTargetSelector.RootPropertyName}\" to select a different directory.");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)
