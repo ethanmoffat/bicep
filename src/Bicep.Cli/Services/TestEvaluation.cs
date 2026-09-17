@@ -31,4 +31,20 @@ public record TestEvaluation(
 
 public record AssertionResult(string Source, bool Result)
 {
+    /// <summary>
+    /// The author-supplied explanation of what to do when this assertion fails.
+    /// </summary>
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The source locations of the facts that violated the assertion, so a failure identifies the
+    /// offending declarations rather than only counting them.
+    /// </summary>
+    public ImmutableArray<string> Violations { get; init; } = [];
+
+    /// <summary>
+    /// Why the assertion could not be evaluated. An assertion that could not run fails; it never passes
+    /// by default.
+    /// </summary>
+    public string? Error { get; init; }
 }

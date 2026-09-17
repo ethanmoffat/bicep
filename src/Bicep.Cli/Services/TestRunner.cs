@@ -47,7 +47,9 @@ namespace Bicep.Cli.Services
                 else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
                     semanticModel is SemanticModel testSemanticModel)
                 {
-                    testResults.Add(Evaluate(testFileUri, testDeclaration, testSemanticModel));
+                    // A literal target names one file, so the test file's own directory is the frame of
+                    // reference its facts are reported in.
+                    testResults.Add(Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri));
                 }
             }
 
@@ -79,14 +81,15 @@ namespace Bicep.Cli.Services
 
             foreach (var targetUri in discovery.Targets)
             {
-                results.Add(await EvaluateTargetAsync(testFileUri, testDeclaration, targetUri));
+                results.Add(await EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri));
             }
 
             return results;
         }
 
-        private async Task<TestResult> EvaluateTargetAsync(IOUri testFileUri, TestSymbol testDeclaration, IOUri targetUri)
+        private async Task<TestResult> EvaluateTargetAsync(SemanticModel testFileModel, TestSymbol testDeclaration, IOUri targetUri, IOUri factRoot)
         {
+            var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             SemanticModel targetModel;
 
             try
@@ -104,14 +107,45 @@ namespace Bicep.Cli.Services
                 return Unevaluated(testFileUri, testDeclaration, targetUri, $"The target has compilation errors and cannot be evaluated.");
             }
 
-            return Evaluate(testFileUri, testDeclaration, targetModel);
+            return Evaluate(testFileModel, testDeclaration, targetModel, factRoot);
         }
 
-        private static TestResult Evaluate(IOUri testFileUri, TestSymbol testDeclaration, SemanticModel targetModel)
+        /// <summary>
+        /// Runs the test's own assertions when it declares any, and the target template's assertions
+        /// otherwise. The two sets are never run together: which assertions a case ran is part of what
+        /// its result means.
+        /// </summary>
+        private static TestResult Evaluate(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot)
         {
+            var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri);
-            TestEvaluation evaluation;
 
+            if (testDeclaration.DeclaringTest.TryGetAssertionsSyntax() is { Properties: { } declared } && declared.Any())
+            {
+                return new TestResult(testDeclaration, identity, EvaluateSemanticAssertions(testFileModel, testDeclaration, targetModel, factRoot));
+            }
+
+            return new TestResult(testDeclaration, identity, EvaluateTargetTemplate(targetModel, testDeclaration));
+        }
+
+        private static TestEvaluation EvaluateSemanticAssertions(SemanticModel testFileModel, TestSymbol testDeclaration, SemanticModel targetModel, IOUri factRoot)
+        {
+            try
+            {
+                var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
+                var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts);
+                var failedAssertions = allAssertions.Where(x => !x.Result).ToImmutableArray();
+
+                return new TestEvaluation(null, null, allAssertions, failedAssertions);
+            }
+            catch (Exception exception)
+            {
+                return new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
+            }
+        }
+
+        private static TestEvaluation EvaluateTargetTemplate(SemanticModel targetModel, TestSymbol testDeclaration)
+        {
             try
             {
                 var parameters = TryGetParameters(targetModel, testDeclaration);
@@ -120,14 +154,12 @@ namespace Bicep.Cli.Services
                 var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
                 var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
 
-                evaluation = new TestEvaluation(template, null, allAssertions, failedAssertions);
+                return new TestEvaluation(template, null, allAssertions, failedAssertions);
             }
             catch (Exception exception)
             {
-                evaluation = new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
+                return new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
             }
-
-            return new TestResult(testDeclaration, identity, evaluation);
         }
 
         /// <summary>

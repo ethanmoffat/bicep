@@ -196,9 +196,26 @@ namespace Bicep.Cli.Commands
                 else
                 {
                     io.Error.Writer.WriteLine($"{FailureSymbol} Evaluation {label} Failed at {evaluation.FailedAssertions.Length} / {evaluation.AllAssertions.Length} assertions!");
-                    foreach (var (assertion, _) in evaluation.FailedAssertions)
+                    foreach (var assertion in evaluation.FailedAssertions)
                     {
-                        io.Error.Writer.WriteLine($"\t{FailureSymbol} Assertion {assertion} failed!");
+                        io.Error.Writer.WriteLine($"\t{FailureSymbol} Assertion {assertion.Source} failed!");
+
+                        if (assertion.Message is { } message)
+                        {
+                            io.Error.Writer.WriteLine($"\t\t{message}");
+                        }
+
+                        if (assertion.Error is { } assertionError)
+                        {
+                            io.Error.Writer.WriteLine($"\t\tCould not be evaluated: {assertionError}");
+                        }
+
+                        // Naming the offending declarations is what makes a source policy actionable;
+                        // a count alone leaves the author to find them by hand.
+                        foreach (var violation in assertion.Violations)
+                        {
+                            io.Error.Writer.WriteLine($"\t\t{violation}");
+                        }
                     }
                 }
             }

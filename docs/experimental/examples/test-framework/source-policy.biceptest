@@ -1,0 +1,49 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Source policies. These tests assert things about how the targets are *written*, so they need
+// no parameter values at all: nothing here is deployed, and no `assert` statement in a target
+// is involved.
+
+var allowedResourceTypes = [
+  'Microsoft.Storage/storageAccounts'
+]
+
+test moduleSourcePolicy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+    exclude: ['_*.bicep']
+  }
+  assertions: {
+    onlyAllowedResourceTypes: {
+      failOn: filter(target.resources, r => !contains(allowedResourceTypes, r.type))
+      message: 'Modules under modules/ may only declare storage accounts.'
+    }
+    noExistingReferences: {
+      failOn: filter(target.resources, r => r.existing)
+      message: 'Modules must create the resources they own rather than adopt existing ones.'
+    }
+    isALeafModule: {
+      passWhen: length(target.modules) == 0
+      message: 'Modules under modules/ must not compose other modules.'
+    }
+  }
+}
+
+test compositionPolicy = {
+  match: {
+    include: ['app.bicep']
+  }
+  assertions: {
+    entrypointOnlyComposes: {
+      passWhen: length(target.resources) == 0 && length(target.modules) > 0
+      message: 'app.bicep must compose modules rather than declare resources directly.'
+    }
+    composedTreeOnlyUsesAllowedTypes: {
+      // `withModules` widens the query to the entrypoint plus every module it can reach.
+      failOn: filter(target.withModules.resources, r => !contains(allowedResourceTypes, r.type))
+      message: 'The composed deployment may only create storage accounts.'
+    }
+  }
+}

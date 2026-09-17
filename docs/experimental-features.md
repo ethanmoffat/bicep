@@ -102,7 +102,7 @@ Allows the ARM template layer to use a new schema to represent resources as an o
 
 ### `testFramework`
 
-Should be enabled in tandem with the `assertions` experimental feature flag for expected functionality. Allows you to author client-side, offline tests that reference Bicep files and supply their parameters, using the `test` keyword. Tests can be declared in a `.bicep` file or in a dedicated `.biceptest` file, and are run with `bicep test <filepath>`, which evaluates the `assert` statements in the Bicep files referenced by the test declarations. For more information, see [Using the Bicep Test Framework](./experimental/test-framework.md).
+Allows you to author client-side, offline tests that reference Bicep files, using the `test` keyword. Tests can be declared in a `.bicep` file or in a dedicated `.biceptest` file, and are run with `bicep test <filepath>`. A test may select its targets with a `match` selector, supply parameters and evaluate the `assert` statements those targets declare, or bring its own `assertions` that query the target's source through the `target` symbol without requiring any parameters. Enable the `assertions` flag as well if you want to author `assert` statements inside the files under test. For more information, see [Using the Bicep Test Framework](./experimental/test-framework.md).
 
 ### `userDefinedConstraints`
 

@@ -27,4 +27,11 @@ public static class TestAssertion
     /// The message explaining what the author must do when the assertion fails.
     /// </summary>
     public const string MessagePropertyName = "message";
+
+    /// <summary>
+    /// The template variable the target facts are supplied under while an assertion is evaluated.
+    /// Its name is not a valid thing for a test to declare twice, so it cannot collide with a
+    /// variable the test file itself contributes.
+    /// </summary>
+    public const string TargetVariableName = "$testTarget";
 }

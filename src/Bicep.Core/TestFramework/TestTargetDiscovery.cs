@@ -43,6 +43,12 @@ public record TestTargetDiscoveryResult(
     TestTargetDiscoveryError? Error)
 {
     public bool IsSuccess => Error is null;
+
+    /// <summary>
+    /// The directory the selector resolved to. Reported so that everything downstream can describe a
+    /// target in the same selector-relative terms the author used to select it.
+    /// </summary>
+    public IOUri? Root { get; init; }
 }
 
 /// <summary>
@@ -121,10 +127,11 @@ public static class TestTargetDiscovery
                 skippedDirectories,
                 new(
                     TestTargetDiscoveryErrorKind.NoTargetsMatched,
-                    $"The selector matched no files under \"{selector.Root}\". Set \"{TestTargetSelector.AllowEmptyPropertyName}\" to true if this is expected."));
+                    $"The selector matched no files under \"{selector.Root}\". Set \"{TestTargetSelector.AllowEmptyPropertyName}\" to true if this is expected."))
+            { Root = rootDirectory.Uri };
         }
 
-        return new(targets, skippedDirectories, null);
+        return new(targets, skippedDirectories, null) { Root = rootDirectory.Uri };
     }
 
     private static (Dictionary<string, IOUri> filesByRelativePath, ImmutableArray<IOUri> skippedDirectories) EnumerateFilesUnderRoot(IDirectoryHandle root)

@@ -831,6 +831,308 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_SemanticAssertion_FailOn_NamesEveryOffendingDeclaration()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "failon");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+
+                resource other 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'other'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers belong in the sql module.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Assertion noSqlServers failed!");
+                error.Should().Contain("SQL servers belong in the sql module.");
+                // Both violations are reported: a policy that stops at the first offender would
+                // understate the work needed to make the target compliant.
+                error.Should().Contain("main.bicep(1): sql");
+                error.Should().Contain("main.bicep(6): other");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_FailOn_PassesWhenTheCollectionIsEmpty()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "failonpass");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource stg 'Microsoft.Storage/storageAccounts@2022-09-01' = {
+                  name: 'stg'
+                  location: 'westus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers belong in the sql module.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation sourcePolicy (src/main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_PassWhen_JudgesTheConditionItself()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "passwhen");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource stg 'Microsoft.Storage/storageAccounts@2022-09-01' = {
+                  name: 'stg'
+                  location: 'westus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    declaresSomething: {
+                      passWhen: length(target.resources) > 0
+                      message: 'Every file must declare at least one resource.'
+                    }
+                    declaresAModule: {
+                      passWhen: length(target.modules) > 0
+                      message: 'Every file must declare at least one module.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Failed at 1 / 2 assertions!");
+                error.Should().Contain("Assertion declaresAModule failed!");
+                error.Should().Contain("Every file must declare at least one module.");
+                error.Should().NotContain("Assertion declaresSomething failed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_WithModules_SeesTransitivelyReachableDeclarations()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "withmodules");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src", "modules"));
+
+            FileHelper.SaveResultFile(TestContext, "src/modules/child.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "src/app.bicep", """
+                module child 'modules/child.bicep' = {
+                  name: 'child'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['app.bicep']
+                  }
+                  assertions: {
+                    localScopeExcludesTheChild: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The entrypoint declares no resources of its own.'
+                    }
+                    composedScopeIncludesTheChild: {
+                      failOn: filter(target.withModules.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers must not appear anywhere in the composed tree.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Failed at 1 / 2 assertions!");
+                error.Should().Contain("Assertion composedScopeIncludesTheChild failed!");
+                // The violation is attributed to the file that actually declares it, not to the entrypoint.
+                error.Should().Contain("child.bicep(1): sql");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_CanUseTestFileVariables()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "variables");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var bannedTypes = ['Microsoft.Sql/servers']
+                var unusedByAnyAssertion = 'this must not affect evaluation'
+
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noBannedTypes: {
+                      failOn: filter(target.resources, r => contains(bannedTypes, r.type))
+                      message: 'Banned resource types must not be declared.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Assertion noBannedTypes failed!");
+                error.Should().Contain("main.bicep(1): sql");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertions_ReplaceLegacyTargetTemplateAssertions()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "replace");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The target declares an assertion that would fail, and no parameters are supplied. A test
+            // that brings its own source assertions must neither run nor require any of that.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param value int
+                assert isNegative = value < 0
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation sourcePolicy (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertionFailures_AreReportedInTheJsonContract()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "report");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers belong in the sql module.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            result.Should().Be(1);
+
+            var document = JsonDocument.Parse(output).RootElement;
+            var assertions = document.GetProperty("cases")[0].GetProperty("assertions");
+            var failure = assertions.GetProperty("failures")[0];
+
+            using (new AssertionScope())
+            {
+                failure.GetProperty("name").GetString().Should().Be("noSqlServers");
+                failure.GetProperty("message").GetString().Should().Be("SQL servers belong in the sql module.");
+                failure.GetProperty("violations").EnumerateArray().Select(x => x.GetString()).Should().Equal("main.bicep(1): sql");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

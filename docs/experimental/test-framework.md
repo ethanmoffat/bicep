@@ -125,7 +125,11 @@ only; neither evaluates the tests, and formatting preserves the `.biceptest` ext
 
 ## Assertions
 
-Assertions are currently authored in the Bicep file under test using the `assert` keyword. Each `assert` is evaluated after the test's parameters are applied.
+A test can assert about its target in two different ways, and they are deliberately distinct.
+
+### Target-owned assertions
+
+Assertions authored in the Bicep file under test use the `assert` keyword. Each `assert` is evaluated after the test's parameters are applied, so the target must compile *and* be supplied with every parameter it requires.
 
 ```bicep
 param namePrefix string
@@ -135,6 +139,78 @@ var storageAccountName = toLower('${namePrefix}stg')
 assert nameIsLowerCase = storageAccountName == toLower(storageAccountName)
 assert nameWithinLengthLimit = length(storageAccountName) <= 24
 ```
+
+### Test-owned assertions
+
+A test may instead bring its own assertions, written in the test file. These ask questions about how
+the target is *written* rather than what it evaluates to, so they need no parameter values at all:
+
+```bicep
+test moduleSourcePolicy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  assertions: {
+    onlyAllowedResourceTypes: {
+      failOn: filter(target.resources, r => r.type != 'Microsoft.Storage/storageAccounts')
+      message: 'Modules under modules/ may only declare storage accounts.'
+    }
+    isALeafModule: {
+      passWhen: length(target.modules) == 0
+      message: 'Modules under modules/ must not compose other modules.'
+    }
+  }
+}
+```
+
+Each named assertion supplies exactly one of:
+
+- **`passWhen`** — a boolean condition. The assertion passes only when the condition is true.
+- **`failOn`** — a collection of offending facts. The assertion passes when the collection is
+  **empty**, and when it is not, every element is reported by source location. `failOn` is about
+  emptiness, not truthiness: a non-empty collection is a failure even if its contents are falsy.
+
+`message` explains what to do about a failure and is reported alongside it.
+
+The two forms answer different questions. `passWhen` states a property the target must have;
+`failOn` enumerates the specific declarations that broke a rule, which is what makes a policy
+failure actionable rather than merely true.
+
+A test declaring a non-empty `assertions` object runs **those** assertions only; the target's own
+`assert` statements are not evaluated and its parameters are not required. Omitting `assertions`
+preserves the target-owned behaviour above. An `assertions` object that is present but empty is an
+error, because it neither asserts anything nor falls back to anything.
+
+### The `target` symbol
+
+Inside `assertions`, `target` is a typed, read-only symbol describing the compiler's view of the
+selected file. It is not a global Bicep keyword and exists only in this scope.
+
+| Property | Description |
+|----------|-------------|
+| `target.resources` | Resources the file declares, including nested ones |
+| `target.modules` | Module declarations in the file |
+| `target.imports` | Compile-time `import` statements in the file |
+| `target.withModules` | The same three collections for the file **plus every module it transitively reaches** |
+
+Each resource carries `name`, `type` (without the API version), `existing`, `file` and `line`. Each
+module carries `name`, `path` (as written), `resolvedFile`, `file` and `line`. Each import carries
+`path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
+
+`file` and `resolvedFile` are relative to the selector root, not the working directory, so a policy
+phrased in repository-relative terms means the same thing no matter where the CLI was invoked from.
+
+These are **source facts**. Conditions are not evaluated and loops are not expanded: a resource
+declared with `if (...)` or `for (...)` contributes exactly one fact, because the question being
+asked is what the file declares, not what a particular deployment would create.
+
+`target` has no additional properties, so a misspelling such as `target.resourcez` is a compile
+error rather than a silently empty result.
+
+Assertion expressions are ordinary Bicep, so the usual functions (`filter`, `map`, `contains`,
+`length`, `startsWith`, `union`, …) all apply, and they may reference variables declared in the test
+file.
 
 ## Running tests
 
@@ -199,6 +275,14 @@ $ bicep test storage-failing.biceptest --output-format json
         "failed": 1,
         "failedNames": [
           "nameWithinLengthLimit"
+        ],
+        "failures": [
+          {
+            "name": "nameWithinLengthLimit",
+            "message": null,
+            "error": null,
+            "violations": []
+          }
         ]
       }
     }
@@ -211,6 +295,52 @@ $ bicep test storage-failing.biceptest --output-format json
   }
 }
 ```
+
+Test-owned assertions populate the same `failures` array with their message and the source locations
+that violated them, so a host does not have to parse console text to act on a policy failure:
+
+```console
+$ bicep test source-policy-failing.biceptest --output-format json
+{
+  "version": "1.0",
+  "mode": "run",
+  "cases": [
+    {
+      "caseId": "source-policy-failing.biceptest#forbidStorageAccounts#modules/blobStorage.bicep",
+      "testFile": "source-policy-failing.biceptest",
+      "testName": "forbidStorageAccounts",
+      "target": "modules/blobStorage.bicep",
+      "status": "failed",
+      "error": null,
+      "assertions": {
+        "total": 1,
+        "failed": 1,
+        "failedNames": [
+          "noStorageAccounts"
+        ],
+        "failures": [
+          {
+            "name": "noStorageAccounts",
+            "message": "Storage accounts must be created by the platform team, not by service modules.",
+            "error": null,
+            "violations": [
+              "blobStorage.bicep(12): storageAccount"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "passed": 0,
+    "failed": 2,
+    "skipped": 0
+  }
+}
+```
+
+(The second case is elided above for brevity; the real document contains one case per target.)
 
 The same option applies to `--list`, where `mode` is `list` and each case has a status of `listed`
 or `unresolved`:
@@ -256,6 +386,9 @@ Notes on the contract:
 - `assertions` is present only for cases that were actually evaluated. A skipped case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares
   none.
+- `failures` describes each failed assertion. `violations` holds selector-relative source locations
+  drawn from the target's own declarations; it is empty for target-owned `assert` statements, which
+  have no offending-fact collection.
 - The document carries identities and outcomes only. Parameter values, template content and other
   payloads are never included.
 
@@ -272,6 +405,9 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `modules/blobStorage.bicep`, `modules/fileStorage.bicep` | Two modules sharing a naming policy |
 | `modules/_naming.bicep` | A helper that is not a deployable module, excluded by the selector |
 | `naming.biceptest` | One test applied to every module via `match` |
+| `app.bicep` | A composition entrypoint that declares no resources of its own |
+| `source-policy.biceptest` | Test-owned source policies, including a `withModules` query |
+| `source-policy-failing.biceptest` | A source policy that is violated on purpose |
 
 Running the passing tests:
 
@@ -308,6 +444,36 @@ All 2 evaluations passed!
 
 Adding another module to `modules/` puts it under the same policy automatically.
 
+Source policies assert about the targets without supplying any parameters, because nothing is
+evaluated:
+
+```console
+$ bicep test source-policy.biceptest
+[✓] Evaluation moduleSourcePolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation moduleSourcePolicy (modules/fileStorage.bicep) Passed!
+[✓] Evaluation compositionPolicy (app.bicep) Passed!
+All 3 evaluations passed!
+```
+
+When a source policy is violated, the failure names the declarations responsible:
+
+```console
+$ bicep test source-policy-failing.biceptest
+[✗] Evaluation forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		blobStorage.bicep(12): storageAccount
+[✗] Evaluation forbidStorageAccounts (modules/fileStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		fileStorage.bicep(12): storageAccount
+Evaluation Summary: Failure!
+Total: 2 - Success: 0 - Skipped: 0 - Failed: 2
+```
+
+The locations are relative to the selector root (`modules`), which is the frame of reference the
+policy was written in.
+
 Listing the same test file reports the targets without evaluating them:
 
 ```console
@@ -322,16 +488,28 @@ Running the whole example folder with a pattern gathers every test file into one
 $ bicep test --pattern "*.biceptest"
 [✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
+[✗] Evaluation source-policy-failing.biceptest: forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		blobStorage.bicep(12): storageAccount
+[✗] Evaluation source-policy-failing.biceptest: forbidStorageAccounts (modules/fileStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		fileStorage.bicep(12): storageAccount
+[✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/fileStorage.bicep) Passed!
+[✓] Evaluation source-policy.biceptest: compositionPolicy (app.bicep) Passed!
 [✗] Evaluation storage-failing.biceptest: prefixTooLong (storage.bicep) Failed at 1 / 2 assertions!
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
 Evaluation Summary: Failure!
-Total: 5 - Success: 4 - Skipped: 0 - Failed: 1
+Total: 10 - Success: 7 - Skipped: 0 - Failed: 3
 ```
 
-The command exits with code `1` because `storage-failing.biceptest` is expected to fail. The failure
-of one file does not stop the others from running, and one summary reports the aggregate.
+The command exits with code `1` because `storage-failing.biceptest` and
+`source-policy-failing.biceptest` are expected to fail. The failure of one file does not stop the
+others from running, and one summary reports the aggregate.
 
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
 
@@ -342,8 +520,8 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 
 ## Current limitations
 
-- Assertions must be written in the Bicep file under test; they cannot yet be authored in the test file itself.
 - Parameter values are written inline in the test declaration, and the same values apply to every target a test selects.
+- Test-owned assertions query source facts only. Evaluated values — what a target computes for a particular set of inputs — are not yet available to them.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

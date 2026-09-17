@@ -1,0 +1,19 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// A policy that is violated on purpose, so the documented failure output is real. It bans the
+// very resource type these modules exist to create.
+
+test forbidStorageAccounts = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+    exclude: ['_*.bicep']
+  }
+  assertions: {
+    noStorageAccounts: {
+      failOn: filter(target.resources, r => r.type == 'Microsoft.Storage/storageAccounts')
+      message: 'Storage accounts must be created by the platform team, not by service modules.'
+    }
+  }
+}

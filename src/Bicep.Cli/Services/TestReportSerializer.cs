@@ -79,6 +79,7 @@ public static class TestReportSerializer
                     ["total"] = result.Result.AllAssertions.Length,
                     ["failed"] = result.Result.FailedAssertions.Length,
                     ["failedNames"] = CreateNames(result.Result.FailedAssertions),
+                    ["failures"] = CreateFailures(result.Result.FailedAssertions),
                 };
             }
 
@@ -123,6 +124,35 @@ public static class TestReportSerializer
         }
 
         return names;
+    }
+
+    /// <summary>
+    /// Describes each failure in enough detail for a host to act on it without reparsing console text.
+    /// Violations are source locations drawn from the target's own declarations, never fact payloads.
+    /// </summary>
+    private static JsonArray CreateFailures(ImmutableArray<AssertionResult> assertions)
+    {
+        var failures = new JsonArray();
+
+        foreach (var assertion in assertions)
+        {
+            var violations = new JsonArray();
+
+            foreach (var violation in assertion.Violations)
+            {
+                violations.Add((JsonNode?)JsonValue.Create(violation));
+            }
+
+            failures.Add((JsonNode)new JsonObject
+            {
+                ["name"] = assertion.Source,
+                ["message"] = assertion.Message,
+                ["error"] = assertion.Error,
+                ["violations"] = violations,
+            });
+        }
+
+        return failures;
     }
 
     private static string GetStatusName(TestCaseStatus status)

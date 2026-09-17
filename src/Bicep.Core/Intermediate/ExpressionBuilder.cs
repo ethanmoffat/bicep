@@ -12,6 +12,7 @@ using Bicep.Core.Semantics.Metadata;
 using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.SourceGraph;
 using Bicep.Core.Syntax;
+using Bicep.Core.TestFramework;
 using Bicep.Core.TypeSystem;
 using Bicep.Core.TypeSystem.Providers.Az;
 using Bicep.Core.TypeSystem.Types;
@@ -1159,6 +1160,11 @@ public class ExpressionBuilder
 
             case LocalVariableSymbol localVariableSymbol:
                 return GetLocalVariableExpression(variableAccessSyntax, localVariableSymbol);
+
+            case TestTargetSymbol:
+                // The compiler-provided test target facts are supplied as a template variable when the
+                // assertion is evaluated, so a reference to them converts to an ordinary variable lookup.
+                return new SynthesizedVariableReferenceExpression(variableAccessSyntax, TestAssertion.TargetVariableName);
 
             case ImportedVariableSymbol importedSymbol:
                 return new ImportedVariableReferenceExpression(variableAccessSyntax, importedSymbol);
