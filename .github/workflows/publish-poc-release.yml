@@ -30,17 +30,25 @@ env:
 
 jobs:
   # A release is a thing other people consume, so it must not be possible to publish one
-  # from a revision whose tests are failing. The CLI is built for Windows and Linux and the
-  # test framework does a great deal of path handling, so the gate runs on both rather than
-  # only on the platform the work happened to be authored on.
+  # from a revision whose tests are failing. The invocation deliberately mirrors the one in
+  # build.yml, including its three-way split, rather than inventing a second way to run the
+  # suite. Both Linux and Windows are covered because the test framework does a great deal
+  # of path handling and Windows alone cannot catch a separator or rooting difference.
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, ${{ matrix.config.name }})
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        config:
+          - name: Core
+            filter: FullyQualifiedName~Bicep.Core.IntegrationTests
+          - name: LangServer
+            filter: FullyQualifiedName~Bicep.LangServer.IntegrationTests
+          - name: Others
+            filter: FullyQualifiedName!~Bicep.Core.IntegrationTests&FullyQualifiedName!~Bicep.LangServer.IntegrationTests
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,17 +59,8 @@ jobs:
       - name: Setup .NET Core
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
 
-      - name: Build
-        run: dotnet build --configuration release
-
-      - name: Test Bicep.Core.UnitTests
-        run: dotnet test --no-build --configuration release ./src/Bicep.Core.UnitTests/Bicep.Core.UnitTests.csproj
-
-      - name: Test Bicep.Core.IntegrationTests
-        run: dotnet test --no-build --configuration release ./src/Bicep.Core.IntegrationTests/Bicep.Core.IntegrationTests.csproj
-
-      - name: Test Bicep.Cli.IntegrationTests
-        run: dotnet test --no-build --configuration release ./src/Bicep.Cli.IntegrationTests/Bicep.Cli.IntegrationTests.csproj
+      - name: Run Tests
+        run: dotnet test --configuration release -- --filter '${{ matrix.config.filter }}'
 
   build:
     name: Build CLI (${{ matrix.rid }})
