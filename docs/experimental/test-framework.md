@@ -1145,6 +1145,58 @@ Notes on the contract:
 - The document carries identities and outcomes only. Parameter values, template content and other
   payloads are never included.
 
+### JUnit output with `--output-format junit`
+
+Most CI systems ingest JUnit XML natively, so `--output-format junit` writes that format to stdout
+instead of the JSON contract. Progress text stays on stderr, exactly as with `json`.
+
+```console
+$ bicep test source-policy-failing.biceptest --output-format junit
+```
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="bicep test" tests="2" failures="2" errors="0" skipped="0" time="0.725">
+  <testsuite name="source-policy-failing.biceptest#forbidStorageAccounts" tests="2" failures="2" errors="0" skipped="0" time="0.725">
+    <testcase name="modules/blobStorage.bicep" classname="source-policy-failing.biceptest#forbidStorageAccounts" time="0.704" file="modules/blobStorage.bicep">
+      <failure message="1 of 1 assertions failed: noStorageAccounts" type="AssertionFailure">noStorageAccounts: Storage accounts must be created by the platform team, not by service modules.
+  blobStorage.bicep(12): storageAccount</failure>
+    </testcase>
+    <testcase name="modules/fileStorage.bicep" classname="source-policy-failing.biceptest#forbidStorageAccounts" time="0.020" file="modules/fileStorage.bicep">
+      <failure message="1 of 1 assertions failed: noStorageAccounts" type="AssertionFailure">noStorageAccounts: Storage accounts must be created by the platform team, not by service modules.
+  fileStorage.bicep(12): storageAccount</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
+```
+
+A test declaration is a suite and an evaluation is a test case, so the granularity of the JSON
+contract is preserved exactly: a declaration matching 250 targets reports 250 test cases, not one.
+A file with several declarations reports several suites.
+
+Joining a suite name and a case name with `#` reproduces that case's `caseId` from the JSON
+contract, so a host that produces both can correlate them without a lookup table.
+
+Notes on the mapping:
+
+- **A case that could not be evaluated is an `<error>`, not `<skipped>`.** JUnit's "skipped" means a
+  test was intentionally not run, and CI systems treat it as benign. This framework already counts an
+  unevaluated case as a failure of the run, so reporting it as skipped would let a suite whose
+  targets all failed to compile publish as green. The `skipped` count is therefore always `0`.
+- Every failed assertion for a case appears in a single `<failure>` element. The schema permits
+  several, but many consumers display only the first, which would silently hide the rest.
+- `time` is seconds, which is what the format specifies, while the JSON contract reports
+  milliseconds. Both come from the same measurement.
+- `file` is a locator, not part of the identity: unlike `name`, it is relative to the directory the
+  command ran in, which is the convention every other JUnit producer follows and what lets a host
+  attribute a result to the source tree it came from. It names the **target**, since that is what a
+  failure is about; the test file is already named by the suite. It is omitted when no relative path
+  exists, because an absolute path would leak the machine's directory layout into a published
+  artifact.
+- `--list` cannot be combined with `--output-format junit`. Listing evaluates nothing, so emitting a
+  JUnit document would publish an inventory as if it were a passing test run. Use
+  `--output-format json` to list in a machine-readable form.
+
 ## Worked example
 
 The complete example lives in [`docs/experimental/examples/test-framework`](./examples/test-framework). It contains:

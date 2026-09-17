@@ -3,6 +3,7 @@
 
 using System.Collections.Immutable;
 using System.CommandLine;
+using System.IO.Abstractions;
 using Bicep.Cli.Arguments;
 using Bicep.Cli.Constants;
 using Bicep.Cli.Helpers;
@@ -29,6 +30,7 @@ namespace Bicep.Cli.Commands
         private readonly BicepCompiler compiler;
         private readonly IFeatureProviderFactory featureProviderFactory;
         private readonly InputOutputArgumentsResolver inputOutputArgumentsResolver;
+        private readonly IFileSystem fileSystem;
 
         public TestCommand(
             IOContext io,
@@ -36,7 +38,8 @@ namespace Bicep.Cli.Commands
             DiagnosticLogger diagnosticLogger,
             BicepCompiler compiler,
             IFeatureProviderFactory featureProviderFactory,
-            InputOutputArgumentsResolver inputOutputArgumentsResolver)
+            InputOutputArgumentsResolver inputOutputArgumentsResolver,
+            IFileSystem fileSystem)
         {
             this.logger = logger;
             this.diagnosticLogger = diagnosticLogger;
@@ -44,10 +47,20 @@ namespace Bicep.Cli.Commands
             this.featureProviderFactory = featureProviderFactory;
             this.io = io;
             this.inputOutputArgumentsResolver = inputOutputArgumentsResolver;
+            this.fileSystem = fileSystem;
         }
 
         public async Task<int> RunAsync(TestArguments args)
         {
+            // Listing evaluates nothing, so there are no results to report. Emitting a JUnit document
+            // of cases that never ran would publish an inventory as if it were a passing test run.
+            if (args.List && args.OutputFormat == TestOutputFormat.JUnit)
+            {
+                await io.Error.Writer.WriteLineAsync($"{Option.List} does not produce test results, so it cannot be reported as JUnit. Use \"{Option.OutputFormat} Json\" to list in a machine-readable form.");
+
+                return 1;
+            }
+
             // Sorted so that a pattern covering several files reports them in the same order every
             // run, and in the same order on every host: ordinal rather than the host's case rules.
             var inputUris = this.inputOutputArgumentsResolver.ResolveFilePatternInputArguments(args)
@@ -66,6 +79,9 @@ namespace Bicep.Cli.Commands
             var hasErrors = false;
             var warnedAboutExperimentalFeature = false;
             var json = args.OutputFormat == TestOutputFormat.Json;
+            // Both machine-readable formats keep stdout for the document and progress text on stderr,
+            // so a host can parse stdout even when the command exits non-zero.
+            var machineReadable = json || args.OutputFormat == TestOutputFormat.JUnit;
             var allResults = ImmutableArray.CreateBuilder<TestResult>();
             var allInventoryEntries = ImmutableArray.CreateBuilder<TestInventoryEntry>();
 
@@ -112,7 +128,7 @@ namespace Bicep.Cli.Commands
 
                 var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel(), inputCases);
 
-                if (!json)
+                if (!machineReadable)
                 {
                     LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
                 }
@@ -133,9 +149,11 @@ namespace Bicep.Cli.Commands
             {
                 var aggregated = new TestResults(allResults.ToImmutable());
 
-                if (json)
+                if (machineReadable)
                 {
-                    await io.Output.Writer.WriteLineAsync(TestReportSerializer.SerializeResults(aggregated));
+                    await io.Output.Writer.WriteLineAsync(json
+                        ? TestReportSerializer.SerializeResults(aggregated)
+                        : TestJUnitSerializer.SerializeResults(aggregated, fileSystem.Directory.GetCurrentDirectory()));
                     hasErrors |= !aggregated.Success;
                 }
                 else
@@ -331,7 +349,7 @@ namespace Bicep.Cli.Commands
             };
             var outputFormatOption = new System.CommandLine.Option<TestOutputFormat?>(Option.OutputFormat)
             {
-                Description = "Set the format of test output (Default, Json). Json writes a machine-readable document to stdout and keeps progress text on stderr.",
+                Description = "Set the format of test output (Default, Json, JUnit). Json and JUnit write a machine-readable document to stdout and keep progress text on stderr.",
             };
             var noRestoreOption = new System.CommandLine.Option<bool>(Option.NoRestore)
             {

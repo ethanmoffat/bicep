@@ -3,6 +3,7 @@
 
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Bicep.Core;
 using Bicep.Core.UnitTests;
 using Bicep.Core.UnitTests.Assertions;
@@ -655,6 +656,124 @@ test failing 'target.bicep' = {
                 var total = cases.Sum(x => x.GetProperty("durationMs").GetDouble());
                 root.GetProperty("summary").GetProperty("durationMs").GetDouble()
                     .Should().BeApproximately(total, 0.01, "the summary is the sum of the cases it summarizes");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_JUnitOutput_ReportsSuitesCasesAndFailures()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test passing 'target.bicep' = {
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}
+test failing 'target.bicep' = {
+  params: {
+    foo: 'ShouldFail'
+  }
+}", outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--output-format", "junit");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+
+                var root = XDocument.Parse(output).Root!;
+
+                root.Name.LocalName.Should().Be("testsuites");
+                root.Attribute("tests")!.Value.Should().Be("2");
+                root.Attribute("failures")!.Value.Should().Be("1");
+
+                // One suite per declaration, even when two declarations share a target.
+                var suites = root.Elements("testsuite").ToArray();
+                suites.Should().HaveCount(2);
+                suites[0].Attribute("name")!.Value.Should().Be("main.biceptest#passing");
+                suites[1].Attribute("name")!.Value.Should().Be("main.biceptest#failing");
+
+                suites[0].Elements("testcase").Single().Element("failure").Should().BeNull();
+                suites[1].Elements("testcase").Single().Element("failure")!
+                    .Attribute("message")!.Value.Should().Contain("isEqual");
+
+                // A real run must produce real measurements, in seconds.
+                double.Parse(root.Attribute("time")!.Value, System.Globalization.CultureInfo.InvariantCulture)
+                    .Should().BePositive();
+
+                // No progress text is mixed into the structured stream, and it never carries the
+                // parameter values the test supplied.
+                output.Should().NotContain("Evaluation");
+                output.Should().NotContain("ShouldFail");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_JUnitOutput_ReportsAnUnevaluatedTargetAsAnError()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), "assert alwaysTrue = true", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "broken.bicep"), "resource nope 'Not.A/type' = {}", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+}", outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--output-format", "junit");
+
+            using (new AssertionScope())
+            {
+                var root = XDocument.Parse(output).Root!;
+                var cases = root.Descendants("testcase").ToArray();
+
+                cases.Should().HaveCount(2);
+
+                // The command reports failure, so the published document must not say otherwise.
+                // JUnit's "skipped" is treated as benign by CI systems, which would let a suite whose
+                // targets all failed to compile publish as green.
+                result.Should().Be(1);
+                root.Attribute("errors")!.Value.Should().Be("1");
+                root.Attribute("skipped")!.Value.Should().Be("0");
+                root.Descendants("skipped").Should().BeEmpty();
+
+                var errored = cases.Single(x => x.Element("error") is not null);
+                errored.Attribute("name")!.Value.Should().Be("modules/broken.bicep");
+                errored.Element("error")!.Value.Should().NotBeEmpty();
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_JUnitOutput_IsRejectedForListMode()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy 'target.bicep' = {}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--list", "--output-format", "junit");
+
+            using (new AssertionScope())
+            {
+                // Listing evaluates nothing. Emitting a JUnit document of cases that never ran would
+                // publish an inventory as if it were a passing test run.
+                result.Should().Be(1);
+                output.Should().BeEmpty();
+                error.Should().Contain("--list does not produce test results");
             }
         }
 

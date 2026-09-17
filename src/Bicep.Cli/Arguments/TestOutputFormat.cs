@@ -17,4 +17,10 @@ public enum TestOutputFormat
     /// host can parse stdout even when the command exits non-zero.
     /// </summary>
     Json,
+
+    /// <summary>
+    /// JUnit XML on stdout, for CI systems that ingest that format natively. Carries the same case
+    /// identities and outcomes as <see cref="Json"/>, with progress text kept on stderr.
+    /// </summary>
+    JUnit,
 }
