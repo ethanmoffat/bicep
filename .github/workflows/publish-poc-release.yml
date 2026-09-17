@@ -1,8 +1,9 @@
-# Publishes the experimental test-framework CLI as a GitHub release so that a consuming
-# repository can download it anonymously from a stable URL and pin it by commit SHA.
+# Publishes the experimental test-framework CLI and matching VS Code extension as a
+# GitHub release so that a consuming repository can download them anonymously from a
+# stable URL and pin them by commit SHA.
 #
 # This workflow is specific to the test-framework POC and has no upstream counterpart.
-# Asset names deliberately match the upstream release naming (bicep-win-x64.exe,
+# CLI asset names deliberately match the upstream release naming (bicep-win-x64.exe,
 # bicep-linux-x64) so a consumer only has to change the URL it downloads from.
 name: Publish POC Release
 
@@ -69,9 +70,70 @@ jobs:
           path: ./release-assets/${{ matrix.asset }}
           if-no-files-found: error
 
+  vsix:
+    name: Build VS Code extension
+    runs-on: ubuntu-latest
+    env:
+      TURBO_TELEMETRY_DISABLED: 1
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # avoid shallow clone so nbgv can do its work.
+          submodules: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      - name: Publish Language Server
+        run: |
+          dotnet publish --configuration release ./src/Bicep.LangServer/Bicep.LangServer.csproj
+          cp -R src/Bicep.LangServer/bin/release/net10.0/publish ./src/vscode-bicep/bicepLanguageServer
+
+      - name: Publish MCP Server
+        run: |
+          dotnet publish --configuration release ./src/Bicep.McpServer/Bicep.McpServer.csproj
+          cp -R src/Bicep.McpServer/bin/release/net10.0/publish ./src/vscode-bicep/bicepMcpServer
+
+      - name: npm ci (vscode-bicep-ui)
+        run: npm ci
+        working-directory: ./src/vscode-bicep-ui
+
+      - name: Build vscode-bicep-ui
+        run: npm run build
+        working-directory: ./src/vscode-bicep-ui
+
+      - name: npm ci (vscode-bicep)
+        run: npm ci
+        working-directory: ./src/vscode-bicep
+
+      - name: Generate VSIX notice
+        run: |
+          mkdir -p ./src/vscode-bicep-notice/inputs
+          npm --prefix ./src/vscode-bicep list -a --json > ./src/vscode-bicep-notice/inputs/npm-list.json
+          cp ./src/Bicep.LangServer/obj/project.assets.json ./src/vscode-bicep-notice/inputs/langserver.assets.json
+          cp ./src/Bicep.McpServer/obj/project.assets.json ./src/vscode-bicep-notice/inputs/mcpserver.assets.json
+          dotnet build --configuration Release ./src/vscode-bicep-notice/vscode-bicep-notice.proj
+
+      - name: Create VSIX
+        run: npm run package
+        working-directory: ./src/vscode-bicep
+
+      - name: Upload staged asset
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: poc-asset-vsix
+          path: ./src/vscode-bicep/vscode-bicep.vsix
+          if-no-files-found: error
+
   release:
     name: Create release
-    needs: build
+    needs: [build, vsix]
     runs-on: ubuntu-latest
 
     steps:
@@ -107,6 +169,15 @@ jobs:
             echo "- \`${{ steps.version.outputs.reported }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
             echo ""
+            echo "| Asset | Use |"
+            echo "| --- | --- |"
+            echo "| \`bicep-win-x64.exe\` | CLI for Windows |"
+            echo "| \`bicep-linux-x64\` | CLI for Linux |"
+            echo "| \`vscode-bicep.vsix\` | Matching editor tooling (\`code --install-extension\`) |"
+            echo ""
+            echo "The extension carries its own language server build, so install it alongside the"
+            echo "matching CLI rather than mixing revisions."
+            echo ""
             echo "Verify the binary reports the expected revision before using it:"
             echo ""
             echo '```'
@@ -121,4 +192,5 @@ jobs:
             --notes-file notes.md \
             ${{ inputs.prerelease && '--prerelease' || '' }} \
             ./release-assets/bicep-win-x64.exe \
-            ./release-assets/bicep-linux-x64
+            ./release-assets/bicep-linux-x64 \
+            ./release-assets/vscode-bicep.vsix
