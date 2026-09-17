@@ -2105,6 +2105,10 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic TestMatchSelectorPatternEscapesRoot(string pattern) => CoreError(
                 "BCP460",
                 $"The pattern \"{pattern}\" must not be rooted or contain \"..\" segments. Use \"{TestTargetSelector.RootPropertyName}\" to select a different directory.");
+
+            public Diagnostic TestFileIsNotDeployable() => CoreError(
+                "BCP461",
+                $"A \"{LanguageConstants.TestFileExtension}\" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead.");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

@@ -44,7 +44,13 @@ public static class IArtifactReferenceSyntaxExtensions
         };
         if (!isValidReference)
         {
-            return new(onInvalidSourceFileType(DiagnosticBuilder.ForPosition(reference.SourceSyntax)));
+            // A test file is a valid Bicep source file that simply is not deployable. Saying so
+            // directly is more useful than listing what a module declaration does accept.
+            var diagnosticBuilder = sourceFile is BicepTestFile
+                ? (DiagnosticBuilder.DiagnosticBuilderDelegate)(b => b.TestFileIsNotDeployable())
+                : onInvalidSourceFileType;
+
+            return new(diagnosticBuilder(DiagnosticBuilder.ForPosition(reference.SourceSyntax)));
         }
 
         return new(semanticModelLookup.GetSemanticModel(sourceFile));

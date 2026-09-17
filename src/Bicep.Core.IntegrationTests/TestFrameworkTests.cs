@@ -284,6 +284,45 @@ test foo = {
                 ("BCP032", DiagnosticLevel.Error, "The value must be a compile-time constant."),
             });
         }
+        [TestMethod]
+        public void A_test_file_cannot_be_referenced_as_a_deployable_module()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework,
+                ("main.bicep", @"
+module m 'sample.biceptest' = {
+  name: 'm'
+}
+"),
+                ("sample.biceptest", @"
+test foo 'target.bicep' = {}
+"),
+                ("target.bicep", @"
+param name string = 'us'
+"));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP461", DiagnosticLevel.Error, "A \".biceptest\" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead."),
+            });
+        }
+
+        [TestMethod]
+        public void A_test_file_cannot_be_the_target_of_a_test()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework,
+                ("main.bicep", @"
+test foo 'sample.biceptest' = {}
+"),
+                ("sample.biceptest", @"
+test bar 'target.bicep' = {}
+"),
+                ("target.bicep", @"
+param name string = 'us'
+"));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP461", DiagnosticLevel.Error, "A \".biceptest\" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead."),
+            });
+        }
     }
 
 }

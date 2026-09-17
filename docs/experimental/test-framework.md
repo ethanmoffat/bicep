@@ -37,6 +37,14 @@ test validPrefix 'storage.bicep' = {
 
 The target path is a literal path relative to the test file.
 
+A `.biceptest` file is not a deployable template. Referencing one from a `module` declaration, or
+using one as the target of a test, is an error:
+
+```console
+$ bicep build main.bicep
+main.bicep(1,10) : Error BCP461: A ".biceptest" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead.
+```
+
 ## Selecting targets with `match`
 
 A test can also select its targets from the filesystem instead of naming one. Omit the literal path and declare a `match` selector in the test body:
