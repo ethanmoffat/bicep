@@ -704,6 +704,133 @@ assert isEqual = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_MatchSelector_PicksUpNewFilesWithoutEditingTheTest()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            var target = @"param foo string
+assert isEqual = foo == 'ShouldSucceed'";
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), target, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (firstOutput, _, firstResult) = await Bicep(settings, "test", testPath);
+
+            firstResult.Should().Be(0);
+            firstOutput.Should().Contain("All 1 evaluations passed!");
+
+            // A new matching file is covered by the next run. The test declaration is untouched.
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "two.bicep"), target, outputFileDir);
+
+            var (secondOutput, _, secondResult) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                secondResult.Should().Be(0);
+                secondOutput.Should().Contain("Evaluation policy (modules/two.bicep) Passed!");
+                secondOutput.Should().Contain("All 2 evaluations passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_IdentitiesDoNotDependOnTheWorkingDirectory()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+}", outputFileDir);
+
+            async Task<string> RunFrom(string currentDirectory)
+            {
+                var settings = new InvocationSettings(
+                    new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true),
+                    BicepTestConstants.ClientFactory,
+                    BicepTestConstants.TemplateSpecRepositoryFactory,
+                    Environment: TestEnvironment.Default with { CurrentDirectory = currentDirectory });
+
+                var (output, _, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+                result.Should().Be(0);
+
+                return output;
+            }
+
+            // Selection is owned by the test file, so the same invocation from a different directory
+            // must produce byte-identical case identities.
+            var fromRoot = await RunFrom(outputFileDir);
+            var fromNested = await RunFrom(Path.Combine(outputFileDir, "modules"));
+
+            fromNested.Should().Be(fromRoot);
+            fromRoot.Should().Contain("main.biceptest#policy#modules/one.bicep");
+        }
+
+        [TestMethod]
+        public async Task Test_MatchSelector_ReportsPerTargetOutcomesAndAssertionCounts()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "passing.bicep"), @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "failing.bicep"), @"param foo string
+assert isEqual = foo == 'ShouldSucceed'
+assert isNever = foo == 'NeverMatches'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+
+                var cases = JsonDocument.Parse(output).RootElement.GetProperty("cases").EnumerateArray().ToArray();
+
+                var failing = cases.Single(x => x.GetProperty("target").GetString() == "modules/failing.bicep");
+                failing.GetProperty("status").GetString().Should().Be("failed");
+                failing.GetProperty("assertions").GetProperty("total").GetInt32().Should().Be(2);
+                failing.GetProperty("assertions").GetProperty("failed").GetInt32().Should().Be(1);
+
+                // The passing target is unaffected by the failing one and keeps its own counts.
+                var passing = cases.Single(x => x.GetProperty("target").GetString() == "modules/passing.bicep");
+                passing.GetProperty("status").GetString().Should().Be("passed");
+                passing.GetProperty("assertions").GetProperty("total").GetInt32().Should().Be(1);
+                passing.GetProperty("assertions").GetProperty("failed").GetInt32().Should().Be(0);
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

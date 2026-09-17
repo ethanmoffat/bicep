@@ -88,7 +88,21 @@ These are two different things, and they are deliberately kept apart:
 - **Discovery** is how the CLI finds test files. You either name a test file on the command line or match several with `--pattern`.
 - **Selection** is how a test finds the files it applies to. That is what `match` does, and it is owned by the test file rather than by whoever invokes the CLI.
 
-Because selection lives in the test file, running the same test from a different working directory — or from CI — always covers the same set of files.
+Because selection lives in the test file, running the same test from a different working directory — or from CI — always covers the same set of files, and reports the same case identities.
+
+`match` is also evaluated against the filesystem on every run. Adding a new file that the selector already covers brings it under test on the next run, with no edit to the test file:
+
+```console
+$ bicep test main.biceptest
+[✓] Evaluation policy (modules/one.bicep) Passed!
+All 1 evaluations passed!
+
+$ # add modules/two.bicep, then re-run
+$ bicep test main.biceptest
+[✓] Evaluation policy (modules/one.bicep) Passed!
+[✓] Evaluation policy (modules/two.bicep) Passed!
+All 2 evaluations passed!
+```
 
 ### Each target is bound independently
 
