@@ -150,6 +150,90 @@ pass. `--list` combines with `--pattern` to inventory a whole suite.
 A test that resolves to no targets is reported on stderr and makes `--list` exit non-zero, so a
 selector that has silently stopped matching cannot hide behind an empty list.
 
+### Machine-readable output with `--output-format json`
+
+`--output-format json` writes a versioned document to stdout and keeps every piece of progress text,
+diagnostic and warning on stderr. A host process can therefore parse stdout whether the run
+succeeded or failed:
+
+```console
+$ bicep test storage-failing.biceptest --output-format json
+{
+  "version": "1.0",
+  "mode": "run",
+  "cases": [
+    {
+      "caseId": "storage-failing.biceptest#prefixTooLong#storage.bicep",
+      "testFile": "storage-failing.biceptest",
+      "testName": "prefixTooLong",
+      "target": "storage.bicep",
+      "status": "failed",
+      "error": null,
+      "assertions": {
+        "total": 2,
+        "failed": 1,
+        "failedNames": [
+          "nameWithinLengthLimit"
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 0
+  }
+}
+```
+
+The same option applies to `--list`, where `mode` is `list` and each case has a status of `listed`
+or `unresolved`:
+
+```console
+$ bicep test naming.biceptest --list --output-format json
+{
+  "version": "1.0",
+  "mode": "list",
+  "cases": [
+    {
+      "caseId": "naming.biceptest#namingPolicy#modules/blobStorage.bicep",
+      "testFile": "naming.biceptest",
+      "testName": "namingPolicy",
+      "target": "modules/blobStorage.bicep",
+      "status": "listed",
+      "error": null
+    },
+    {
+      "caseId": "naming.biceptest#namingPolicy#modules/fileStorage.bicep",
+      "testFile": "naming.biceptest",
+      "testName": "namingPolicy",
+      "target": "modules/fileStorage.bicep",
+      "status": "listed",
+      "error": null
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "listed": 2,
+    "unresolved": 0
+  }
+}
+```
+
+Notes on the contract:
+
+- `version` changes only when the shape changes in a way a consumer must react to. New optional
+  properties may be added without a version bump.
+- `caseId` is built from test-file-relative information only, so the same case has the same identity
+  regardless of the directory the CLI was invoked from.
+- `target` is `null` when a test could not be resolved to any target; there is no target to name.
+- `assertions` is present only for cases that were actually evaluated. A skipped case never reached
+  its assertions, and reporting zero counts would be indistinguishable from a target that declares
+  none.
+- The document carries identities and outcomes only. Parameter values, template content and other
+  payloads are never included.
+
 ## Worked example
 
 The complete example lives in [`docs/experimental/examples/test-framework`](./examples/test-framework). It contains:

@@ -1,0 +1,143 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using System.Text.Json;
+using Bicep.Cli.Services;
+using TestResult = Bicep.Cli.Services.TestResult;
+using Bicep.IO.Abstraction;
+using FluentAssertions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace Bicep.Cli.UnitTests.Services;
+
+[TestClass]
+public class TestReportSerializerTests
+{
+    private static TestCaseIdentity Identity(string testFile, string testName, string targetFile)
+        => new(IOUri.FromFilePath(testFile), testName, IOUri.FromFilePath(targetFile));
+
+    private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
+
+    private static TestResult Result(TestCaseIdentity identity, TestEvaluation evaluation)
+        => new(null!, identity, evaluation);
+
+    private static TestEvaluation Passed(params string[] assertions)
+        => new(null, null, [.. assertions.Select(name => new AssertionResult(name, true))], []);
+
+    private static TestEvaluation Failed(string passing, string failing)
+        => new(
+            null,
+            null,
+            [new AssertionResult(passing, true), new AssertionResult(failing, false)],
+            [new AssertionResult(failing, false)]);
+
+    private static TestEvaluation Skipped(string error) => new(null, error, [], []);
+
+    [TestMethod]
+    public void SerializeInventory_ReportsVersionModeAndCaseIdentities()
+    {
+        var json = TestReportSerializer.SerializeInventory(
+        [
+            new(Identity("/repo/main.biceptest", "policy", "/repo/modules/one.bicep"), null),
+        ]);
+
+        var root = Parse(json);
+
+        root.GetProperty("version").GetString().Should().Be(TestReportSerializer.ContractVersion);
+        root.GetProperty("mode").GetString().Should().Be("list");
+
+        var single = root.GetProperty("cases").EnumerateArray().Single();
+        single.GetProperty("caseId").GetString().Should().Be("main.biceptest#policy#modules/one.bicep");
+        single.GetProperty("testFile").GetString().Should().Be("main.biceptest");
+        single.GetProperty("testName").GetString().Should().Be("policy");
+        single.GetProperty("target").GetString().Should().Be("modules/one.bicep");
+        single.GetProperty("status").GetString().Should().Be("listed");
+        single.GetProperty("error").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // Listing reports inventory only. It must never carry assertion outcomes.
+        single.TryGetProperty("assertions", out _).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void SerializeInventory_ReportsUnresolvedTestsWithoutATarget()
+    {
+        var json = TestReportSerializer.SerializeInventory(
+        [
+            new(Identity("/repo/main.biceptest", "policy", "/repo/main.biceptest"), "The selector matched no files."),
+        ]);
+
+        var root = Parse(json);
+        var single = root.GetProperty("cases").EnumerateArray().Single();
+
+        single.GetProperty("status").GetString().Should().Be("unresolved");
+        single.GetProperty("error").GetString().Should().Be("The selector matched no files.");
+
+        // A test that resolved to nothing has no target to name, and must not invent one.
+        single.GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+
+        root.GetProperty("summary").GetProperty("unresolved").GetInt32().Should().Be(1);
+        root.GetProperty("summary").GetProperty("listed").GetInt32().Should().Be(0);
+    }
+
+    [TestMethod]
+    public void SerializeResults_ReportsStatusAssertionCountsAndSummary()
+    {
+        var json = TestReportSerializer.SerializeResults(new(
+        [
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Passed("a", "b")),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/two.bicep"), Failed("a", "b")),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Skipped("Missing parameter.")),
+        ]));
+
+        var root = Parse(json);
+
+        root.GetProperty("mode").GetString().Should().Be("run");
+
+        var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+
+        cases[0].GetProperty("status").GetString().Should().Be("passed");
+        cases[0].GetProperty("assertions").GetProperty("total").GetInt32().Should().Be(2);
+        cases[0].GetProperty("assertions").GetProperty("failed").GetInt32().Should().Be(0);
+
+        cases[1].GetProperty("status").GetString().Should().Be("failed");
+        cases[1].GetProperty("assertions").GetProperty("failed").GetInt32().Should().Be(1);
+        cases[1].GetProperty("assertions").GetProperty("failedNames").EnumerateArray()
+            .Select(x => x.GetString()).Should().Equal("b");
+
+        // An evaluation that never ran has no assertion counts to report; reporting zeroes would
+        // be indistinguishable from a target that genuinely declares no assertions.
+        cases[2].GetProperty("status").GetString().Should().Be("skipped");
+        cases[2].GetProperty("error").GetString().Should().Be("Missing parameter.");
+        cases[2].TryGetProperty("assertions", out _).Should().BeFalse();
+
+        var summary = root.GetProperty("summary");
+        summary.GetProperty("total").GetInt32().Should().Be(3);
+        summary.GetProperty("passed").GetInt32().Should().Be(1);
+        summary.GetProperty("failed").GetInt32().Should().Be(1);
+        summary.GetProperty("skipped").GetInt32().Should().Be(1);
+    }
+
+    [TestMethod]
+    public void SerializeResults_IdentitiesAreFreeOfAbsolutePaths()
+    {
+        var json = TestReportSerializer.SerializeResults(new(
+        [
+            Result(Identity("/repo/tests/main.biceptest", "policy", "/repo/tests/one.bicep"), Passed("a")),
+        ]));
+
+        // Case identities are derived from test-file-relative information so that a host sees the
+        // same identity regardless of where the CLI was invoked from.
+        json.Should().NotContain("/repo");
+    }
+
+    [TestMethod]
+    public void SerializeResults_ProducesValidJsonForAnEmptyRun()
+    {
+        var json = TestReportSerializer.SerializeResults(new([]));
+
+        var root = Parse(json);
+
+        root.GetProperty("cases").GetArrayLength().Should().Be(0);
+        root.GetProperty("summary").GetProperty("total").GetInt32().Should().Be(0);
+    }
+}

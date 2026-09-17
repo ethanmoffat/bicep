@@ -8,4 +8,5 @@ public record TestArguments(
     string? FilePattern,
     bool NoRestore,
     bool List,
+    TestOutputFormat? OutputFormat,
     DiagnosticsFormat? DiagnosticsFormat) : IFilePatternInputArguments;

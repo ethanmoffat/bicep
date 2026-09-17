@@ -64,7 +64,9 @@ namespace Bicep.Cli.Commands
 
             var hasErrors = false;
             var warnedAboutExperimentalFeature = false;
+            var json = args.OutputFormat == TestOutputFormat.Json;
             var allResults = ImmutableArray.CreateBuilder<TestResult>();
+            var allInventoryEntries = ImmutableArray.CreateBuilder<TestInventoryEntry>();
 
             foreach (var inputUri in inputUris)
             {
@@ -87,7 +89,10 @@ namespace Bicep.Cli.Commands
 
                 if (args.List)
                 {
-                    hasErrors |= await ListAsync(args, inputUri);
+                    var (listHasErrors, inventory) = await ListAsync(args, inputUri, json);
+
+                    hasErrors |= listHasErrors;
+                    allInventoryEntries.AddRange(inventory.Entries);
                     continue;
                 }
 
@@ -95,17 +100,38 @@ namespace Bicep.Cli.Commands
                 var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
                 var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel());
 
-                LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
+                if (!json)
+                {
+                    LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
+                }
+
                 allResults.AddRange(testResults.Results);
 
                 hasErrors |= summary.HasErrors;
             }
 
-            if (!args.List)
+            if (args.List)
             {
-                // A single summary covers every discovered file, so that one failing file is never
-                // followed by a later file reporting overall success.
-                hasErrors |= LogSummary(new(allResults.ToImmutable()), hasErrors);
+                if (json)
+                {
+                    await io.Output.Writer.WriteLineAsync(TestReportSerializer.SerializeInventory(allInventoryEntries));
+                }
+            }
+            else
+            {
+                var aggregated = new TestResults(allResults.ToImmutable());
+
+                if (json)
+                {
+                    await io.Output.Writer.WriteLineAsync(TestReportSerializer.SerializeResults(aggregated));
+                    hasErrors |= !aggregated.Success;
+                }
+                else
+                {
+                    // A single summary covers every discovered file, so that one failing file is never
+                    // followed by a later file reporting overall success.
+                    hasErrors |= LogSummary(aggregated, hasErrors);
+                }
             }
 
             return hasErrors ? 1 : 0;
@@ -115,21 +141,24 @@ namespace Bicep.Cli.Commands
         /// Reports what a test file covers without compiling, restoring or evaluating any target.
         /// Listing confirms inventory; it never claims the targets compile or pass.
         /// </summary>
-        private async Task<bool> ListAsync(TestArguments args, IOUri inputUri)
+        private async Task<(bool hasErrors, TestInventory inventory)> ListAsync(TestArguments args, IOUri inputUri, bool json)
         {
             var compilation = await compiler.CreateCompilation(inputUri, skipRestore: true);
             var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
             var inventory = TestDiscoveryService.Discover(compilation.GetEntrypointSemanticModel());
 
-            foreach (var entry in inventory.Entries)
+            if (!json)
             {
-                if (entry.IsResolved)
+                foreach (var entry in inventory.Entries)
                 {
-                    await io.Output.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> {entry.Identity.RelativeTargetPath}");
-                }
-                else
-                {
-                    await io.Error.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> (no targets): {entry.Error}");
+                    if (entry.IsResolved)
+                    {
+                        await io.Output.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> {entry.Identity.RelativeTargetPath}");
+                    }
+                    else
+                    {
+                        await io.Error.Writer.WriteLineAsync($"{entry.Identity.TestFileName}: {entry.Identity.TestName} -> (no targets): {entry.Error}");
+                    }
                 }
             }
 
@@ -138,7 +167,7 @@ namespace Bicep.Cli.Commands
                 await io.Error.Writer.WriteLineAsync($"Not traversed (link): {skipped}");
             }
 
-            return summary.HasErrors || inventory.HasErrors;
+            return (summary.HasErrors || inventory.HasErrors, inventory);
         }
 
         private void LogResults(TestResults testResults, bool qualifyWithTestFile)
@@ -222,6 +251,10 @@ namespace Bicep.Cli.Commands
             {
                 Description = "Lists the tests and targets that would run, without evaluating them.",
             };
+            var outputFormatOption = new System.CommandLine.Option<TestOutputFormat?>(Option.OutputFormat)
+            {
+                Description = "Set the format of test output (Default, Json). Json writes a machine-readable document to stdout and keeps progress text on stderr.",
+            };
             var noRestoreOption = new System.CommandLine.Option<bool>(Option.NoRestore)
             {
                 Description = "Do not restore modules prior to running tests.",
@@ -234,6 +267,7 @@ namespace Bicep.Cli.Commands
             command.Add(inputFileArgument);
             command.Add(filePatternOption);
             command.Add(listOption);
+            command.Add(outputFormatOption);
             command.Add(noRestoreOption);
             command.Add(diagnosticsFormatOption);
             command.Validators.Add((System.CommandLine.Parsing.CommandResult result) => CommandLineBuilderContext.ValidatePositionalArgument(result, inputFileArgument));
@@ -245,6 +279,7 @@ namespace Bicep.Cli.Commands
                     result.GetValue(filePatternOption),
                     result.GetValue(noRestoreOption),
                     result.GetValue(listOption),
+                    result.GetValue(outputFormatOption),
                     result.GetValue(diagnosticsFormatOption));
 
                 return await context.GetCommand<TestCommand>().RunAsync(args);

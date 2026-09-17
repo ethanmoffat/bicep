@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Bicep.Core;
 using Bicep.Core.UnitTests;
@@ -558,6 +559,92 @@ assert isEqual = foo == 'NeverMatches'", outputFileDir);
                 result.Should().Be(1);
                 error.Should().Contain("main.biceptest: policy -> (no targets)");
                 error.Should().Contain("matched no files");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_JsonOutput_IsParseableAndFreeOfProgressText()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test passing 'target.bicep' = {
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}
+test failing 'target.bicep' = {
+  params: {
+    foo: 'ShouldFail'
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            using (new AssertionScope())
+            {
+                // The host must be able to parse the structured stream even though the run failed.
+                result.Should().Be(1);
+
+                var root = JsonDocument.Parse(output).RootElement;
+                root.GetProperty("version").GetString().Should().NotBeNullOrEmpty();
+                root.GetProperty("mode").GetString().Should().Be("run");
+
+                var cases = root.GetProperty("cases").EnumerateArray().ToArray();
+                cases.Should().HaveCount(2);
+                cases[0].GetProperty("caseId").GetString().Should().Be("main.biceptest#passing#target.bicep");
+                cases[0].GetProperty("status").GetString().Should().Be("passed");
+                cases[1].GetProperty("status").GetString().Should().Be("failed");
+                cases[1].GetProperty("assertions").GetProperty("failedNames").EnumerateArray()
+                    .Select(x => x.GetString()).Should().Equal("isEqual");
+
+                root.GetProperty("summary").GetProperty("failed").GetInt32().Should().Be(1);
+
+                // No progress text is mixed into the structured stream.
+                output.Should().NotContain("Evaluation");
+                output.Should().NotContain("evaluations passed");
+
+                // Nor does the structured stream carry the parameter values the test supplied.
+                output.Should().NotContain("ShouldFail");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_JsonOutput_ReportsInventoryForListMode()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--list", "--output-format", "json");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+
+                var root = JsonDocument.Parse(output).RootElement;
+                root.GetProperty("mode").GetString().Should().Be("list");
+
+                var single = root.GetProperty("cases").EnumerateArray().Single();
+                single.GetProperty("status").GetString().Should().Be("listed");
+                single.GetProperty("target").GetString().Should().Be("modules/one.bicep");
+
+                // Listing never evaluates, so it never reports assertion outcomes.
+                single.TryGetProperty("assertions", out _).Should().BeFalse();
             }
         }
 

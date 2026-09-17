@@ -105,6 +105,7 @@ namespace Bicep.Cli.IntegrationTests
                     "Runs tests in a .bicep or .biceptest file.",
                     "--pattern",
                     "--list",
+                    "--output-format",
                     "--no-restore",
                     "--diagnostics-format");
             }
