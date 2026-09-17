@@ -632,6 +632,133 @@ An unevaluatable condition is an error rather than a silent exclusion. Reporting
 condition that could not be computed would let a policy pass by describing a smaller deployment than
 the case actually produces.
 
+## Mocks
+
+Some values a deployment uses do not come from its own source. An `existing` resource is read from
+Azure, and `listKeys` is answered by a resource provider. Offline, nothing can supply them, so the
+test supplies them itself.
+
+Mocks are declared in the `.biceptest` file with a top-level `mocks` assignment. They belong to the
+test, not to the target: the target stays an ordinary deployment with nothing test-specific in it.
+
+```bicep
+param identityName string
+
+var scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/contoso-prod-rg'
+
+mocks = {
+  deployIdentity: {
+    operation: 'reference'
+    resourceId: '${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}'
+    apiVersion: '2023-01-31'
+    response: {
+      properties: {
+        principalId: '11111111-1111-1111-1111-111111111111'
+      }
+    }
+  }
+}
+```
+
+Each entry is named, and the name is what a failure reports. The properties are:
+
+| Property | Required | Meaning |
+|----------|----------|---------|
+| `operation` | Yes | `'reference'` or `'listKeys'` |
+| `resourceId` | Yes | The full resource ID the request addresses |
+| `apiVersion` | Yes | The API version the request uses |
+| `requestBody` | No | The body the request must carry; absent means the request must carry none |
+| `response` | No | The answer to give |
+
+A mock body is ordinary Bicep, so it can be built from the test's own parameters and read per input
+case. Nothing here reaches the network: every value is stated by the test.
+
+### Matching is exact
+
+A request is answered only by a mock that states the same operation, resource ID, API version and
+request body. Resource IDs are compared without regard to case or a trailing separator; nothing else
+is relaxed.
+
+There is no wildcard. A pattern would answer calls the author never meant to make, and a test that
+passes because of an unintended answer is worse than one that fails. For the same reason two entries
+that answer the same request are rejected before anything runs, rather than resolved by order:
+
+```console
+$ bicep test dup.biceptest
+[-] Evaluation dup (dup.bicep) Skipped!
+Reason: Mocks "first", "second" answer the same request. Remove the duplicates so the request has one answer.
+Evaluation Summary: Failure!
+Total: 1 - Success: 0 - Skipped: 1 - Failed: 0
+```
+
+A target compiled with symbolic names spells a runtime read as the declaration it came from rather
+than as a resource ID. That is a codegen detail, so it is translated back before matching: a mock is
+written against the resource ID either way.
+
+### Unconfigured values are unset, not invented
+
+A response states only what the test cares about. A field it does not mention is simply absent, and
+absence is only a problem where something reads it:
+
+```bicep
+// docs/experimental/examples/test-framework/mocks-failing.biceptest
+response: {
+  properties: {
+    principalId: '11111111-1111-1111-1111-111111111111'
+  }
+}
+```
+
+```console
+$ bicep test mocks-failing.biceptest --inputs mocks-failing.biceptestparam
+[✗] Evaluation unconfiguredField (mocks.bicep) [mocks-failing.biceptestparam: eastus] Failed at 1 / 1 assertions!
+	[✗] Assertion clientIdIsResolved failed!
+		The deployment reads a client ID that no mock answers.
+		Could not be evaluated: The language expression property 'clientId' doesn't exist, available properties are 'principalId'.
+```
+
+A request that no mock answers at all is reported the same way, naming the request so it can be
+configured:
+
+```console
+	Could not be evaluated: No mock answers reference on /subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/contoso-prod-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-deploy-identity (2023-01-31). Declare it in the test file's 'mocks' so the value the deployment reads is stated by the test.
+```
+
+Neither case falls back to a guessed value, and neither reaches Azure. A test that cannot get a value
+it needs fails; it does not quietly describe a deployment that was never computed.
+
+Because `target.evaluated.outputs` is computed as a set, a target whose outputs read an unanswered
+value cannot report any of them for that case. Other tests and other cases still run, and the failure
+is attributed to the one that hit it.
+
+### A worked mock
+
+```bicep
+// docs/experimental/examples/test-framework/mocks.bicep
+resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: identityName
+}
+
+resource artifacts 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: artifactStorageName
+}
+
+output deployPrincipalId string = deployIdentity.properties.principalId
+
+#disable-next-line outputs-should-not-contain-secrets
+output artifactKeyName string = artifacts.listKeys().keys[0].keyName
+```
+
+```console
+$ bicep test mocks.biceptest --inputs mocks.biceptestparam
+[✓] Evaluation runtimeReads (mocks.bicep) [mocks.biceptestparam: eastus] Passed!
+All 1 evaluations passed!
+```
+
+A `reference` answer is a resource envelope: an ordinary `reference` reads its `properties`, and
+`reference(..., 'Full')` reads the envelope itself. A `listKeys` answer is the operation's own result
+and is used exactly as written.
+
 ## Running tests
 
 ```console
@@ -849,6 +976,11 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `deployment-name/stamp.bicep` | A module that reports the deployment name it was given |
 | `deployment-name.biceptest` | Asserts the root and module deployment names |
 | `deployment-name.biceptestparam` | Supplies a deterministic `deploymentName` |
+| `mocks.bicep` | A target that reads an existing identity and a storage account's keys |
+| `mocks.biceptest` | Test-owned `reference` and `listKeys` mocks |
+| `mocks.biceptestparam` | One case supplying the names the mocks are built from |
+| `mocks-failing.biceptest` | A response that omits a field the target reads |
+| `mocks-failing.biceptestparam` | The same case, bound to the failing test file |
 
 Running the passing tests:
 
@@ -967,8 +1099,8 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 
 - Evaluated values cover resource instances and outputs. Individual resource properties are not yet exposed.
 - A module argument that itself depends on another module's output is evaluated before that output is available, so chained module-to-module argument flow is not yet resolved.
-- Runtime data is not simulated. A target that consumes `reference()` or `listKeys()` values cannot be evaluated offline.
-- Deployment context covers `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup` and `resourceGroupLocation`. Deployment name is not yet available.
+- Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
+- `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

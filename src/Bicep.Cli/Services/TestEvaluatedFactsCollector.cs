@@ -21,7 +21,8 @@ public sealed class TestEvaluatedFactsProvider(
     Func<JObject?> parameters,
     TestDeploymentContext? deploymentContext,
     TestTargetFacts sourceFacts,
-    string targetFile)
+    string targetFile,
+    TestMockRegistry? mocks = null)
 {
     private const string DeploymentResourceType = "Microsoft.Resources/deployments";
     private const string DeploymentParametersSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#";
@@ -33,6 +34,8 @@ public sealed class TestEvaluatedFactsProvider(
     /// </summary>
     private sealed record EvaluatedDeployment(
         JObject Template,
+        JToken Source,
+        JObject? Inputs,
         string File,
         TestDeploymentContext Context,
         ImmutableDictionary<string, EvaluatedDeployment> Modules);
@@ -46,7 +49,12 @@ public sealed class TestEvaluatedFactsProvider(
 
     public ImmutableArray<TestEvaluatedResource> WithModules => withModules ??= Collect(Root(), string.Empty, recurse: true);
 
-    public JObject Outputs => outputs ??= CollectOutputs(Root());
+    /// <summary>
+    /// Outputs are computed strictly, and only when something asks for them. An output is a consumption:
+    /// a value it needs and cannot get is an error about that value, not a silently unevaluated string
+    /// that a later comparison would report as an ordinary mismatch.
+    /// </summary>
+    public JObject Outputs => outputs ??= CollectOutputs(EvaluateStrictly(Root()));
 
     private EvaluatedDeployment Root() => root ??= Evaluate(
         TestTemplateEmitter.Emit(targetModel, forceSymbolicNames: true),
@@ -64,12 +72,44 @@ public sealed class TestEvaluatedFactsProvider(
     /// </summary>
     private EvaluatedDeployment Evaluate(JToken template, JObject? inputs, TestDeploymentContext context, string file)
     {
-        var first = EvaluateTemplate(template, inputs, context, null);
+        var first = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(null), strictOutputs: false);
         var modules = EvaluateModules(first, context, file);
 
         if (modules.IsEmpty)
         {
-            return new EvaluatedDeployment(first, file, context, modules);
+            return new EvaluatedDeployment(first, template, inputs, file, context, modules);
+        }
+
+        var second = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(modules), strictOutputs: false);
+
+        return new EvaluatedDeployment(second, template, inputs, file, context, modules);
+    }
+
+    /// <summary>
+    /// Re-evaluates a deployment with strict outputs, resolving module outputs from strict module
+    /// evaluations so a failure is reported where it happens rather than propagated as text.
+    /// </summary>
+    private JObject EvaluateStrictly(EvaluatedDeployment deployment)
+    {
+        var modules = deployment.Modules.ToImmutableDictionary(
+            module => module.Key,
+            module => module.Value with { Template = EvaluateStrictly(module.Value) },
+            StringComparer.OrdinalIgnoreCase);
+
+        return EvaluateTemplate(
+            deployment.Source,
+            deployment.Inputs,
+            deployment.Context,
+            mocks,
+            ModuleOutputResolver(modules),
+            strictOutputs: true);
+    }
+
+    private static TemplateEvaluator.OnUnresolvedReferenceDelegate? ModuleOutputResolver(ImmutableDictionary<string, EvaluatedDeployment>? modules)
+    {
+        if (modules is null || modules.IsEmpty)
+        {
+            return null;
         }
 
         var moduleOutputs = modules.ToDictionary(
@@ -77,24 +117,24 @@ public sealed class TestEvaluatedFactsProvider(
             module => (JToken)new JObject { [TestTargetType.OutputsPropertyName] = module.Value.Template[TestTargetType.OutputsPropertyName] ?? new JObject() },
             StringComparer.OrdinalIgnoreCase);
 
-        var second = EvaluateTemplate(
-            template,
-            inputs,
-            context,
-            (reference, _, _) => moduleOutputs.TryGetValue(reference, out var resolved) ? resolved : null);
-
-        return new EvaluatedDeployment(second, file, context, modules);
+        return (reference, _, _) => moduleOutputs.TryGetValue(reference, out var resolved) ? resolved : null;
     }
 
     private static JObject EvaluateTemplate(
         JToken template,
         JObject? inputs,
         TestDeploymentContext context,
-        TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference)
+        TestMockRegistry? mocks,
+        TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference,
+        bool strictOutputs)
         => (JObject)TemplateEvaluator.Evaluate(
             template,
             inputs,
-            configuration => context.Apply(configuration) with { OnUnresolvedReferenceFunc = onUnresolvedReference }).ToJToken();
+            configuration => TestMockRegistryExtensions.Apply(mocks, context.Apply(configuration)) with
+            {
+                OnUnresolvedReferenceFunc = onUnresolvedReference,
+                StrictOutputs = strictOutputs,
+            }).ToJToken();
 
     /// <summary>
     /// Evaluates each module call this template makes, keyed by the symbolic name the caller used so
@@ -129,11 +169,11 @@ public sealed class TestEvaluatedFactsProvider(
         return modules.ToImmutable();
     }
 
-    private static JObject CollectOutputs(EvaluatedDeployment deployment)
+    private static JObject CollectOutputs(JObject template)
     {
         var result = new JObject();
 
-        if (deployment.Template[TestTargetType.OutputsPropertyName] is JObject declared)
+        if (template[TestTargetType.OutputsPropertyName] is JObject declared)
         {
             foreach (var output in declared.Properties())
             {

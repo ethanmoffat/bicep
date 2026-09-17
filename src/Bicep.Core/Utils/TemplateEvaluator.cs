@@ -45,17 +45,19 @@ namespace Bicep.Core.Utils
         {
             private readonly IEvaluationContext context;
             private readonly OrdinalInsensitiveDictionary<TemplateResource> resourceLookup;
+            private readonly OrdinalInsensitiveDictionary<string> symbolicResourceIds;
             private readonly EvaluationConfiguration config;
 
-            private TemplateEvaluationContext(IEvaluationContext context, ExpressionScope scope, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, EvaluationConfiguration config)
+            private TemplateEvaluationContext(IEvaluationContext context, ExpressionScope scope, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config)
             {
                 this.context = context;
                 this.Scope = scope;
                 this.resourceLookup = resourceLookup;
+                this.symbolicResourceIds = symbolicResourceIds;
                 this.config = config;
             }
 
-            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, EvaluationConfiguration config)
+            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config)
             {
                 var context = TemplateEngine.GetExpressionEvaluationContext(
                     config.ManagementGroup,
@@ -65,7 +67,7 @@ namespace Bicep.Core.Utils
                     NoOpTemplateMetricRecorder.Instance,
                     onGetExtension: static (_, _) => null);
 
-                return new TemplateEvaluationContext(context, context.Scope, resourceLookup, config);
+                return new TemplateEvaluationContext(context, context.Scope, resourceLookup, symbolicResourceIds, config);
             }
 
             public bool IsShortCircuitAllowed => this.context.IsShortCircuitAllowed;
@@ -77,13 +79,27 @@ namespace Bicep.Core.Utils
 
             public JToken EvaluateFunction(FunctionExpression functionExpression, FunctionArgument[] parameters, IEvaluationContext context, TemplateErrorAdditionalInfo? additionalnfo)
             {
-                if (functionExpression.Function.StartsWithOrdinalInsensitively(LanguageConstants.ListFunctionPrefix) && this.config.OnListFunc is not null)
+                if (functionExpression.Function.StartsWithOrdinalInsensitively(LanguageConstants.ListFunctionPrefix) &&
+                    (this.config.OnListFunc is not null || this.config.OnMockedRequestFunc is not null))
                 {
                     var resourceId = parameters[0].TryGetToken()?.Value<string>() ?? throw new UnreachableException();
                     var apiVersion = parameters[1].TryGetToken()?.Value<string>() ?? throw new UnreachableException();
                     var body = parameters.Length > 2 ? parameters[2].TryGetToken() : null;
+                    var target = ResolveRequestTarget(resourceId);
 
-                    return this.config.OnListFunc(functionExpression.Function, resourceId, apiVersion, body);
+                    if (this.config.OnMockedRequestFunc?.Invoke(functionExpression.Function, target.ResourceId, apiVersion, body, fullBody: false) is { } mocked)
+                    {
+                        return mocked;
+                    }
+
+                    if (this.config.OnListFunc is not null)
+                    {
+                        return this.config.OnListFunc(functionExpression.Function, resourceId, apiVersion, body);
+                    }
+
+                    // A list operation is answered by the resource provider, never by the template, so an
+                    // unanswered one has no offline result at all.
+                    this.config.OnUnansweredRequestFunc?.Invoke(functionExpression.Function, target.ResourceId, apiVersion);
                 }
 
                 if (functionExpression.Function.EqualsOrdinalInsensitively("reference"))
@@ -91,6 +107,30 @@ namespace Bicep.Core.Utils
                     var resourceId = parameters[0].TryGetToken()?.Value<string>() ?? throw new UnreachableException();
                     var apiVersion = parameters.Length > 1 ? (parameters[1].TryGetToken()?.Value<string>() ?? throw new UnreachableException()) : null;
                     var fullBody = parameters.Length > 2 && parameters[2].TryGetToken()?.Value<string>() is { } fullBodyParam && StringComparer.OrdinalIgnoreCase.Equals(fullBodyParam, "Full");
+
+                    if (this.config.OnMockedRequestFunc is not null || this.config.OnUnansweredRequestFunc is not null)
+                    {
+                        // A reference issued without an api version still has one; it is just spelled in the
+                        // declaration rather than at the call site. Resolving it from the template, and then
+                        // from the configured answers, keeps matching exact instead of version-agnostic.
+                        var target = ResolveRequestTarget(resourceId);
+                        var resolved = apiVersion
+                            ?? target.ApiVersion
+                            ?? this.config.ResolveMockedApiVersionFunc?.Invoke("reference", target.ResourceId);
+
+                        if (resolved is not null &&
+                            this.config.OnMockedRequestFunc?.Invoke("reference", target.ResourceId, resolved, requestBody: null, fullBody) is { } mocked)
+                        {
+                            return mocked;
+                        }
+
+                        // An existing resource is read, not deployed, so this template never computes its
+                        // runtime state. Without an answer there is nothing to report but the declaration.
+                        if (target.Resource?.Existing?.Value == true)
+                        {
+                            this.config.OnUnansweredRequestFunc?.Invoke("reference", target.ResourceId, resolved ?? target.ApiVersion);
+                        }
+                    }
 
                     if (apiVersion is not null && this.config.OnReferenceFunc is not null)
                     {
@@ -115,7 +155,25 @@ namespace Bicep.Core.Utils
             public bool ShouldIgnoreExceptionDuringEvaluation(Exception exception) =>
                 this.context.ShouldIgnoreExceptionDuringEvaluation(exception);
 
-            public IEvaluationContext WithNewScope(ExpressionScope scope) => new TemplateEvaluationContext(this.context, scope, this.resourceLookup, this.config);
+            /// <summary>
+            /// States a runtime read in terms of what it addresses rather than how it was written. Symbolic
+            /// name codegen spells a read as the declaration that produced it, so translating back to the
+            /// resource ID keeps a configured answer independent of which codegen the target compiled with.
+            /// </summary>
+            private (string ResourceId, string? ApiVersion, TemplateResource? Resource) ResolveRequestTarget(string reference)
+            {
+                if (this.symbolicResourceIds.TryGetValue(reference, out var symbolicId) &&
+                    this.resourceLookup.TryGetValue(symbolicId, out var symbolic))
+                {
+                    return (symbolicId, symbolic.ApiVersion.Value, symbolic);
+                }
+
+                return this.resourceLookup.TryGetValue(reference, out var declared)
+                    ? (reference, declared.ApiVersion.Value, declared)
+                    : (reference, null, null);
+            }
+
+            public IEvaluationContext WithNewScope(ExpressionScope scope) => new TemplateEvaluationContext(this.context, scope, this.resourceLookup, this.symbolicResourceIds, this.config);
         }
 
         private static readonly string DummyTenantId = Guid.Empty.ToString();
@@ -129,6 +187,25 @@ namespace Bicep.Core.Utils
         public delegate JToken OnListDelegate(string functionName, string resourceId, string apiVersion, JToken? body);
 
         public delegate JToken OnReferenceDelegate(string resourceId, string apiVersion, bool fullBody);
+
+        /// <summary>
+        /// Supplies a configured answer for a runtime read, or returns null to leave the evaluator's own
+        /// resolution in place. The api version of a reference issued without one is resolved before the
+        /// call rather than guessed here.
+        /// </summary>
+        public delegate JToken? OnMockedRequestDelegate(string operation, string resourceId, string apiVersion, JToken? requestBody, bool fullBody);
+
+        /// <summary>
+        /// Reports the api version a configured answer would use for a resource, when the caller did not
+        /// state one. Returning null means the request cannot be attributed to a single configured answer.
+        /// </summary>
+        public delegate string? ResolveMockedApiVersionDelegate(string operation, string resourceId);
+
+        /// <summary>
+        /// Reports a runtime read that nothing answered. Implementations raise; returning simply leaves the
+        /// evaluator's own behavior in place.
+        /// </summary>
+        public delegate void OnUnansweredRequestDelegate(string operation, string resourceId, string? apiVersion);
 
         /// <summary>
         /// Supplies a reference the template itself cannot resolve, such as a symbolic reference to a
@@ -148,6 +225,18 @@ namespace Bicep.Core.Utils
             OnReferenceDelegate? OnReferenceFunc)
         {
             public OnUnresolvedReferenceDelegate? OnUnresolvedReferenceFunc { get; init; }
+
+            public OnMockedRequestDelegate? OnMockedRequestFunc { get; init; }
+
+            public ResolveMockedApiVersionDelegate? ResolveMockedApiVersionFunc { get; init; }
+
+            public OnUnansweredRequestDelegate? OnUnansweredRequestFunc { get; init; }
+
+            /// <summary>
+            /// Evaluates outputs strictly, so an expression that cannot be computed is reported rather
+            /// than left in place as its own unevaluated text.
+            /// </summary>
+            public bool StrictOutputs { get; init; }
 
             public static EvaluationConfiguration Default = new(
                 DummyTenantId,
@@ -184,7 +273,17 @@ namespace Bicep.Core.Utils
             };
 
             var resourceLookup = template.Resources.ToOrdinalInsensitiveDictionary(x => GetResourceId(scopeString, x));
-            var evaluationContext = TemplateEvaluationContext.Create(template, resourceLookup, config);
+            var symbolicResourceIds = new OrdinalInsensitiveDictionary<string>();
+
+            foreach (var resource in template.Resources)
+            {
+                if (resource.SymbolicName is { } symbolicName)
+                {
+                    symbolicResourceIds[symbolicName] = GetResourceId(scopeString, resource);
+                }
+            }
+
+            var evaluationContext = TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config);
 
             for (int i = 0; i < template.Resources.Length; i++)
             {
@@ -210,9 +309,16 @@ namespace Bicep.Core.Utils
             {
                 foreach (var outputKey in template.Outputs.Keys.ToList())
                 {
-                    template.Outputs[outputKey].Value.Value = ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
-                        root: template.Outputs[outputKey].Value.Value,
-                        evaluationContext: evaluationContext);
+                    // Optimistic evaluation leaves an expression it cannot compute as raw text, which reads
+                    // as a successfully produced value. A caller that needs an output to mean what it says
+                    // asks for strict evaluation and gets the failure instead.
+                    template.Outputs[outputKey].Value.Value = config.StrictOutputs
+                        ? ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                            root: template.Outputs[outputKey].Value.Value,
+                            evaluationContext: evaluationContext)
+                        : ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                            root: template.Outputs[outputKey].Value.Value,
+                            evaluationContext: evaluationContext);
                 }
             }
         }

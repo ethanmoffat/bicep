@@ -1,0 +1,17 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Mocks are owned by the test, not by the target. They answer the runtime reads the target makes so a
+// deployment that depends on existing resources can still be evaluated offline.
+
+using 'mocks.biceptest'
+
+deploymentContext = {
+  subscriptionId: '00000000-0000-0000-0000-000000000001'
+  resourceGroup: 'contoso-prod-rg'
+}
+
+case eastus = {
+  identityName: 'contoso-deploy-identity'
+  artifactStorageName: 'contosoartifacts'
+}

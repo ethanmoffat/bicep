@@ -1,0 +1,51 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// The same target, with a response that answers less than the deployment reads. Run this file to see
+// what an unconfigured value does: it is unset until something consumes it, and only the consumption
+// fails.
+
+param identityName string
+param artifactStorageName string
+
+var scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/contoso-prod-rg'
+
+mocks = {
+  // principalId is answered; clientId is not mentioned at all.
+  deployIdentity: {
+    operation: 'reference'
+    resourceId: '${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}'
+    apiVersion: '2023-01-31'
+    response: {
+      properties: {
+        principalId: '11111111-1111-1111-1111-111111111111'
+      }
+    }
+  }
+  artifactKeys: {
+    operation: 'listKeys'
+    resourceId: '${scope}/providers/Microsoft.Storage/storageAccounts/${artifactStorageName}'
+    apiVersion: '2023-05-01'
+    response: {
+      keys: [
+        {
+          keyName: 'key1'
+          value: 'not-a-real-key'
+        }
+      ]
+    }
+  }
+}
+
+test unconfiguredField 'mocks.bicep' = {
+  params: {
+    identityName: identityName
+    artifactStorageName: artifactStorageName
+  }
+  assertions: {
+    clientIdIsResolved: {
+      passWhen: target.evaluated.outputs.deployClientId == '22222222-2222-2222-2222-222222222222'
+      message: 'The deployment reads a client ID that no mock answers.'
+    }
+  }
+}

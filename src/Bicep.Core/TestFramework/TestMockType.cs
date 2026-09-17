@@ -22,6 +22,7 @@ public static class TestMockType
     public const string ApiVersionPropertyName = "apiVersion";
     public const string RequestBodyPropertyName = "requestBody";
     public const string ResponsePropertyName = "response";
+    public const string ResponsePropertiesName = "properties";
 
     public const string ReferenceOperation = "reference";
     public const string ListKeysOperation = "listKeys";

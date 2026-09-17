@@ -144,6 +144,7 @@ namespace Bicep.Cli.Services
             try
             {
                 var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
+                var mocks = GetMocks(testFileModel, inputCase);
 
                 // Built here but not used unless an assertion actually reads an evaluated value: source
                 // policies must keep working without any deployment inputs.
@@ -152,7 +153,8 @@ namespace Bicep.Cli.Services
                     () => TryGetParameters(testFileModel, testDeclaration, inputCase),
                     inputCase?.Context,
                     facts,
-                    targetModel.SourceFile.FileHandle.Uri.GetPathRelativeTo(factRoot));
+                    targetModel.SourceFile.FileHandle.Uri.GetPathRelativeTo(factRoot),
+                    mocks);
 
                 var allAssertions = TestAssertionEvaluator.Evaluate(testFileModel, testDeclaration.DeclaringTest, facts, inputCase, evaluated);
                 var failedAssertions = allAssertions.Where(x => !x.Result).ToImmutableArray();
@@ -170,8 +172,10 @@ namespace Bicep.Cli.Services
             try
             {
                 var parameters = TryGetParameters(testFileModel, testDeclaration, inputCase);
+                var mocks = GetMocks(testFileModel, inputCase);
                 var templateJToken = TestTemplateEmitter.Emit(targetModel);
-                var template = TemplateEvaluator.Evaluate(templateJToken, parameters, configBuilder: (inputCase?.Context ?? TestDeploymentContext.Empty).Apply);
+                var context = inputCase?.Context ?? TestDeploymentContext.Empty;
+                var template = TemplateEvaluator.Evaluate(templateJToken, parameters, configBuilder: configuration => TestMockRegistryExtensions.Apply(mocks, context.Apply(configuration)));
                 var allAssertions = template.Asserts?.Select(p => new AssertionResult(p.Key, (bool)p.Value.Value)).ToImmutableArray() ?? [];
                 var failedAssertions = allAssertions.Where(a => !a.Result).Select(a => a).ToImmutableArray();
 
@@ -181,6 +185,28 @@ namespace Bicep.Cli.Services
             {
                 return new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
             }
+        }
+
+        /// <summary>
+        /// Builds the mocks in effect for one case. The definitions are ordinary Bicep owned by the test
+        /// file, so they are evaluated per case: a definition may read the case's own inputs, and each
+        /// case gets its own immutable registry rather than sharing mutable state with another.
+        /// </summary>
+        private static TestMockRegistry GetMocks(SemanticModel testFileModel, TestInputCase? inputCase)
+        {
+            if (testFileModel.Root.Syntax.Children.OfType<MocksDeclarationSyntax>().FirstOrDefault() is not { } declaration)
+            {
+                return TestMockRegistry.Empty;
+            }
+
+            var evaluated = BicepValueEvaluator.Evaluate(
+                new EmitterContext(testFileModel),
+                declaration.Value,
+                "object",
+                inputValues: inputCase?.Values,
+                deploymentContext: inputCase?.Context);
+
+            return TestMockRegistry.FromObject(evaluated as JObject);
         }
 
         /// <summary>
