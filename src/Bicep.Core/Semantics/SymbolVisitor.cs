@@ -127,6 +127,11 @@ namespace Bicep.Core.Semantics
             VisitDescendants(symbol);
         }
 
+        public virtual void VisitTestTargetSymbol(TestTargetSymbol symbol)
+        {
+            VisitDescendants(symbol);
+        }
+
         public virtual void VisitErrorSymbol(ErrorSymbol symbol)
         {
             VisitDescendants(symbol);

@@ -9,6 +9,7 @@ using Bicep.Core.Semantics.Metadata;
 using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.SourceGraph;
 using Bicep.Core.Syntax;
+using Bicep.Core.TestFramework;
 using Bicep.Core.Text;
 
 namespace Bicep.Core.Semantics
@@ -154,7 +155,23 @@ namespace Bicep.Core.Semantics
 
         public override void VisitTestDeclarationSyntax(TestDeclarationSyntax syntax)
         {
-            base.VisitTestDeclarationSyntax(syntax);
+            // Assertions are the only place the compiler-provided 'target' symbol exists. Scoping it to
+            // the assertions object keeps it out of 'match', 'params' and every other Bicep file.
+            if (syntax.TryGetAssertionsSyntax() is { } assertions)
+            {
+                var scope = new LocalScope(string.Empty, syntax, assertions, ImmutableArray<DeclaredSymbol>.Empty, ImmutableArray<LocalScope>.Empty, ScopeResolution.InheritAll);
+                this.PushScope(scope);
+
+                DeclareSymbol(new TestTargetSymbol(this.context, syntax, assertions, TestTargetType.Create()));
+
+                base.VisitTestDeclarationSyntax(syntax);
+
+                this.PopScope();
+            }
+            else
+            {
+                base.VisitTestDeclarationSyntax(syntax);
+            }
 
             var symbol = new TestSymbol(this.context, syntax.Name.IdentifierName, syntax);
             DeclareSymbol(symbol);

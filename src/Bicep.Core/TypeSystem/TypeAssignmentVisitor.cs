@@ -387,6 +387,7 @@ namespace Bicep.Core.TypeSystem
                 }
 
                 ValidateTestMatchSelector(syntax, diagnostics);
+                ValidateTestAssertions(syntax, diagnostics);
 
                 return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType);
 
@@ -439,6 +440,48 @@ namespace Bicep.Core.TypeSystem
                     {
                         diagnostics.Write(DiagnosticBuilder.ForPosition(pattern).TestMatchSelectorPatternEscapesRoot(patternValue));
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks the structure of a test's named assertions. An assertion judges its result either by a
+        /// boolean or by an offending-fact collection, and declaring neither or both leaves no way to
+        /// decide the outcome.
+        /// </summary>
+        private static void ValidateTestAssertions(TestDeclarationSyntax syntax, IDiagnosticWriter diagnostics)
+        {
+            if (syntax.TryGetAssertionsProperty() is not { } assertionsProperty)
+            {
+                return;
+            }
+
+            if (syntax.TryGetAssertionsSyntax() is not { } assertions)
+            {
+                return;
+            }
+
+            // An empty object is an authoring mistake rather than a request to fall back to the target
+            // template's own assertions, which is what omitting the property entirely means.
+            if (!assertions.Properties.Any())
+            {
+                diagnostics.Write(DiagnosticBuilder.ForPosition(assertionsProperty.Key).TestAssertionsCannotBeEmpty());
+                return;
+            }
+
+            foreach (var assertion in assertions.Properties)
+            {
+                if (assertion.Value is not ObjectSyntax body)
+                {
+                    continue;
+                }
+
+                var hasPassWhen = body.TryGetPropertyByName(TestAssertion.PassWhenPropertyName) is not null;
+                var hasFailOn = body.TryGetPropertyByName(TestAssertion.FailOnPropertyName) is not null;
+
+                if (hasPassWhen == hasFailOn)
+                {
+                    diagnostics.Write(DiagnosticBuilder.ForPosition(assertion.Key).TestAssertionRequiresExactlyOneCondition());
                 }
             }
         }
@@ -2574,6 +2617,9 @@ namespace Bicep.Core.TypeSystem
 
                     case LocalThisNamespaceSymbol localThisNamespace:
                         return localThisNamespace.DeclaredType;
+
+                    case TestTargetSymbol testTarget:
+                        return testTarget.DeclaredType;
 
                     case ImportedSymbol imported:
                         return imported.Type;

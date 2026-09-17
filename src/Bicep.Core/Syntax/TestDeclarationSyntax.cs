@@ -73,6 +73,18 @@ namespace Bicep.Core.Syntax
             => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestMatchPropertyName);
 
         /// <summary>
+        /// The body-owned assertions object, if one was declared.
+        /// </summary>
+        public ObjectSyntax? TryGetAssertionsSyntax()
+            => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestAssertionsPropertyName)?.Value as ObjectSyntax;
+
+        /// <summary>
+        /// The <c>assertions</c> property, if declared, regardless of whether its value is a valid object.
+        /// </summary>
+        public ObjectPropertySyntax? TryGetAssertionsProperty()
+            => this.TryGetBody()?.TryGetPropertyByName(LanguageConstants.TestAssertionsPropertyName);
+
+        /// <summary>
         /// The literal target path as a string syntax node, or null when the test has no literal path
         /// or the path could not be parsed.
         /// </summary>

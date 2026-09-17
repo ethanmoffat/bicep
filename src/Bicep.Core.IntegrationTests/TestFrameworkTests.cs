@@ -285,6 +285,195 @@ test foo = {
             });
         }
         [TestMethod]
+        public void Assertions_can_query_the_compiler_provided_target_facts()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test approvedSql = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    sqlMustBeApproved: {
+      failOn: filter(target.resources, r => toLower(r.type) == 'microsoft.sql/servers' && !r.existing && !startsWith(r.file, 'modules/sql/'))
+      message: 'Declare SQL servers only inside the approved implementation.'
+    }
+    mustDeclareSomething: {
+      passWhen: !empty(target.withModules.resources) || !empty(target.withModules.modules)
+      message: 'The file must declare something.'
+    }
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void Assertions_are_also_available_to_a_test_with_a_literal_target()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework,
+                ("main.bicep", @"
+test foo 'testMain.bicep' = {
+  assertions: {
+    noModules: {
+      failOn: target.modules
+      message: 'The target must not declare modules.'
+    }
+  }
+}
+"),
+                ("testMain.bicep", @"
+param name string = 'us'
+"));
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void Target_is_not_visible_outside_an_assertion()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+var leaked = target.resources
+
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  params: {
+    name: target.resources
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP057", DiagnosticLevel.Error, "The name \"target\" does not exist in the current context."),
+                ("BCP057", DiagnosticLevel.Error, "The name \"target\" does not exist in the current context."),
+            });
+        }
+
+        [TestMethod]
+        public void Target_is_not_visible_in_an_ordinary_bicep_file()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+var leaked = target
+");
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP057", DiagnosticLevel.Error, "The name \"target\" does not exist in the current context."),
+            });
+        }
+
+        [TestMethod]
+        public void Misspelled_target_facts_are_reported_rather_than_silently_empty()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      failOn: target.resourcez
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP083", DiagnosticLevel.Error, "The type \"target\" does not contain property \"resourcez\". Did you mean \"resources\"?"),
+            });
+        }
+
+        [TestMethod]
+        public void Misspelled_fact_properties_are_reported()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      failOn: filter(target.resources, r => r.typ == 'x')
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"resourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP083", DiagnosticLevel.Error, "The type \"resourceFact\" does not contain property \"typ\". Did you mean \"type\"?"),
+            });
+        }
+
+        [TestMethod]
+        public void An_empty_assertions_object_is_an_authoring_error()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {}
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP462", DiagnosticLevel.Error, "The \"assertions\" object must declare at least one assertion. Remove it entirely to evaluate the assertions declared by the target instead."),
+            });
+        }
+
+        [TestMethod]
+        public void An_assertion_must_declare_exactly_one_condition()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    neither: {
+      message: 'nothing to judge'
+    }
+    both: {
+      passWhen: true
+      failOn: target.modules
+      message: 'ambiguous'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP463", DiagnosticLevel.Error, "An assertion must declare exactly one of \"passWhen\" or \"failOn\"."),
+                ("BCP463", DiagnosticLevel.Error, "An assertion must declare exactly one of \"passWhen\" or \"failOn\"."),
+            });
+        }
+
+        [TestMethod]
+        public void An_assertion_must_declare_a_message()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    unexplained: {
+      passWhen: true
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"object\" declaration is missing the following required properties: \"message\"."),
+            });
+        }
+
+        [TestMethod]
         public void A_test_file_cannot_be_referenced_as_a_deployable_module()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework,

@@ -1305,6 +1305,10 @@ namespace Bicep.Core.TypeSystem
                     // the syntax node is referencing a local 'this' namespace - use its declared type
                     return new DeclaredTypeAssignment(localThisNamespace.DeclaredType, declaringSyntax: null);
 
+                case TestTargetSymbol testTarget:
+                    // the syntax node is referencing the test's compiler-provided target facts
+                    return new DeclaredTypeAssignment(testTarget.DeclaredType, declaringSyntax: null);
+
                 case DeclaredSymbol declaredSymbol when IsCycleFree(declaredSymbol):
                     // the syntax node is referencing a declared symbol
                     // use its declared type
@@ -2276,6 +2280,7 @@ namespace Bicep.Core.TypeSystem
                 TypeSymbolValidationFlags.Default,
                 [
                     new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Required | TypePropertyFlags.Constant),
+                    new NamedTypeProperty(LanguageConstants.TestAssertionsPropertyName, CreateAssertionsType(), TypePropertyFlags.None),
                     new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, TypePropertyFlags.WriteOnly),
                 ],
                 null);
@@ -2315,6 +2320,42 @@ namespace Bicep.Core.TypeSystem
                 null);
         }
 
+        /// <summary>
+        /// The body type of a test's named assertions. Each assertion is an arbitrary name, so the object
+        /// is a dictionary rather than a fixed set of properties. The assertion itself is closed, so a
+        /// misspelled property is reported instead of being silently ignored.
+        /// </summary>
+        private static ObjectType CreateAssertionsType()
+        {
+            var assertionType = new ObjectType(
+                LanguageConstants.TestAssertionsPropertyName,
+                TypeSymbolValidationFlags.Default,
+                [
+                    new NamedTypeProperty(
+                        TestAssertion.PassWhenPropertyName,
+                        LanguageConstants.Bool,
+                        TypePropertyFlags.None,
+                        "A condition that must be true for this assertion to pass."),
+                    new NamedTypeProperty(
+                        TestAssertion.FailOnPropertyName,
+                        LanguageConstants.Array,
+                        TypePropertyFlags.None,
+                        "The offending facts. The assertion passes when this collection is empty and reports each element's source location otherwise."),
+                    new NamedTypeProperty(
+                        TestAssertion.MessagePropertyName,
+                        LanguageConstants.String,
+                        TypePropertyFlags.Required,
+                        "The message explaining what to do when this assertion fails."),
+                ],
+                null);
+
+            return new ObjectType(
+                LanguageConstants.TestAssertionsPropertyName,
+                TypeSymbolValidationFlags.Default,
+                [],
+                new TypeProperty(assertionType));
+        }
+
         private TypeSymbol CreateTestType(IEnumerable<NamedTypeProperty> paramsProperties, string typeName)
         {
             var paramsType = new ObjectType(LanguageConstants.TestParamsPropertyName, TypeSymbolValidationFlags.Default, paramsProperties, null);
@@ -2327,6 +2368,7 @@ namespace Bicep.Core.TypeSystem
                 new[]
                 {
                     new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, paramsRequiredFlag | TypePropertyFlags.WriteOnly),
+                    new NamedTypeProperty(LanguageConstants.TestAssertionsPropertyName, CreateAssertionsType(), TypePropertyFlags.None),
                     // 'match' is recognised here purely so that combining it with a literal target path is
                     // reported once, as the specific conflict it is, instead of as an unknown property.
                     new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Constant),

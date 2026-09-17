@@ -2109,6 +2109,14 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic TestFileIsNotDeployable() => CoreError(
                 "BCP461",
                 $"A \"{LanguageConstants.TestFileExtension}\" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead.");
+
+            public Diagnostic TestAssertionsCannotBeEmpty() => CoreError(
+                "BCP462",
+                $"The \"{LanguageConstants.TestAssertionsPropertyName}\" object must declare at least one assertion. Remove it entirely to evaluate the assertions declared by the target instead.");
+
+            public Diagnostic TestAssertionRequiresExactlyOneCondition() => CoreError(
+                "BCP463",
+                $"An assertion must declare exactly one of \"{TestAssertion.PassWhenPropertyName}\" or \"{TestAssertion.FailOnPropertyName}\".");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

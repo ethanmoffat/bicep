@@ -188,6 +188,8 @@ namespace Bicep.Core
         // test properties
         public const string TestParamsPropertyName = "params";
         public const string TestMatchPropertyName = "match";
+        public const string TestAssertionsPropertyName = "assertions";
+        public const string TestTargetName = "target";
 
         // resource properties
         public const string ResourceScopePropertyName = "scope";
