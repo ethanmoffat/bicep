@@ -649,6 +649,61 @@ test failing 'target.bicep' = {
         }
 
         [TestMethod]
+        public async Task Lint_BicepTestFile_ReportsDiagnosticsWithoutRunningTests()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            // This target's assertion is false. Linting must not evaluate it.
+            FileHelper.SaveResultFile(TestContext, "target.bicep", @"param foo string
+assert isEqual = foo == 'NeverMatches'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy 'target.bicep' = {
+  params: {
+    foo: 1
+  }
+}", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "lint", testPath);
+
+            using (new AssertionScope())
+            {
+                // A test file is ordinary Bicep source, so its own type errors are reported.
+                result.Should().Be(1);
+                error.Should().Contain("BCP036");
+
+                // Linting analyses source. It never evaluates the tests.
+                output.Should().NotContain("Evaluation");
+                error.Should().NotContain("Evaluation");
+            }
+        }
+
+        [TestMethod]
+        public async Task Format_BicepTestFile_FormatsInPlace()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", "test    policy   'target.bicep'    = {  }", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "format", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                error.Should().BeEmpty();
+
+                // Formatting preserves the .biceptest extension rather than emitting a .bicep file.
+                File.Exists(testPath).Should().BeTrue();
+                File.ReadAllText(testPath).Should().Contain("test policy 'target.bicep' = {}");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

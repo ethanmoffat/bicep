@@ -28,7 +28,7 @@ public class LintCommand(
 
         foreach (var inputUri in inputOutputArgumentsResolver.ResolveFilePatternInputArguments(args))
         {
-            ArgumentHelper.ValidateBicepOrBicepParamFile(inputUri);
+            ArgumentHelper.ValidateBicepSourceFile(inputUri);
 
             var result = await Lint(inputUri, args.NoRestore, args.DiagnosticsFormat);
             hasErrors |= result.HasErrors;

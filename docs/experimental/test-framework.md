@@ -106,6 +106,9 @@ Top-level completions in a `.biceptest` file are scoped to what a test file can 
 
 Deployment-only declarations are omitted because a test file is never deployed. The `test` keyword is hidden unless the `testFramework` experimental feature is enabled, so the completion list matches what will actually compile.
 
+`bicep lint` and `bicep format` also accept `.biceptest` files. Both analyse or rewrite the source
+only; neither evaluates the tests, and formatting preserves the `.biceptest` extension.
+
 ## Assertions
 
 Assertions are currently authored in the Bicep file under test using the `assert` keyword. Each `assert` is evaluated after the test's parameters are applied.

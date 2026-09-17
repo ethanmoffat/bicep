@@ -97,6 +97,19 @@ public class ArgumentHelper
         }
     }
 
+    /// <summary>
+    /// Validates an input to a command that operates on Bicep source of any kind, such as linting
+    /// or formatting. Test files are ordinary source: they are linted and formatted like any other
+    /// Bicep file, and are only excluded from commands that produce a deployable artifact.
+    /// </summary>
+    public static void ValidateBicepSourceFile(IOUri fileUri)
+    {
+        if (!fileUri.HasBicepExtension() && !fileUri.HasBicepParamExtension() && !fileUri.HasBicepTestExtension())
+        {
+            throw new CommandLineException(string.Format(CliResources.UnrecognizedBicepSourceFileExtensionMessage, fileUri.ToString()));
+        }
+    }
+
     public static DiagnosticOptions GetDiagnosticOptions(DiagnosticsFormat? diagnosticsFormat)
         => new(
             Format: diagnosticsFormat ?? DiagnosticsFormat.Default,

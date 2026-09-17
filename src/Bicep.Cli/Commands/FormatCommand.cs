@@ -38,7 +38,7 @@ public class FormatCommand(
 
         foreach (var (inputUri, outputUri) in inputOutputArgumentsResolver.ResolveFilePatternInputOutputArguments(args))
         {
-            ArgumentHelper.ValidateBicepOrBicepParamFile(inputUri);
+            ArgumentHelper.ValidateBicepSourceFile(inputUri);
             this.Format(args, inputUri, outputUri, args.OutputToStdOut);
         }
 

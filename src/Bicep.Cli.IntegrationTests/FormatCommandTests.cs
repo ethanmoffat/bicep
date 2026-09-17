@@ -54,7 +54,7 @@ namespace Bicep.Cli.IntegrationTests
         {
             var result = await Bicep("format", "/dev/zero");
 
-            AssertFailure(result, $@"The specified input ""{Path.GetFullPath("/dev/zero").Replace("\\", "\\\\")}"" was not recognized as a Bicep or Bicep Parameters file. Valid files must either the .bicep or .bicepparam extension.");
+            AssertFailure(result, $@"The specified input ""{Path.GetFullPath("/dev/zero").Replace("\\", "\\\\")}"" was not recognized as a Bicep source file. Valid files must use the .bicep, .bicepparam or .biceptest extension.");
         }
 
         [TestMethod]
