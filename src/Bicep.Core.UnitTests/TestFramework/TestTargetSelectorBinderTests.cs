@@ -76,6 +76,10 @@ public class TestTargetSelectorBinderTests
     [DataRow("a/../../b.bicep")]
     [DataRow("/rooted.bicep")]
     [DataRow("C:\\rooted.bicep")]
+    [DataRow("c:/rooted.bicep")]
+    [DataRow("Z:\\deep\\rooted.bicep")]
+    [DataRow("//server/share/rooted.bicep")]
+    [DataRow("\\\\server\\share\\rooted.bicep")]
     public void PatternEscapesRoot_rejects_patterns_that_leave_the_root(string pattern)
         => TestTargetSelector.PatternEscapesRoot(pattern).Should().BeTrue();
 
@@ -85,6 +89,7 @@ public class TestTargetSelectorBinderTests
     [DataRow("**/*.bicep")]
     [DataRow("a\\b\\*.bicep")]
     [DataRow("..hidden/*.bicep")]
+    [DataRow("ab:cd.bicep")]
     public void PatternEscapesRoot_accepts_patterns_contained_by_the_root(string pattern)
         => TestTargetSelector.PatternEscapesRoot(pattern).Should().BeFalse();
 

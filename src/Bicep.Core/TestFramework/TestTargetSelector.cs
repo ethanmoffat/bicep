@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
-using Bicep.IO.Abstraction;
 
 namespace Bicep.Core.TestFramework;
 
@@ -50,17 +49,28 @@ public record TestTargetSelector(
     /// Whether an include or exclude pattern would reach outside the selector root. Only the root may
     /// widen the search, so that reading a selector is enough to know the bounds of the walk.
     /// </summary>
+    /// <remarks>
+    /// The judgement is made from the pattern text alone rather than by asking the host whether the
+    /// path is rooted. A test file is source that is commonly authored on one operating system and run
+    /// on another, so a drive-qualified pattern is rejected everywhere instead of being read as an
+    /// ordinary relative name wherever drive letters carry no meaning.
+    /// </remarks>
     public static bool PatternEscapesRoot(string pattern)
     {
         var normalized = NormalizeSeparators(pattern);
 
-        if (normalized.StartsWith('/') || IOUri.IsAbsoluteFilePath(normalized))
+        if (normalized.StartsWith('/') || HasDriveQualifier(normalized))
         {
             return true;
         }
 
         return normalized.Split('/').Any(segment => segment == "..");
     }
+
+    private static bool HasDriveQualifier(string normalizedPattern)
+        => normalizedPattern.Length >= 2 &&
+           char.IsAsciiLetter(normalizedPattern[0]) &&
+           normalizedPattern[1] == ':';
 
     public static string NormalizeSeparators(string pattern) => pattern.Replace('\\', '/');
 }
