@@ -29,8 +29,43 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
+  # A release is a thing other people consume, so it must not be possible to publish one
+  # from a revision whose tests are failing. The CLI is built for Windows and Linux and the
+  # test framework does a great deal of path handling, so the gate runs on both rather than
+  # only on the platform the work happened to be authored on.
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # avoid shallow clone so nbgv can do its work.
+          submodules: true
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      - name: Build
+        run: dotnet build --configuration release
+
+      - name: Test Bicep.Core.UnitTests
+        run: dotnet test --no-build --configuration release ./src/Bicep.Core.UnitTests/Bicep.Core.UnitTests.csproj
+
+      - name: Test Bicep.Core.IntegrationTests
+        run: dotnet test --no-build --configuration release ./src/Bicep.Core.IntegrationTests/Bicep.Core.IntegrationTests.csproj
+
+      - name: Test Bicep.Cli.IntegrationTests
+        run: dotnet test --no-build --configuration release ./src/Bicep.Cli.IntegrationTests/Bicep.Cli.IntegrationTests.csproj
+
   build:
     name: Build CLI (${{ matrix.rid }})
+    needs: test
     runs-on: ubuntu-latest
 
     strategy:
@@ -72,6 +107,7 @@ jobs:
 
   vsix:
     name: Build VS Code extension
+    needs: test
     runs-on: ubuntu-latest
     env:
       TURBO_TELEMETRY_DISABLED: 1
