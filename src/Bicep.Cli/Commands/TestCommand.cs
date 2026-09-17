@@ -31,6 +31,7 @@ namespace Bicep.Cli.Commands
         private readonly IFeatureProviderFactory featureProviderFactory;
         private readonly InputOutputArgumentsResolver inputOutputArgumentsResolver;
         private readonly IFileSystem fileSystem;
+        private readonly OutputWriter outputWriter;
 
         public TestCommand(
             IOContext io,
@@ -39,7 +40,8 @@ namespace Bicep.Cli.Commands
             BicepCompiler compiler,
             IFeatureProviderFactory featureProviderFactory,
             InputOutputArgumentsResolver inputOutputArgumentsResolver,
-            IFileSystem fileSystem)
+            IFileSystem fileSystem,
+            OutputWriter outputWriter)
         {
             this.logger = logger;
             this.diagnosticLogger = diagnosticLogger;
@@ -48,6 +50,7 @@ namespace Bicep.Cli.Commands
             this.io = io;
             this.inputOutputArgumentsResolver = inputOutputArgumentsResolver;
             this.fileSystem = fileSystem;
+            this.outputWriter = outputWriter;
         }
 
         public async Task<int> RunAsync(TestArguments args)
@@ -57,6 +60,16 @@ namespace Bicep.Cli.Commands
             if (args.List && args.OutputFormat == TestOutputFormat.JUnit)
             {
                 await io.Error.Writer.WriteLineAsync($"{Option.List} does not produce test results, so it cannot be reported as JUnit. Use \"{Option.OutputFormat} Json\" to list in a machine-readable form.");
+
+                return 1;
+            }
+
+            // A results file has to be written in a stated format. Guessing one - from the extension,
+            // or from a default that may later change - would silently write a document a pipeline
+            // cannot parse.
+            if (args.ResultsFile is not null && args.OutputFormat is null or TestOutputFormat.Default)
+            {
+                await io.Error.Writer.WriteLineAsync($"{Option.ResultsFile} requires \"{Option.OutputFormat} Json\" or \"{Option.OutputFormat} JUnit\".");
 
                 return 1;
             }
@@ -82,6 +95,13 @@ namespace Bicep.Cli.Commands
             // Both machine-readable formats keep stdout for the document and progress text on stderr,
             // so a host can parse stdout even when the command exits non-zero.
             var machineReadable = json || args.OutputFormat == TestOutputFormat.JUnit;
+            var resultsFileUri = args.ResultsFile is { } resultsFile
+                ? inputOutputArgumentsResolver.PathToUri(resultsFile)
+                : (IOUri?)null;
+            // The format says which document to produce; the results file says where to put it. When
+            // it goes to a file, stdout is free to carry the ordinary human log - which is what a
+            // pipeline wants: a readable log for people and a parseable file for the build system.
+            var documentToStdout = machineReadable && resultsFileUri is null;
             var allResults = ImmutableArray.CreateBuilder<TestResult>();
             var allInventoryEntries = ImmutableArray.CreateBuilder<TestInventoryEntry>();
 
@@ -106,7 +126,7 @@ namespace Bicep.Cli.Commands
 
                 if (args.List)
                 {
-                    var (listHasErrors, inventory) = await ListAsync(args, inputUri, json);
+                    var (listHasErrors, inventory) = await ListAsync(args, inputUri, documentToStdout);
 
                     hasErrors |= listHasErrors;
                     allInventoryEntries.AddRange(inventory.Entries);
@@ -128,7 +148,7 @@ namespace Bicep.Cli.Commands
 
                 var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel(), inputCases);
 
-                if (!machineReadable)
+                if (!documentToStdout)
                 {
                     LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
                 }
@@ -142,29 +162,49 @@ namespace Bicep.Cli.Commands
             {
                 if (json)
                 {
-                    await io.Output.Writer.WriteLineAsync(TestReportSerializer.SerializeInventory(allInventoryEntries));
+                    await EmitAsync(TestReportSerializer.SerializeInventory(allInventoryEntries), resultsFileUri);
                 }
             }
             else
             {
                 var aggregated = new TestResults(allResults.ToImmutable());
 
-                if (machineReadable)
-                {
-                    await io.Output.Writer.WriteLineAsync(json
-                        ? TestReportSerializer.SerializeResults(aggregated)
-                        : TestJUnitSerializer.SerializeResults(aggregated, fileSystem.Directory.GetCurrentDirectory()));
-                    hasErrors |= !aggregated.Success;
-                }
-                else
+                if (!documentToStdout)
                 {
                     // A single summary covers every discovered file, so that one failing file is never
                     // followed by a later file reporting overall success.
                     hasErrors |= LogSummary(aggregated, hasErrors);
                 }
+
+                if (machineReadable)
+                {
+                    await EmitAsync(json
+                        ? TestReportSerializer.SerializeResults(aggregated)
+                        : TestJUnitSerializer.SerializeResults(aggregated, fileSystem.Directory.GetCurrentDirectory()),
+                        resultsFileUri);
+
+                    hasErrors |= !aggregated.Success;
+                }
             }
 
             return hasErrors ? 1 : 0;
+        }
+
+        /// <summary>
+        /// Writes the machine-readable document where it was asked for. A results file is written even
+        /// when the run failed: a pipeline that only gets results from a passing run cannot report what
+        /// went wrong.
+        /// </summary>
+        private async Task EmitAsync(string document, IOUri? resultsFileUri)
+        {
+            if (resultsFileUri is { } uri)
+            {
+                await outputWriter.WriteToFileAsync(uri, document);
+            }
+            else
+            {
+                await io.Output.Writer.WriteLineAsync(document);
+            }
         }
 
         /// <summary>
@@ -208,13 +248,13 @@ namespace Bicep.Cli.Commands
         /// Reports what a test file covers without compiling, restoring or evaluating any target.
         /// Listing confirms inventory; it never claims the targets compile or pass.
         /// </summary>
-        private async Task<(bool hasErrors, TestInventory inventory)> ListAsync(TestArguments args, IOUri inputUri, bool json)
+        private async Task<(bool hasErrors, TestInventory inventory)> ListAsync(TestArguments args, IOUri inputUri, bool documentToStdout)
         {
             var compilation = await compiler.CreateCompilation(inputUri, skipRestore: true);
             var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
             var inventory = TestDiscoveryService.Discover(compilation.GetEntrypointSemanticModel());
 
-            if (!json)
+            if (!documentToStdout)
             {
                 foreach (var entry in inventory.Entries)
                 {
@@ -351,6 +391,10 @@ namespace Bicep.Cli.Commands
             {
                 Description = "Set the format of test output (Default, Json, JUnit). Json and JUnit write a machine-readable document to stdout and keep progress text on stderr.",
             };
+            var resultsFileOption = new System.CommandLine.Option<string?>(Option.ResultsFile)
+            {
+                Description = "Write the machine-readable document to the specified file instead of stdout, leaving stdout for progress text. Requires --output-format Json or JUnit.",
+            };
             var noRestoreOption = new System.CommandLine.Option<bool>(Option.NoRestore)
             {
                 Description = "Do not restore modules prior to running tests.",
@@ -365,6 +409,7 @@ namespace Bicep.Cli.Commands
             command.Add(inputsOption);
             command.Add(listOption);
             command.Add(outputFormatOption);
+            command.Add(resultsFileOption);
             command.Add(noRestoreOption);
             command.Add(diagnosticsFormatOption);
             command.Validators.Add((System.CommandLine.Parsing.CommandResult result) => CommandLineBuilderContext.ValidatePositionalArgument(result, inputFileArgument));
@@ -378,6 +423,7 @@ namespace Bicep.Cli.Commands
                     result.GetValue(listOption),
                     [.. result.GetValue(inputsOption) ?? []],
                     result.GetValue(outputFormatOption),
+                    result.GetValue(resultsFileOption),
                     result.GetValue(diagnosticsFormatOption));
 
                 return await context.GetCommand<TestCommand>().RunAsync(args);

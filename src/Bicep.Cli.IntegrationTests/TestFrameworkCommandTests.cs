@@ -778,6 +778,100 @@ test failing 'target.bicep' = {
         }
 
         [TestMethod]
+        public async Task Test_ResultsFile_WritesTheDocumentToTheFileAndKeepsTheHumanLog()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test failing 'target.bicep' = {
+  params: {
+    foo: 'ShouldFail'
+  }
+}", outputFileDir);
+
+            // Nested under a directory that does not exist, so a caller never has to pre-create it.
+            var resultsPath = Path.Combine(outputFileDir, "results", "nested", "results.xml");
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-format", "junit", "--results-file", resultsPath);
+
+            using (new AssertionScope())
+            {
+                // A pipeline that only gets results from a passing run cannot report what went wrong,
+                // so the file is written even though the run failed.
+                result.Should().Be(1);
+                File.Exists(resultsPath).Should().BeTrue();
+
+                var root = XDocument.Parse(File.ReadAllText(resultsPath)).Root!;
+                root.Name.LocalName.Should().Be("testsuites");
+                root.Attribute("failures")!.Value.Should().Be("1");
+
+                // The format says which document to produce; the results file says where to put it.
+                // With the document in a file, the console carries the ordinary human log - here on
+                // stderr, where failures always go - rather than nothing at all.
+                error.Should().Contain("Evaluation failing");
+                error.Should().Contain("Evaluation Summary: Failure!");
+
+                // And the document is not duplicated onto the console.
+                output.Should().NotContain("<testsuites");
+                error.Should().NotContain("<testsuites");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_ResultsFile_RequiresAStatedFormat()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
+            var resultsPath = Path.Combine(outputFileDir, "results.xml");
+
+            var (_, error, result) = await Bicep(settings, "test", testPath, "--results-file", resultsPath);
+
+            using (new AssertionScope())
+            {
+                // Guessing the format - from the extension, or from a default that may later change -
+                // would silently write a document the pipeline cannot parse.
+                result.Should().Be(1);
+                error.Should().Contain("--results-file requires");
+                File.Exists(resultsPath).Should().BeFalse();
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_ResultsFile_WritesTheInventoryForListMode()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
+            var resultsPath = Path.Combine(outputFileDir, "inventory.json");
+
+            var (output, _, result) = await Bicep(settings, "test", testPath, "--list", "--output-format", "json", "--results-file", resultsPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+
+                JsonDocument.Parse(File.ReadAllText(resultsPath)).RootElement
+                    .GetProperty("mode").GetString().Should().Be("list");
+
+                // The human inventory is still listed on stdout.
+                output.Should().Contain("main.biceptest: policy -> target.bicep");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_JsonOutput_ReportsInventoryForListMode()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

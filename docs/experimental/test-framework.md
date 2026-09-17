@@ -1197,6 +1197,39 @@ Notes on the mapping:
   JUnit document would publish an inventory as if it were a passing test run. Use
   `--output-format json` to list in a machine-readable form.
 
+### Writing the document to a file with `--results-file`
+
+A build system usually wants both things at once: a readable log for people and a parseable document
+for itself. `--results-file` writes the document to a path, leaving the console to carry the ordinary
+human output.
+
+```console
+$ bicep test source-policy-failing.biceptest --output-format junit --results-file out/policy.xml
+WARNING: The following experimental Bicep features have been enabled: TestFramework. ...
+[✗] Evaluation forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		blobStorage.bicep(12): storageAccount
+[✗] Evaluation forbidStorageAccounts (modules/fileStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		fileStorage.bicep(12): storageAccount
+Evaluation Summary: Failure!
+Total: 2 - Success: 0 - Skipped: 0 - Failed: 2
+```
+
+`out/policy.xml` then holds exactly the document `--output-format junit` would have written to
+stdout.
+
+- The file is written **even when the run fails**, which is the point: a pipeline that only gets
+  results from a passing run cannot report what went wrong. The exit code is unchanged.
+- Missing parent directories are created, so a caller never has to pre-create an output directory.
+- `--results-file` requires `--output-format Json` or `--output-format JUnit`. Guessing the format,
+  from the file extension or from a default that may later change, would silently write a document
+  the pipeline cannot parse.
+- It works with `--list` and `--output-format json` too, writing the inventory to the file while the
+  console lists it for a human.
+
 ## Worked example
 
 The complete example lives in [`docs/experimental/examples/test-framework`](./examples/test-framework). It contains:
