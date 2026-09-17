@@ -1133,6 +1133,326 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_SemanticAssertion_CanScopeAPolicyToADirectoryWithoutMatchingLookalikes()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "directory");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src", "sql"));
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src", "sqlbackup"));
+
+            // Inside the approved directory, including a nested child resource.
+            FileHelper.SaveResultFile(TestContext, "src/sql/approved.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+
+                  resource db 'databases' = {
+                    name: 'db'
+                    location: 'westus'
+                  }
+                }
+                """, outputFileDir);
+            // A directory whose name merely starts with the approved one must not be treated as approved.
+            FileHelper.SaveResultFile(TestContext, "src/sqlbackup/lookalike.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'lookalike'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sqlLocationPolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    sqlOnlyUnderTheApprovedDirectory: {
+                      failOn: filter(target.resources, r => startsWith(r.type, 'Microsoft.Sql/') && !startsWith(r.file, 'sql/'))
+                      message: 'SQL resources may only be declared under sql/.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                // The approved file passes even though it declares a nested SQL child.
+                output.Should().Contain("Evaluation sqlLocationPolicy (src/sql/approved.bicep) Passed!");
+                error.Should().Contain("Evaluation sqlLocationPolicy (src/sqlbackup/lookalike.bicep) Failed");
+                error.Should().Contain("sqlbackup/lookalike.bicep(1): sql");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_DistinguishesExistingReferencesFromDeclarations()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "existing");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            // An existing reference adopts a resource rather than creating one, and text that merely
+            // looks like a declaration is a comment, not a declaration.
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                resource adopted 'Microsoft.Sql/servers@2021-11-01' existing = {
+                  name: 'alreadyThere'
+                }
+
+                resource adoptedMultiline 'Microsoft.Sql/servers@2021-11-01' existing = {
+                  name: 'alsoAlreadyThere'
+                }
+
+                // resource commentedOut 'Microsoft.Sql/servers@2021-11-01' = {
+                //   name: 'notReal'
+                // }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test creationPolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    createsNoSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers' && !r.existing)
+                      message: 'SQL servers must not be created here.'
+                    }
+                    adoptsTwo: {
+                      passWhen: length(filter(target.resources, r => r.existing)) == 2
+                      message: 'Both existing references must be visible as facts.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation creationPolicy (src/main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_SeesModuleAndImportRelationshipsSeparately()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "relationships");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src", "internal"));
+
+            FileHelper.SaveResultFile(TestContext, "src/internal/helpers.bicep", """
+                @export()
+                func first(value string) string => toLower(value)
+
+                @export()
+                func second(value string) string => toUpper(value)
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "src/internal/shared.bicep", """
+                param unused string = ''
+                output echoed string = unused
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "src/consumer.bicep", """
+                import { first, second } from 'internal/helpers.bicep'
+                import * as everything from 'internal/helpers.bicep'
+
+                module shared 'internal/shared.bicep' = {
+                  name: 'shared'
+                }
+
+                output name string = first(second('value')) == '' ? everything.first('x') : 'y'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test dependencyPolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['consumer.bicep']
+                  }
+                  assertions: {
+                    oneFactPerImportSite: {
+                      // Two import statements, regardless of how many symbols each brings in.
+                      passWhen: length(target.imports) == 2
+                      message: 'Each import statement must be represented exactly once.'
+                    }
+                    noInternalDependencies: {
+                      failOn: union(
+                        filter(target.imports, i => startsWith(i.resolvedFile, 'internal/')),
+                        filter(target.modules, m => startsWith(m.resolvedFile, 'internal/')))
+                      message: 'Files under internal/ must not be referenced from outside.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Failed at 1 / 2 assertions!");
+                error.Should().Contain("Assertion noInternalDependencies failed!");
+                // Both relationship kinds are detected, each at its own site.
+                error.Should().Contain("consumer.bicep(1): internal/helpers.bicep");
+                error.Should().Contain("consumer.bicep(2): internal/helpers.bicep");
+                error.Should().Contain("consumer.bicep(4): shared");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_InspectsConditionalAndLoopedDeclarationsWithoutAnyInputs()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "conditional");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            // Required parameters, a runtime function and declarations hidden behind a condition and a
+            // loop. A source policy must still see them without any of that being resolved.
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                param deploySql bool
+                param names array
+
+                resource conditional 'Microsoft.Sql/servers@2021-11-01' = if (deploySql) {
+                  name: 'conditional'
+                  location: resourceGroup().location
+                }
+
+                resource looped 'Microsoft.Sql/servers@2021-11-01' = [for name in names: {
+                  name: name
+                  location: resourceGroup().location
+                }]
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers must not be declared.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                // One fact per declaration: the condition is not evaluated and the loop is not expanded.
+                error.Should().Contain("main.bicep(4): conditional");
+                error.Should().Contain("main.bicep(9): looped");
+                error.Should().NotContain("parameter");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertion_ThatCannotBeEvaluated_FailsRatherThanPassing()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "unevaluable");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/main.bicep", """
+                output value string = 'nothing declared here'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    indexesAnEmptyCollection: {
+                      passWhen: target.resources[0].type == 'Microsoft.Sql/servers'
+                      message: 'This assertion cannot be evaluated against a file with no resources.'
+                    }
+                    genuinelyEmptyQuery: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'An empty result here is a real pass, not a missing answer.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Failed at 1 / 2 assertions!");
+                error.Should().Contain("Assertion indexesAnEmptyCollection failed!");
+                error.Should().Contain("Could not be evaluated: The language expression property array index '0' is out of bounds.");
+                // A valid query with no results is still a pass, and the broken assertion beside it
+                // did not prevent it from being judged.
+                error.Should().NotContain("Assertion genuinelyEmptyQuery failed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SemanticAssertions_ReportMixedOutcomesInOneMachineReadableDocument()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mixed");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/clean.bicep", """
+                output value string = 'clean'
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "src/dirty.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+                  name: 'sql'
+                  location: 'westus'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test sourcePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['**/*.bicep']
+                  }
+                  assertions: {
+                    noSqlServers: {
+                      failOn: filter(target.resources, r => r.type == 'Microsoft.Sql/servers')
+                      message: 'SQL servers belong in the sql module.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-format", "json");
+
+            result.Should().Be(1);
+
+            var document = JsonDocument.Parse(output).RootElement;
+            var cases = document.GetProperty("cases").EnumerateArray().ToList();
+
+            using (new AssertionScope())
+            {
+                // The machine-readable stream carries only the document; progress text is never mixed in.
+                error.Should().NotContain("\"version\"");
+                output.Should().StartWith("{");
+                cases.Should().HaveCount(2);
+                cases[0].GetProperty("target").GetString().Should().Be("src/clean.bicep");
+                cases[0].GetProperty("status").GetString().Should().Be("passed");
+                cases[0].GetProperty("assertions").GetProperty("failures").GetArrayLength().Should().Be(0);
+
+                cases[1].GetProperty("target").GetString().Should().Be("src/dirty.bicep");
+                cases[1].GetProperty("status").GetString().Should().Be("failed");
+                cases[1].GetProperty("assertions").GetProperty("failures")[0]
+                    .GetProperty("violations").EnumerateArray().Select(x => x.GetString())
+                    .Should().Equal("dirty.bicep(1): sql");
+
+                document.GetProperty("summary").GetProperty("passed").GetInt32().Should().Be(1);
+                document.GetProperty("summary").GetProperty("failed").GetInt32().Should().Be(1);
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),

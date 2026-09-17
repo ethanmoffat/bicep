@@ -474,6 +474,54 @@ test foo = {
         }
 
         [TestMethod]
+        public void An_assertion_condition_must_be_a_boolean_and_not_coerced()
+        {
+            // "passWhen" judges a condition, not truthiness. A non-boolean is a type error rather than
+            // something the evaluator silently interprets.
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    notABoolean: {
+      passWhen: length(target.resources)
+      message: 'nonsense'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP036", DiagnosticLevel.Error, "The property \"passWhen\" expected a value of type \"bool\" but the provided value is of type \"int\"."),
+            });
+        }
+
+        [TestMethod]
+        public void An_assertions_offending_facts_must_be_a_collection()
+        {
+            // "failOn" judges collection emptiness. A bare boolean is a type error, which is what keeps
+            // the two forms from collapsing into a single truthiness-based check.
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    notACollection: {
+      failOn: true
+      message: 'nonsense'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP036", DiagnosticLevel.Error, "The property \"failOn\" expected a value of type \"array\" but the provided value is of type \"true\"."),
+            });
+        }
+
+        [TestMethod]
         public void A_test_file_cannot_be_referenced_as_a_deployable_module()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework,

@@ -24,6 +24,8 @@ public class TestAssertionEvaluator
 {
     private const string DeploymentTemplateSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#";
 
+    private const string ResultVariableName = "$assertionResult";
+
     /// <summary>
     /// Evaluates every assertion the test declares. An assertion that cannot be evaluated fails with its
     /// own error rather than aborting the ones beside it, so a single broken query never hides the
@@ -101,19 +103,26 @@ public class TestAssertionEvaluator
     private static JToken EvaluateExpression(EmitterContext context, SyntaxBase syntax, TestTargetFacts facts, string outputType)
     {
         var expression = new ExpressionBuilder(context).Convert(syntax);
+        var variables = BuildVariables(context, expression, facts);
+
+        // The assertion is evaluated as a variable rather than directly as an output. Outputs are
+        // evaluated optimistically, which leaves a failed expression sitting there as unevaluated
+        // text; variable evaluation reports the failure, which is what lets a broken assertion say
+        // why it could not be judged instead of quietly failing.
+        variables[ResultVariableName] = Emit(context, expression);
 
         var template = new JObject
         {
             ["$schema"] = DeploymentTemplateSchema,
             ["contentVersion"] = "1.0.0.0",
-            ["variables"] = BuildVariables(context, expression, facts),
+            ["variables"] = variables,
             ["resources"] = new JArray(),
             ["outputs"] = new JObject
             {
                 ["result"] = new JObject
                 {
                     ["type"] = outputType,
-                    ["value"] = Emit(context, expression),
+                    ["value"] = $"[variables('{ResultVariableName}')]",
                 },
             },
         };
@@ -206,12 +215,36 @@ public class TestAssertionEvaluator
         return name is null ? $"{file}({line})" : $"{file}({line}): {name}";
     }
 
+    /// <summary>
+    /// Reduces an evaluation failure to the part an author can act on. The evaluator's own message
+    /// embeds the whole synthetic template and the internal variable it was staged in, neither of
+    /// which corresponds to anything the author wrote.
+    /// </summary>
     private static string Sanitize(Exception exception)
     {
-        var message = exception.Message;
+        var innermost = exception;
+
+        while (innermost.InnerException is { } inner)
+        {
+            innermost = inner;
+        }
+
+        var message = innermost.Message;
         var lineBreak = message.IndexOfAny(['\r', '\n']);
 
-        return lineBreak < 0 ? message : message[..lineBreak].TrimEnd();
+        if (lineBreak >= 0)
+        {
+            message = message[..lineBreak];
+        }
+
+        var staging = $"The template variable '{ResultVariableName}' is not valid: ";
+
+        if (message.StartsWith(staging, StringComparison.Ordinal))
+        {
+            message = message[staging.Length..];
+        }
+
+        return message.TrimEnd();
     }
 
     private class VariableReferenceCollector : ExpressionVisitor

@@ -240,4 +240,102 @@ resource sql 'Microsoft.Sql/servers@2021-11-01' = {
         facts.WithModules.Resources.Select(x => x.File)
             .Should().Equal($"{directoryName}/modules/child.bicep");
     }
+
+    [TestMethod]
+    public void Collect_SeparatesPathSegmentsSoSimilarDirectoryNamesDoNotCollide()
+    {
+        // A policy phrased as a directory prefix must be able to tell "modules/sql" from
+        // "modules/sqlbackup". Reported paths use "/" separators and whole segments, so the
+        // distinction survives into the facts rather than depending on the host's path syntax.
+        var facts = Collect(
+            ("main.bicep", """
+module approved 'modules/sql/server.bicep' = {
+  name: 'approved'
+}
+
+module lookalike 'modules/sqlbackup/server.bicep' = {
+  name: 'lookalike'
+}
+"""),
+            ("modules/sql/server.bicep", """
+resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+  name: 'approved'
+  location: 'westus'
+}
+"""),
+            ("modules/sqlbackup/server.bicep", """
+resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+  name: 'lookalike'
+  location: 'westus'
+}
+"""));
+
+        facts.WithModules.Resources.Select(x => x.File).Should().BeEquivalentTo(
+            "modules/sql/server.bicep",
+            "modules/sqlbackup/server.bicep");
+    }
+
+    [TestMethod]
+    public void Collect_GivesTheSameResolvedFileToDifferentSpellingsOfOneModule()
+    {
+        // Two callers may spell the same module differently. Identity comes from what the path
+        // resolves to, so a policy comparing resolved files sees one module, not two.
+        var facts = Collect(
+            ("main.bicep", """
+module direct 'modules/child.bicep' = {
+  name: 'direct'
+}
+
+module viaParent 'modules/nested/../child.bicep' = {
+  name: 'viaParent'
+}
+"""),
+            ("modules/child.bicep", """
+resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+  name: 'sql'
+  location: 'westus'
+}
+"""),
+            ("modules/nested/placeholder.bicep", "// keeps the nested directory present"));
+
+        facts.Local.Modules.Select(x => x.ResolvedFile).Should().Equal(
+            "modules/child.bicep",
+            "modules/child.bicep");
+
+        // The module body is still collected once, because traversal dedupes by resolved file.
+        facts.WithModules.Resources.Should().HaveCount(1);
+    }
+
+    [TestMethod]
+    public void Collect_DoesNotConflateModulesThatMerelyShareAFileName()
+    {
+        var facts = Collect(
+            ("main.bicep", """
+module first 'modules/a/server.bicep' = {
+  name: 'first'
+}
+
+module second 'modules/b/server.bicep' = {
+  name: 'second'
+}
+"""),
+            ("modules/a/server.bicep", """
+resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+  name: 'a'
+  location: 'westus'
+}
+"""),
+            ("modules/b/server.bicep", """
+resource sql 'Microsoft.Sql/servers@2021-11-01' = {
+  name: 'b'
+  location: 'westus'
+}
+"""));
+
+        facts.Local.Modules.Select(x => x.ResolvedFile).Should().Equal(
+            "modules/a/server.bicep",
+            "modules/b/server.bicep");
+
+        facts.WithModules.Resources.Should().HaveCount(2);
+    }
 }

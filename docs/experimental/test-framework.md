@@ -212,6 +212,15 @@ Assertion expressions are ordinary Bicep, so the usual functions (`filter`, `map
 `length`, `startsWith`, `union`, …) all apply, and they may reference variables declared in the test
 file.
 
+An assertion that cannot be evaluated — indexing past the end of a collection, for example — fails
+and reports why. It never passes by default, and it does not prevent the assertions beside it from
+being judged.
+
+When comparing `file` or `resolvedFile` against a directory, include the trailing separator
+(`startsWith(r.file, 'sql/')`), since paths are compared as text: `'sql'` alone would also match
+`sqlbackup/`. Paths always use `/` separators and are normalized, so the same policy means the same
+thing on every platform.
+
 ## Running tests
 
 ```console
