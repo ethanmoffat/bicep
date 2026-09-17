@@ -28,6 +28,12 @@ test moduleSourcePolicy = {
       passWhen: length(target.modules) == 0
       message: 'Modules under modules/ must not compose other modules.'
     }
+    storageIsDeclaredOnce: {
+      // Source facts name declarations symbolically: `symbolicName` is what the Bicep source calls
+      // the declaration, not the ARM name it would be deployed under.
+      passWhen: length(filter(target.resources, r => r.symbolicName == 'storageAccount')) == 1
+      message: 'Each module must declare exactly one storage account, named storageAccount.'
+    }
   }
 }
 

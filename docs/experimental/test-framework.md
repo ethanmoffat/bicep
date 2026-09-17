@@ -197,9 +197,13 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.imports` | Compile-time `import` statements in the file |
 | `target.withModules` | The same three collections for the file **plus every module it transitively reaches** |
 
-Each resource carries `name`, `type` (without the API version), `existing`, `file` and `line`. Each
-module carries `name`, `path` (as written), `resolvedFile`, `file` and `line`. Each import carries
-`path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
+Each resource carries `symbolicName`, `type` (without the API version), `existing`, `file` and `line`.
+Each module carries `symbolicName`, `path` (as written), `resolvedFile`, `file` and `line`. Each
+import carries `path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
+
+`symbolicName` is the name the declaration has in Bicep source — `storageAccount` in
+`resource storageAccount '…' = { … }` — not the resource's ARM name, which source facts deliberately
+do not claim to know.
 
 `file` and `resolvedFile` are relative to the selector root, not the working directory, so a policy
 phrased in repository-relative terms means the same thing no matter where the CLI was invoked from.

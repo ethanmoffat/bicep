@@ -409,6 +409,49 @@ test foo = {
         }
 
         [TestMethod]
+        public void A_source_fact_names_its_declaration_symbolically()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    symbolic: {
+      failOn: filter(target.resources, r => r.symbolicName == 'x')
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void A_source_fact_does_not_pretend_to_know_a_deployed_name()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    typo: {
+      failOn: filter(target.resources, r => r.name == 'x')
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"resourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP053", DiagnosticLevel.Error, "The type \"resourceFact\" does not contain property \"name\". Available properties include \"existing\", \"file\", \"line\", \"symbolicName\", \"type\"."),
+            });
+        }
+
+        [TestMethod]
         public void An_empty_assertions_object_is_an_authoring_error()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"

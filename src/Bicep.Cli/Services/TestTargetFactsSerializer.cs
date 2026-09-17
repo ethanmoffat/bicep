@@ -28,7 +28,7 @@ public static class TestTargetFactsSerializer
 
     private static JArray SerializeResources(TestFactSet facts) => new(facts.Resources.Select(resource => new JObject
     {
-        [TestTargetType.NamePropertyName] = resource.Name,
+        [TestTargetType.SymbolicNamePropertyName] = resource.Name,
         [TestTargetType.TypePropertyName] = resource.Type,
         [TestTargetType.ExistingPropertyName] = resource.Existing,
         [TestTargetType.FilePropertyName] = resource.File,
@@ -37,7 +37,7 @@ public static class TestTargetFactsSerializer
 
     private static JArray SerializeModules(TestFactSet facts) => new(facts.Modules.Select(module => new JObject
     {
-        [TestTargetType.NamePropertyName] = module.Name,
+        [TestTargetType.SymbolicNamePropertyName] = module.Name,
         [TestTargetType.PathPropertyName] = module.Path,
         [TestTargetType.ResolvedFilePropertyName] = module.ResolvedFile,
         [TestTargetType.FilePropertyName] = module.File,

@@ -150,6 +150,7 @@ public class TestAssertionEvaluator
         var file = fact[TestTargetType.FilePropertyName]?.Value<string>();
         var line = fact[TestTargetType.LinePropertyName]?.Value<int>();
         var name = fact[TestTargetType.NamePropertyName]?.Value<string>()
+            ?? fact[TestTargetType.SymbolicNamePropertyName]?.Value<string>()
             ?? fact[TestTargetType.PathPropertyName]?.Value<string>();
 
         if (file is null || line is null)

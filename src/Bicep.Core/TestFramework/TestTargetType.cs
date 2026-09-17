@@ -21,6 +21,7 @@ public static class TestTargetType
     public const string WithModulesPropertyName = "withModules";
 
     public const string NamePropertyName = "name";
+    public const string SymbolicNamePropertyName = "symbolicName";
     public const string TypePropertyName = "type";
     public const string ExistingPropertyName = "existing";
     public const string PathPropertyName = "path";
@@ -34,7 +35,7 @@ public static class TestTargetType
         "resourceFact",
         TypeSymbolValidationFlags.Default,
         [
-            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the declaration."),
+            new NamedTypeProperty(SymbolicNamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the declaration."),
             new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource type without its API version, for example 'Microsoft.Sql/servers'."),
             new NamedTypeProperty(ExistingPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration references an existing resource rather than declaring a new one."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
@@ -46,7 +47,7 @@ public static class TestTargetType
         "moduleFact",
         TypeSymbolValidationFlags.Default,
         [
-            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the declaration."),
+            new NamedTypeProperty(SymbolicNamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the declaration."),
             new NamedTypeProperty(PathPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The path exactly as spelled in source."),
             new NamedTypeProperty(ResolvedFilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The file the path resolved to, relative to the selector root. Empty if it did not resolve to a local file."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
