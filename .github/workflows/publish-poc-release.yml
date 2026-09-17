@@ -1,0 +1,124 @@
+# Publishes the experimental test-framework CLI as a GitHub release so that a consuming
+# repository can download it anonymously from a stable URL and pin it by commit SHA.
+#
+# This workflow is specific to the test-framework POC and has no upstream counterpart.
+# Asset names deliberately match the upstream release naming (bicep-win-x64.exe,
+# bicep-linux-x64) so a consumer only has to change the URL it downloads from.
+name: Publish POC Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example testfx-poc.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the release as a prerelease"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: Build CLI (${{ matrix.rid }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - rid: win-x64
+            binary: bicep.exe
+            asset: bicep-win-x64.exe
+          - rid: linux-x64
+            binary: bicep
+            asset: bicep-linux-x64
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # avoid shallow clone so nbgv can do its work.
+          submodules: true
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      - name: Publish Bicep
+        run: dotnet publish --configuration release --self-contained true -r ${{ matrix.rid }} ./src/Bicep.Cli/Bicep.Cli.csproj
+
+      # The publish directory also contains .pdb and .xml sidecars. Only the single-file
+      # executable is an asset; shipping the sidecars would imply they are needed.
+      - name: Stage release asset
+        run: |
+          mkdir -p ./release-assets
+          cp "./src/Bicep.Cli/bin/release/net10.0/${{ matrix.rid }}/publish/${{ matrix.binary }}" "./release-assets/${{ matrix.asset }}"
+
+      - name: Upload staged asset
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: poc-asset-${{ matrix.rid }}
+          path: ./release-assets/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download staged assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: poc-asset-*
+          merge-multiple: true
+          path: ./release-assets
+
+      # The version string embeds the commit SHA, which is what a consumer pins against.
+      # Reading it from the artifact rather than computing it separately guarantees the
+      # release notes describe the binary that is actually attached.
+      - name: Read version from the built CLI
+        id: version
+        run: |
+          chmod +x ./release-assets/bicep-linux-x64
+          version="$(./release-assets/bicep-linux-x64 --version)"
+          echo "reported=${version}" >> "$GITHUB_OUTPUT"
+          echo "Built: ${version}"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          Experimental build of the Bicep test framework POC. Not an official Bicep release.
+
+          EOF
+          {
+            echo "- \`${{ steps.version.outputs.reported }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo ""
+            echo "Verify the binary reports the expected revision before using it:"
+            echo ""
+            echo '```'
+            echo "bicep --version"
+            echo '```'
+          } >> notes.md
+
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ inputs.tag }}" \
+            --notes-file notes.md \
+            ${{ inputs.prerelease && '--prerelease' || '' }} \
+            ./release-assets/bicep-win-x64.exe \
+            ./release-assets/bicep-linux-x64
