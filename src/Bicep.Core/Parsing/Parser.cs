@@ -94,7 +94,8 @@ namespace Bicep.Core.Parsing
             return new MocksDeclarationSyntax(leadingNodes, keyword, assignment, value);
         }
 
-        private SyntaxBase TargetScope(IEnumerable<SyntaxBase> leadingNodes)        {
+        private SyntaxBase TargetScope(IEnumerable<SyntaxBase> leadingNodes)
+        {
             var keyword = ExpectKeyword(LanguageConstants.TargetScopeKeyword);
             var assignment = this.WithRecovery(this.Assignment, RecoveryFlags.None, TokenType.NewLine);
             var value = this.WithRecovery(() => this.Expression(ExpressionFlags.AllowComplexLiterals), RecoveryFlags.None, TokenType.NewLine);

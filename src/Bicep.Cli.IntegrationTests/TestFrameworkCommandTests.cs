@@ -3437,7 +3437,8 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
-        public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()        {
+        public async Task Test_WithoutTestFrameworkEnabled_ShouldFail()
+        {
             var (output, error, result) = await Bicep(
                 services => services.WithFeatureOverrides(new(TestFrameworkEnabled: false)),
                 "test", "/dev/zero.bicep");

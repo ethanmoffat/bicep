@@ -449,7 +449,8 @@ namespace Bicep.Core
         }
 
         public static TypeSymbol CreateUsingConfigType()
-        {            var optionalPropFlags = TypePropertyFlags.WriteOnly | TypePropertyFlags.DeployTimeConstant | TypePropertyFlags.ReadableAtDeployTime | TypePropertyFlags.DisallowAny;
+        {
+            var optionalPropFlags = TypePropertyFlags.WriteOnly | TypePropertyFlags.DeployTimeConstant | TypePropertyFlags.ReadableAtDeployTime | TypePropertyFlags.DisallowAny;
             var requiredPropFlags = optionalPropFlags | TypePropertyFlags.Required;
 
             var nameDescription = "The deployment name. Must be 1-64 characters, and can contain alphanumerics, underscores, parentheses, hyphens, and periods.";

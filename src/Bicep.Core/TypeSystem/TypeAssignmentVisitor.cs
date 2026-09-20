@@ -713,7 +713,7 @@ namespace Bicep.Core.TypeSystem
                 return TypeValidator.NarrowTypeAndCollectDiagnostics(typeManager, binder, this.parsingErrorLookup, diagnostics, syntax.Value, declaredType, false);
             });
 
-        public override void VisitUsingDeclarationSyntax(UsingDeclarationSyntax syntax)            => AssignTypeWithDiagnostics(syntax, diagnostics =>
+        public override void VisitUsingDeclarationSyntax(UsingDeclarationSyntax syntax) => AssignTypeWithDiagnostics(syntax, diagnostics =>
             {
                 if (this.model.SourceFile is BicepParamFile && syntax.Decorators.Any())
                 {

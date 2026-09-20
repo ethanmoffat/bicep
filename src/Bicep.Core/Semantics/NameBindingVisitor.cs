@@ -278,7 +278,8 @@ namespace Bicep.Core.Semantics
             this.Visit(syntax.Value);
         }
 
-        public override void VisitMissingDeclarationSyntax(MissingDeclarationSyntax syntax)        {
+        public override void VisitMissingDeclarationSyntax(MissingDeclarationSyntax syntax)
+        {
             allowedFlags = FunctionFlags.AnyDecorator;
             base.VisitMissingDeclarationSyntax(syntax);
             allowedFlags = FunctionFlags.Default;

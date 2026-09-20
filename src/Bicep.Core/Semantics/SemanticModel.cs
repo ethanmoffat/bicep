@@ -642,7 +642,8 @@ namespace Bicep.Core.Semantics
             return [];
         }
 
-        private IEnumerable<IDiagnostic> GatherUsingModelInvalidDiagnostics(ISemanticModel usingModel)        {
+        private IEnumerable<IDiagnostic> GatherUsingModelInvalidDiagnostics(ISemanticModel usingModel)
+        {
             // emit diagnostic only if there is a using statement
             var usingSyntax = this.Root.UsingDeclarationSyntax;
 

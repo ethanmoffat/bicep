@@ -587,7 +587,8 @@ test foo = {
         }
 
         [TestMethod]
-        public void An_empty_assertions_object_is_an_authoring_error()        {
+        public void An_empty_assertions_object_is_an_authoring_error()
+        {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
 test foo = {
   match: {

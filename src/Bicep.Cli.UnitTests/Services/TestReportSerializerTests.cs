@@ -3,10 +3,10 @@
 
 using System.Text.Json;
 using Bicep.Cli.Services;
-using TestResult = Bicep.Cli.Services.TestResult;
 using Bicep.IO.Abstraction;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using TestResult = Bicep.Cli.Services.TestResult;
 
 namespace Bicep.Cli.UnitTests.Services;
 
