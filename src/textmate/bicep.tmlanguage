@@ -69,6 +69,21 @@
           </dict>
         </array>
       </dict>
+      <key>declaration-keyword</key>
+      <dict>
+        <key>name</key>
+        <string>meta.declaration-keyword.bicep</string>
+        <key>match</key>
+        <string>^[ \t]*(test|case)(?=[ \t]+\b[_$[:alpha:]][_$[:alnum:]]*\b)</string>
+        <key>captures</key>
+        <dict>
+          <key>1</key>
+          <dict>
+            <key>name</key>
+            <string>keyword.control.declaration.bicep</string>
+          </dict>
+        </dict>
+      </dict>
       <key>decorator</key>
       <dict>
         <key>name</key>
@@ -161,6 +176,10 @@
           </dict>
           <dict>
             <key>include</key>
+            <string>#declaration-keyword</string>
+          </dict>
+          <dict>
+            <key>include</key>
             <string>#keyword</string>
           </dict>
           <dict>
@@ -225,7 +244,7 @@
         <key>name</key>
         <string>keyword.control.declaration.bicep</string>
         <key>match</key>
-        <string>\b(metadata|targetScope|resource|module|param|var|output|for|in|if|existing|import|as|type|with|using|extends|func|assert|extension)\b</string>
+        <string>(?&lt;!\.)\b(metadata|targetScope|resource|module|param|var|output|for|in|if|existing|import|as|type|with|using|extends|func|assert|extension)\b</string>
       </dict>
       <key>lambda-start</key>
       <dict>

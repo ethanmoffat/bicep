@@ -71,7 +71,23 @@ const keywords = [
 const keywordExpression: MatchRule = {
   key: "keyword",
   scope: "keyword.control.declaration.bicep",
-  match: bounded(`(${keywords.join("|")})`),
+  // A keyword is never a property name. Without this, `r.existing` colors `existing` as a keyword,
+  // because `\b` treats the dot as a word boundary.
+  match: `${notAfter(`\\.`)}${bounded(`(${keywords.join("|")})`)}`,
+};
+
+// `test` and `case` introduce declarations but are not reserved: `var test = 1` is legal Bicep. They
+// are therefore matched only where a declaration can start -- at the beginning of a line and followed
+// by the name the declaration binds -- rather than wherever the word appears.
+const declarationKeywords = ["test", "case"];
+
+const declarationKeywordExpression: MatchRule = {
+  key: "declaration-keyword",
+  scope: meta,
+  match: `^[ \\t]*(${declarationKeywords.join("|")})${before(`[ \\t]+${identifier}`)}`,
+  captures: {
+    "1": { scope: "keyword.control.declaration.bicep" },
+  },
 };
 
 const lineComment: MatchRule = {
@@ -284,6 +300,7 @@ expression.patterns = [
   namedLiteral,
   objectLiteral,
   arrayLiteral,
+  declarationKeywordExpression,
   keywordExpression,
   identifierExpression,
   functionCall,
