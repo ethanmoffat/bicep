@@ -2322,9 +2322,21 @@ namespace Bicep.Core.TypeSystem
                 LanguageConstants.TypeNameTest,
                 TypeSymbolValidationFlags.Default,
                 [
-                    new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Required | TypePropertyFlags.Constant),
-                    new NamedTypeProperty(LanguageConstants.TestAssertionsPropertyName, CreateAssertionsType(), TypePropertyFlags.None),
-                    new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, TypePropertyFlags.WriteOnly),
+                    new NamedTypeProperty(
+                        LanguageConstants.TestMatchPropertyName,
+                        CreateTargetSelectorType(),
+                        TypePropertyFlags.Required | TypePropertyFlags.Constant,
+                        "Selects the files this test runs against. Every selected file is evaluated independently."),
+                    new NamedTypeProperty(
+                        LanguageConstants.TestAssertionsPropertyName,
+                        CreateAssertionsType(),
+                        TypePropertyFlags.None,
+                        "The named checks to run against each selected file. Omit this to evaluate the assertions declared by the target instead."),
+                    new NamedTypeProperty(
+                        LanguageConstants.TestParamsPropertyName,
+                        paramsType,
+                        TypePropertyFlags.WriteOnly,
+                        "Values for the parameters the selected files declare."),
                 ],
                 null);
 
@@ -2410,8 +2422,16 @@ namespace Bicep.Core.TypeSystem
                 TypeSymbolValidationFlags.Default,
                 new[]
                 {
-                    new NamedTypeProperty(LanguageConstants.TestParamsPropertyName, paramsType, paramsRequiredFlag | TypePropertyFlags.WriteOnly),
-                    new NamedTypeProperty(LanguageConstants.TestAssertionsPropertyName, CreateAssertionsType(), TypePropertyFlags.None),
+                    new NamedTypeProperty(
+                        LanguageConstants.TestParamsPropertyName,
+                        paramsType,
+                        paramsRequiredFlag | TypePropertyFlags.WriteOnly,
+                        "Values for the parameters the target file declares."),
+                    new NamedTypeProperty(
+                        LanguageConstants.TestAssertionsPropertyName,
+                        CreateAssertionsType(),
+                        TypePropertyFlags.None,
+                        "The named checks to run against the target. Omit this to evaluate the assertions declared by the target instead."),
                     // 'match' is recognised here purely so that combining it with a literal target path is
                     // reported once, as the specific conflict it is, instead of as an unknown property.
                     new NamedTypeProperty(LanguageConstants.TestMatchPropertyName, CreateTargetSelectorType(), TypePropertyFlags.Constant),

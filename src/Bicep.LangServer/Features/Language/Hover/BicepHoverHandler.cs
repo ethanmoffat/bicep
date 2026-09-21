@@ -210,6 +210,17 @@ namespace Bicep.LanguageServer.Features.Language.Hover
                 case AssertSymbol assert:
                     return AsMarkdown(MarkdownHelper.CodeBlockWithDescription($"assert {assert.Name}: {assert.Type}", TryGetDescription(result, assert)));
 
+                case TestTargetSymbol testTarget:
+                    // Compiler-provided rather than declared, so there is no decorator to read a
+                    // description from. Describe what it is instead of leaving the hover empty.
+                    return AsMarkdown(MarkdownHelper.CodeBlockWithDescription(
+                        $"{testTarget.Name}: {testTarget.Type}",
+                        "The file this assertion is currently running against. Available only inside a test's assertions."));
+
+                case TestCaseSymbol testCase:
+                    return AsMarkdown(MarkdownHelper.CodeBlockWithDescription(
+                        $"case {testCase.Name}", TryGetDescription(result, testCase)));
+
                 default:
                     return null;
             }

@@ -134,6 +134,81 @@ test sourcePolicy = {
             "because the compiler-provided 'target' symbol is in scope inside an assertion body");
     }
 
+    [TestMethod]
+    public async Task Hovering_the_target_symbol_describes_it()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    noExistingResources: {
+      failOn: filter(ta|rget.resources, r => r.existing)
+      message: 'Targets must create the resources they own.'
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var hover = await file.RequestHover(cursor);
+
+        hover.Should().NotBeNull("because 'target' is a symbol, so hovering it must produce something");
+        hover!.Contents.MarkupContent!.Value.Should().Contain("running against");
+    }
+
+    [TestMethod]
+    public async Task Hovering_an_input_case_names_it()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var paramsUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptestparam");
+
+        var testText = @"
+param namePrefix string
+
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  params: {
+    namePrefix: namePrefix
+  }
+}
+";
+        var (paramsText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+using './policy.biceptest'
+
+case shor|tPrefix = {
+  namePrefix: 'contoso'
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+                [paramsUri] = paramsText,
+            },
+            paramsUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(paramsUri, paramsText));
+        var hover = await file.RequestHover(cursor);
+
+        hover.Should().NotBeNull("because a case is a declared symbol, so hovering it must produce something");
+        hover!.Contents.MarkupContent!.Value.Should().Contain("case shortPrefix");
+    }
+
     private Task<LanguageServerHelper> StartServerWithFiles(IReadOnlyDictionary<DocumentUri, string> files, DocumentUri entryFileUri)
         => LanguageServerHelper.StartServerWithText(
             TestContext,
