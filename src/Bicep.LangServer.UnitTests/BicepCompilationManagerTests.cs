@@ -700,10 +700,35 @@ module moduleB './moduleB.bicep' = {
             manager.GetCompilation(paramsFileUri).Should().BeNull();
         }
 
+        [DataTestMethod]
+        [DataRow(LanguageConstants.TestLanguageId, typeof(BicepTestFile))]
+        [DataRow(LanguageConstants.TestParamsLanguageId, typeof(BicepTestParamFile))]
+        public void UpsertCompilation_TestFrameworkFile_ShouldUpsertSoLanguageFeaturesWork(string languageId, Type expectedSourceFileType)
+        {
+            // Every language feature - completions, hover, go-to-definition, formatting, diagnostics -
+            // resolves through the compilation context for the open document. When a language id has no
+            // branch here, opening the file produces no context and every one of those features silently
+            // returns nothing, with no error to explain why. That is exactly how .biceptest files
+            // behaved in the editor while the CLI compiled them perfectly well.
+            var document = BicepCompilationManagerHelper.CreateMockDocument(p => { });
+            var workspace = new ActiveSourceFileSet();
+            var manager = GetTestBicepCompilationManager(document, workspace);
+            var uri = CreateUri(languageId);
+
+            manager.GetCompilation(uri).Should().BeNull();
+
+            manager.OpenCompilation(uri, BaseVersion, "hello", languageId);
+
+            manager.GetCompilation(uri).Should().NotBeNull($"opening a '{languageId}' document must produce a compilation");
+            workspace.TryGetSourceFile(uri.ToIOUri()).Should().BeOfType(expectedSourceFileType);
+        }
+
         private DocumentUri CreateUri(string languageId) => DocumentUri.File(this.TestContext.TestName + (languageId switch
         {
             LanguageConstants.LanguageId => LanguageConstants.LanguageFileExtension,
             LanguageConstants.ParamsLanguageId => LanguageConstants.ParamsFileExtension,
+            LanguageConstants.TestLanguageId => LanguageConstants.TestFileExtension,
+            LanguageConstants.TestParamsLanguageId => LanguageConstants.TestParamsFileExtension,
             _ => LanguageConstants.LanguageFileExtension
         }));
     }

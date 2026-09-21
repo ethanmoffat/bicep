@@ -229,9 +229,9 @@ namespace Bicep.LanguageServer.Compilation
                 return false;
             }
 
-            // We should only upsert compilation when languageId is bicep or the file is already tracked in workspace.
-            // When the file is in workspace but languageId is null, the file can be a bicep file or a JSON template
-            // being referenced as a bicep module.
+            // We should only upsert compilation when languageId is one Bicep owns, or the file is
+            // already tracked in workspace. When the file is in workspace but languageId is null,
+            // the file can be a bicep file or a JSON template being referenced as a bicep module.
             if (LanguageConstants.IsBicepLanguage(languageId))
             {
                 sourceFileType = typeof(BicepFile);
@@ -241,6 +241,18 @@ namespace Bicep.LanguageServer.Compilation
             if (LanguageConstants.IsParamsLanguage(languageId))
             {
                 sourceFileType = typeof(BicepParamFile);
+                return true;
+            }
+
+            if (LanguageConstants.IsTestLanguage(languageId))
+            {
+                sourceFileType = typeof(BicepTestFile);
+                return true;
+            }
+
+            if (LanguageConstants.IsTestParamsLanguage(languageId))
+            {
+                sourceFileType = typeof(BicepTestParamFile);
                 return true;
             }
 

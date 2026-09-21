@@ -15,6 +15,8 @@ namespace Bicep.LangServer.IntegrationTests.Helpers
             var uri = documentUri.ToIOUri();
             var languageId =
                 uri.HasBicepParamExtension() ? LanguageConstants.ParamsLanguageId :
+                uri.HasBicepTestExtension() ? LanguageConstants.TestLanguageId :
+                uri.HasBicepTestParamsExtension() ? LanguageConstants.TestParamsLanguageId :
                 uri.HasArmTemplateLikeExtension() ? LanguageConstants.ArmTemplateLanguageId :
                 LanguageConstants.LanguageId;
 
