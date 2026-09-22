@@ -74,6 +74,15 @@ namespace Bicep.Cli.Commands
                 return 1;
             }
 
+            // Checked here rather than left to the shared resolver, whose message names --pattern: an
+            // option this command no longer has, because its positional argument takes both.
+            if (args.InputFile is null && args.FilePattern is null)
+            {
+                await io.Error.Writer.WriteLineAsync("The path to a .bicep or .biceptest file, or a glob pattern matching them, must be specified.");
+
+                return 1;
+            }
+
             // Sorted so that a pattern covering several files reports them in the same order every
             // run, and in the same order on every host: ordinal rather than the host's case rules.
             var inputUris = this.inputOutputArgumentsResolver.ResolveFilePatternInputArguments(args)
@@ -406,12 +415,8 @@ namespace Bicep.Cli.Commands
 
             var inputFileArgument = new System.CommandLine.Argument<string?>(Constants.Argument.InputFile)
             {
-                Description = "The path to the input .bicep or .biceptest file.",
+                Description = "The path to a .bicep or .biceptest file, or a glob pattern matching them relative to the current directory.",
                 Arity = ArgumentArity.ZeroOrOne,
-            };
-            var filePatternOption = new System.CommandLine.Option<string?>(Option.Pattern)
-            {
-                Description = "Runs tests in all files matching the specified glob pattern, relative to the current directory.",
             };
             var inputsOption = new System.CommandLine.Option<string[]>(Option.Inputs)
             {
@@ -444,7 +449,6 @@ namespace Bicep.Cli.Commands
             };
 
             command.Add(inputFileArgument);
-            command.Add(filePatternOption);
             command.Add(inputsOption);
             command.Add(listOption);
             command.Add(outputFormatOption);
@@ -456,9 +460,12 @@ namespace Bicep.Cli.Commands
 
             command.SetAction((result, ct) => context.RunCommandAsync(async () =>
             {
+                var input = result.GetValue(inputFileArgument);
+                var isPattern = input is not null && TestArguments.IsPattern(input);
+
                 var args = new TestArguments(
-                    result.GetValue(inputFileArgument),
-                    result.GetValue(filePatternOption),
+                    isPattern ? null : input,
+                    isPattern ? input : null,
                     result.GetValue(noRestoreOption),
                     result.GetValue(listOption),
                     [.. result.GetValue(inputsOption) ?? []],

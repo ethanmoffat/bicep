@@ -103,12 +103,15 @@ namespace Bicep.Cli.IntegrationTests
                 output.Should().ContainAll(
                     "test",
                     "Runs tests in a .bicep or .biceptest file.",
-                    "--pattern",
                     "--list",
                     "--output-format",
                     "--output-detail",
                     "--no-restore",
                     "--diagnostics-format");
+
+                // One argument takes either a file or a glob, so there is no separate option to
+                // choose between and no wrong spelling to guess.
+                output.Should().NotContain("--pattern");
             }
         }
 

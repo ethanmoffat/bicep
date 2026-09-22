@@ -138,7 +138,7 @@ to give the same answer on both wherever it reasonably can:
 
 These are two different things, and they are deliberately kept apart:
 
-- **Discovery** is how the CLI finds test files. You either name a test file on the command line or match several with `--pattern`.
+- **Discovery** is how the CLI finds test files. The argument to `bicep test` either names one test file or is a glob matching several.
 - **Selection** is how a test finds the files it applies to. That is what `match` does, and it is owned by the test file rather than by whoever invokes the CLI.
 
 Because selection lives in the test file, running the same test from a different working directory — or from CI — always covers the same set of files, and reports the same case identities.
@@ -779,7 +779,7 @@ Failed! - Failed: 0, Errored: 1, Passed: 0, Total: 1, Duration: 44ms
 
 `dup.biceptest` is a scratch file: two mocks answering the same `reference` request against
 `mocks.bicep`. It is not kept in the example folder, because it would be picked up by the
-whole-folder `--pattern` run shown later and change what that run reports.
+whole-folder glob shown later and change what that run reports.
 
 A target compiled with symbolic names spells a runtime read as the declaration it came from rather
 than as a resource ID. That is a codegen detail, so it is translated back before matching: a mock is
@@ -954,17 +954,18 @@ computes, which is the part the source is responsible for.
 ## Running tests
 
 ```console
-bicep test <path-to-test-file>
+bicep test <path-to-test-file-or-glob>
 ```
 
 The command accepts either a `.bicep` or a `.biceptest` file.
 
-### Running many test files with `--pattern`
+### Running many test files with a glob
 
-`--pattern` runs every test file matching a glob, relative to the current directory:
+The same argument also accepts a glob, which runs every test file it matches, relative to the current
+directory:
 
 ```console
-bicep test --pattern "**/*.biceptest"
+bicep test "**/*.biceptest"
 ```
 
 Files are processed in a stable, sorted order, and a single summary covers the whole run. When more
@@ -973,7 +974,18 @@ a file.
 
 A pattern that matches nothing is an error. An empty run is never reported as a run that passed.
 
-`--pattern` and a named input file are alternatives; supply one or the other.
+A glob and a named input file are alternatives; supply one or the other.
+
+There is no separate `--pattern` option. One argument answers one question — which tests to run — and
+an author who had to know in advance which of two spellings their path needed got an unhelpful
+file-not-found when they guessed wrong. Glob metacharacters are not legal in a Bicep file name, so
+which of the two was meant is never ambiguous.
+
+> There is no way to exclude a file from a glob at the command line, and no `.biceptestignore`. If a
+> glob reaches generated output — a `build/` or `out/` directory holding copies of your sources — each
+> copy is discovered and run as though it were a source file. Write the glob so that it cannot see
+> them, or keep test files out of directories that get copied. A dedicated ignore file is a plausible
+> future addition.
 
 ### Choosing how much to report with `--output-detail`
 
@@ -1064,7 +1076,7 @@ naming.biceptest: namingPolicy -> modules/fileStorage.bicep
 ```
 
 This answers "what would run". It deliberately says nothing about whether those targets compile or
-pass. `--list` combines with `--pattern` to inventory a whole suite.
+pass. `--list` combines with a glob to inventory a whole suite.
 
 A test that resolves to no targets is reported on stderr and makes `--list` exit non-zero, so a
 selector that has silently stopped matching cannot hide behind an empty list.
@@ -1482,11 +1494,11 @@ naming.biceptest: namingPolicy -> modules/blobStorage.bicep
 naming.biceptest: namingPolicy -> modules/fileStorage.bicep
 ```
 
-Running the whole example folder with a pattern gathers every test file into one run. The examples
-that need an `--inputs` file are not given one here, so they error — which is what the run reports:
+Running the whole example folder with a glob gathers every test file into one run. The examples that
+need an `--inputs` file are not given one here, so they error — which is what the glob reports:
 
 ```console
-$ bicep test --pattern "*.biceptest" --output-detail all
+$ bicep test "*.biceptest" --output-detail all
 [✗] Evaluation context.biceptest: regionPolicy (context.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion locationIsApproved failed!
 [✗] Evaluation deployment-name.biceptest: deploymentNames (deployment-name.bicep) Failed at 2 / 2 assertions!
@@ -1548,9 +1560,9 @@ Failed! - Failed: 7, Errored: 5, Passed: 8, Total: 20, Duration: 532ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest
-error because a pattern cannot supply the `--inputs` file each one needs, which is why `--pattern`
-suits a source-policy suite better than a suite of parameterized tests. The failure of one file does
-not stop the others from running, and one summary reports the aggregate.
+error because a glob cannot supply the `--inputs` file each one needs, which is why a glob suits a
+source-policy suite better than a suite of parameterized tests. The failure of one file does not stop
+the others from running, and one summary reports the aggregate.
 
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
 

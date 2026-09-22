@@ -28,7 +28,7 @@ namespace Bicep.Cli.IntegrationTests
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain($"Either the input file path or the --pattern parameter must be specified");
+                error.Should().Contain("The path to a .bicep or .biceptest file, or a glob pattern matching them, must be specified.");
             }
         }
 
@@ -440,7 +440,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
   }
 }", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", Path.Combine(outputFileDir, "*.biceptest"));
 
             using (new AssertionScope())
             {
@@ -471,7 +471,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 FileHelper.SaveResultFile(TestContext, $"{name}.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
             }
 
-            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", Path.Combine(outputFileDir, "*.biceptest"));
 
             using (new AssertionScope())
             {
@@ -489,7 +489,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
             Directory.CreateDirectory(outputFileDir);
 
             var pattern = Path.Combine(outputFileDir, "*.biceptest");
-            var (output, error, result) = await Bicep(settings, "test", "--pattern", pattern);
+            var (output, error, result) = await Bicep(settings, "test", pattern);
 
             using (new AssertionScope())
             {
@@ -3626,6 +3626,49 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 cases.Should().HaveCount(3);
                 cases.Select(x => x.GetProperty("status").GetString())
                     .Should().BeEquivalentTo(["passed", "failed", "errored"]);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputArgument_AcceptsAGlobInPlaceOfAFilePath()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "policy"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("policy", "target.bicep"), "assert alwaysTrue = true", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("policy", "one.biceptest"), "test policy 'target.bicep' = {}", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, Path.Combine("policy", "two.biceptest"), "test policy 'target.bicep' = {}", outputFileDir);
+
+            // The same argument that names one file matches many. A caller who had to know in advance
+            // which of two spellings their path needed got a file-not-found when they guessed wrong.
+            var (output, _, result) = await Bicep(settings, "test", Path.Combine(outputFileDir, "**", "*.biceptest").Replace('\\', '/'));
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2,");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputArgument_RejectsTheRemovedPatternOption()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "assert alwaysTrue = true", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "main.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+
+            using (new AssertionScope())
+            {
+                // Silently accepting it would leave two spellings of one thing in the surface area.
+                result.Should().Be(1);
+                error.Should().Contain("--pattern");
             }
         }
     }
