@@ -19,8 +19,11 @@ public static class TestReportSerializer
     /// <summary>
     /// The contract version. Increment when the shape changes in a way a host must react to.
     /// Additive, optional properties do not require a new version.
+    ///
+    /// 1.1 renamed the "skipped" status and summary count to "errored". The old name said a case had
+    /// been deliberately left out, when in fact it had been attempted and could not be evaluated.
     /// </summary>
-    public const string ContractVersion = "1.0";
+    public const string ContractVersion = "1.1";
     private const string ListedStatus = "listed";
     private const string UnresolvedStatus = "unresolved";
 
@@ -70,12 +73,12 @@ public static class TestReportSerializer
         {
             var node = CreateCase(result.Identity, GetStatusName(result.Result.Status), result.Result.Error);
 
-            // How long this case cost. Reported for skipped cases too: deciding a target cannot be
+            // How long this case cost. Reported for errored cases too: deciding a target cannot be
             // evaluated still takes time, and a host that hides that cost cannot explain its own runtime.
             node["durationMs"] = RoundToMilliseconds(result.Duration);
 
             // Assertion counts are only meaningful when the target was actually evaluated.
-            if (result.Result.Status is not TestCaseStatus.Skipped)
+            if (result.Result.Status is not TestCaseStatus.Errored)
             {
                 node["assertions"] = new JsonObject
                 {
@@ -99,7 +102,7 @@ public static class TestReportSerializer
                 ["total"] = results.TotalEvaluations,
                 ["passed"] = results.SuccessfulEvaluations,
                 ["failed"] = results.FailedEvaluations,
-                ["skipped"] = results.SkippedEvaluations,
+                ["errored"] = results.ErroredEvaluations,
                 ["durationMs"] = RoundToMilliseconds(results.TotalDuration),
             },
         });
@@ -175,7 +178,7 @@ public static class TestReportSerializer
         {
             TestCaseStatus.Passed => "passed",
             TestCaseStatus.Failed => "failed",
-            TestCaseStatus.Skipped => "skipped",
+            TestCaseStatus.Errored => "errored",
             _ => throw new ArgumentOutOfRangeException(nameof(status)),
         };
 

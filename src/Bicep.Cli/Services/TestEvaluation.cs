@@ -16,14 +16,14 @@ public record TestEvaluation(
 
     public bool Success => Error == null && (FailedAssertions.Length == 0);
 
-    public bool Skip => Error != null;
+    public bool Errored => Error != null;
 
     /// <summary>
-    /// The outcome of this evaluation. An evaluation that could not run at all is skipped rather
-    /// than failed, because its assertions were never reached.
+    /// The outcome of this evaluation. An evaluation that could not run at all is reported as an
+    /// error rather than a failure, because its assertions were never reached.
     /// </summary>
-    public TestCaseStatus Status => Skip
-        ? TestCaseStatus.Skipped
+    public TestCaseStatus Status => Errored
+        ? TestCaseStatus.Errored
         : FailedAssertions.Length > 0
             ? TestCaseStatus.Failed
             : TestCaseStatus.Passed;

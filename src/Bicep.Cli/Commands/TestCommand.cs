@@ -22,7 +22,7 @@ namespace Bicep.Cli.Commands
     {
         private const string SuccessSymbol = "[✓]";
         private const string FailureSymbol = "[✗]";
-        private const string SkippedSymbol = "[-]";
+        private const string ErrorSymbol = "[!]";
 
         private readonly ILogger logger;
         private readonly IOContext io;
@@ -91,6 +91,7 @@ namespace Bicep.Cli.Commands
 
             var hasErrors = false;
             var warnedAboutExperimentalFeature = false;
+            var outputDetail = args.OutputDetail ?? TestOutputDetail.Failures;
             var json = args.OutputFormat == TestOutputFormat.Json;
             // Both machine-readable formats keep stdout for the document and progress text on stderr,
             // so a host can parse stdout even when the command exits non-zero.
@@ -150,7 +151,7 @@ namespace Bicep.Cli.Commands
 
                 if (!documentToStdout)
                 {
-                    LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1);
+                    LogResults(testResults, qualifyWithTestFile: inputUris.Length > 1, outputDetail);
                 }
 
                 allResults.AddRange(testResults.Results);
@@ -277,10 +278,22 @@ namespace Bicep.Cli.Commands
             return (summary.HasErrors || inventory.HasErrors, inventory);
         }
 
-        private void LogResults(TestResults testResults, bool qualifyWithTestFile)
+        private void LogResults(TestResults testResults, bool qualifyWithTestFile, TestOutputDetail detail)
         {
+            if (detail is TestOutputDetail.Summary)
+            {
+                return;
+            }
+
             foreach (var (testDeclaration, identity, evaluation) in testResults.Results)
             {
+                // A passing case says only that nothing is wrong with it, so it is reported only when
+                // the whole log was asked for. What went wrong is never filtered out.
+                if (evaluation.Success && detail is not TestOutputDetail.All)
+                {
+                    continue;
+                }
+
                 // A test may resolve to several targets, so the target is always named: without it two
                 // outcomes of the same declaration would be indistinguishable. When several test files
                 // run together the file is named too, since test names are only unique within a file.
@@ -302,9 +315,9 @@ namespace Bicep.Cli.Commands
                 {
                     io.Output.Writer.WriteLine($"{SuccessSymbol} Evaluation {label} Passed!");
                 }
-                else if (evaluation.Skip)
+                else if (evaluation.Errored)
                 {
-                    io.Error.Writer.WriteLine($"{SkippedSymbol} Evaluation {label} Skipped!");
+                    io.Error.Writer.WriteLine($"{ErrorSymbol} Evaluation {label} could not be evaluated!");
                     io.Error.Writer.WriteLine($"Reason: {evaluation.Error}");
                 }
                 else
@@ -335,27 +348,49 @@ namespace Bicep.Cli.Commands
             }
         }
 
-        /// <summary>Reports the aggregate outcome once, and returns whether it was a failure.</summary>
+        /// <summary>
+        /// Reports the aggregate outcome once, and returns whether it was a failure.
+        ///
+        /// One line in one shape whatever the outcome, so that a reader - or a log scraper - never has
+        /// to recognize two different summaries. Errored cases are counted apart from failed ones
+        /// because they call for different action: a failure means a policy was broken, an error means
+        /// the policy never ran against that target. Either one makes the run a failure.
+        /// </summary>
         private bool LogSummary(TestResults testResults, bool hasCompilationErrors)
         {
-            // Do not report overall success when compilation diagnostics contain errors.
-            if (testResults.Success && !hasCompilationErrors)
+            var passed = testResults.Success && !hasCompilationErrors;
+            var verdict = passed ? "Passed!" : "Failed!";
+            var line = $"{verdict} - Failed: {testResults.FailedEvaluations}, Errored: {testResults.ErroredEvaluations}, Passed: {testResults.SuccessfulEvaluations}, Total: {testResults.TotalEvaluations}, Duration: {FormatDuration(testResults.TotalDuration)}";
+
+            if (passed)
             {
-                io.Output.Writer.WriteLine($"All {testResults.TotalEvaluations} evaluations passed!");
+                io.Output.Writer.WriteLine(line);
 
                 return false;
             }
 
-            if (!testResults.Success)
-            {
-                io.Error.Writer.WriteLine($"Evaluation Summary: Failure!");
-                io.Error.Writer.WriteLine($"Total: {testResults.TotalEvaluations} - Success: {testResults.SuccessfulEvaluations} - Skipped: {testResults.SkippedEvaluations} - Failed: {testResults.FailedEvaluations}");
+            io.Error.Writer.WriteLine(line);
 
-                return true;
+            // Without this, a run whose every evaluation passed but whose test file did not compile
+            // reports zeros beside a failing verdict, which reads as a contradiction.
+            if (testResults.Success && hasCompilationErrors)
+            {
+                io.Error.Writer.WriteLine("The run failed because errors were reported above, not because an evaluation did.");
             }
 
-            return false;
+            return !testResults.Success;
         }
+
+        /// <summary>
+        /// The summed cost of the run, in the shape <c>dotnet test</c> reports: the largest unit that
+        /// says something, and the next one down.
+        /// </summary>
+        private static string FormatDuration(TimeSpan duration)
+            => duration.TotalSeconds < 1
+                ? $"{duration.Milliseconds}ms"
+                : duration.TotalMinutes < 1
+                    ? $"{duration.Seconds}s {duration.Milliseconds}ms"
+                    : $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
 
         private DiagnosticOptions GetDiagnosticOptions(TestArguments args)
             => new(
@@ -391,6 +426,10 @@ namespace Bicep.Cli.Commands
             {
                 Description = "Set the format of test output (Default, Json, JUnit). Json and JUnit write a machine-readable document to stdout and keep progress text on stderr.",
             };
+            var outputDetailOption = new System.CommandLine.Option<TestOutputDetail?>(Option.OutputDetail)
+            {
+                Description = "Set how much of the run is written to the console (Summary, Failures, All). Defaults to Failures: the counts line plus every case that failed or could not be evaluated.",
+            };
             var resultsFileOption = new System.CommandLine.Option<string?>(Option.ResultsFile)
             {
                 Description = "Write the machine-readable document to the specified file instead of stdout, leaving stdout for progress text. Requires --output-format Json or JUnit.",
@@ -409,6 +448,7 @@ namespace Bicep.Cli.Commands
             command.Add(inputsOption);
             command.Add(listOption);
             command.Add(outputFormatOption);
+            command.Add(outputDetailOption);
             command.Add(resultsFileOption);
             command.Add(noRestoreOption);
             command.Add(diagnosticsFormatOption);
@@ -423,6 +463,7 @@ namespace Bicep.Cli.Commands
                     result.GetValue(listOption),
                     [.. result.GetValue(inputsOption) ?? []],
                     result.GetValue(outputFormatOption),
+                    result.GetValue(outputDetailOption),
                     result.GetValue(resultsFileOption),
                     result.GetValue(diagnosticsFormatOption));
 

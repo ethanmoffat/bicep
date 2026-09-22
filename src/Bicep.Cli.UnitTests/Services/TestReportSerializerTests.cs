@@ -34,7 +34,7 @@ public class TestReportSerializerTests
             [new AssertionResult(passing, true), new AssertionResult(failing, false)],
             [new AssertionResult(failing, false)]);
 
-    private static TestEvaluation Skipped(string error) => new(null, error, [], []);
+    private static TestEvaluation Errored(string error) => new(null, error, [], []);
 
     [TestMethod]
     public void SerializeInventory_ReportsVersionModeAndCaseIdentities()
@@ -89,7 +89,7 @@ public class TestReportSerializerTests
         [
             Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Passed("a", "b")),
             Result(Identity("/repo/main.biceptest", "policy", "/repo/two.bicep"), Failed("a", "b")),
-            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Skipped("Missing parameter.")),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Errored("Missing parameter.")),
         ]));
 
         var root = Parse(json);
@@ -109,7 +109,7 @@ public class TestReportSerializerTests
 
         // An evaluation that never ran has no assertion counts to report; reporting zeroes would
         // be indistinguishable from a target that genuinely declares no assertions.
-        cases[2].GetProperty("status").GetString().Should().Be("skipped");
+        cases[2].GetProperty("status").GetString().Should().Be("errored");
         cases[2].GetProperty("error").GetString().Should().Be("Missing parameter.");
         cases[2].TryGetProperty("assertions", out _).Should().BeFalse();
 
@@ -117,7 +117,7 @@ public class TestReportSerializerTests
         summary.GetProperty("total").GetInt32().Should().Be(3);
         summary.GetProperty("passed").GetInt32().Should().Be(1);
         summary.GetProperty("failed").GetInt32().Should().Be(1);
-        summary.GetProperty("skipped").GetInt32().Should().Be(1);
+        summary.GetProperty("errored").GetInt32().Should().Be(1);
     }
 
     [TestMethod]
@@ -128,7 +128,7 @@ public class TestReportSerializerTests
             Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Passed("a"), TimeSpan.FromMilliseconds(12.5)),
             Result(Identity("/repo/main.biceptest", "policy", "/repo/two.bicep"), Failed("a", "b"), TimeSpan.FromMilliseconds(7.25)),
             // A target that could not be evaluated still cost time to reject, so it is reported too.
-            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Skipped("Missing parameter."), TimeSpan.FromMilliseconds(3)),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/three.bicep"), Errored("Missing parameter."), TimeSpan.FromMilliseconds(3)),
         ]));
 
         var root = Parse(json);

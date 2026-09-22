@@ -146,15 +146,17 @@ Because selection lives in the test file, running the same test from a different
 `match` is also evaluated against the filesystem on every run. Adding a new file that the selector already covers brings it under test on the next run, with no edit to the test file:
 
 ```console
-$ bicep test main.biceptest
-[✓] Evaluation policy (modules/one.bicep) Passed!
-All 1 evaluations passed!
+$ bicep test naming.biceptest --output-detail all
+[✓] Evaluation namingPolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation namingPolicy (modules/fileStorage.bicep) Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 394ms
 
-$ # add modules/two.bicep, then re-run
-$ bicep test main.biceptest
-[✓] Evaluation policy (modules/one.bicep) Passed!
-[✓] Evaluation policy (modules/two.bicep) Passed!
-All 2 evaluations passed!
+$ # add modules/queueStorage.bicep, then re-run
+$ bicep test naming.biceptest --output-detail all
+[✓] Evaluation namingPolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation namingPolicy (modules/fileStorage.bicep) Passed!
+[✓] Evaluation namingPolicy (modules/queueStorage.bicep) Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 3, Total: 3, Duration: 442ms
 ```
 
 ### Each target is bound independently
@@ -388,12 +390,12 @@ cannot influence what it computes.
 ### Running with `--inputs`
 
 ```console
-$ bicep test storage-cases.biceptest --inputs storage-cases.biceptestparam
+$ bicep test storage-cases.biceptest --inputs storage-cases.biceptestparam --output-detail all
 [✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
 [✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
 [✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
 [✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
-All 4 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4, Duration: 152ms
 ```
 
 `--inputs` may be given more than once to combine several input files into one run.
@@ -408,7 +410,7 @@ Each evaluation is judged on its own, and its identity names the case it ran wit
 same test and target that differ only in their values are never reported as the same thing:
 
 ```console
-$ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestparam
+$ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestparam --output-detail all
 [✗] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: prefixTooLong] Failed at 1 / 2 assertions!
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
@@ -416,8 +418,7 @@ $ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestpar
 	[✗] Assertion boundedResourceCount failed!
 		A target may declare at most 0 resources.
 [✓] Evaluation sizePolicy (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
-Evaluation Summary: Failure!
-Total: 4 - Success: 2 - Skipped: 0 - Failed: 2
+Failed! - Failed: 2, Errored: 0, Passed: 2, Total: 4, Duration: 147ms
 ```
 
 An assertion's `message` is ordinary Bicep and may interpolate the values the assertion actually ran
@@ -426,26 +427,31 @@ with, so a threshold stated in the message cannot drift away from the condition 
 ### Failures are attributed, not fatal
 
 An input file that cannot contribute cases — because it fails to compile, or because it binds to a
-different test file — is reported and skipped. Everything else still runs, and the aggregate exit
+different test file — is reported and set aside. Everything else still runs, and the aggregate exit
 code is non-zero:
 
 ```console
-$ bicep test storage.biceptest --inputs storage-cases.biceptestparam
+$ bicep test storage.biceptest --inputs storage-cases.biceptestparam --output-detail all
 storage-cases.biceptestparam: The input file supplies cases for "storage-cases.biceptest", not the test file being run.
 [✓] Evaluation validPrefix (storage.bicep) Passed!
 [✓] Evaluation prefixAtLengthLimit (storage.bicep) Passed!
+Failed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 317ms
+The run failed because errors were reported above, not because an evaluation did.
 ```
+
+Every evaluation passed, so the counts alone would have read as success. The extra line says why the
+run still failed, rather than leaving a non-zero exit code to be explained by a summary that looks
+green.
 
 The same applies within a run. An input with no value from any case and no declared default fails
 only the evaluations that actually reach it:
 
 ```console
-$ bicep test storage-cases.biceptest
-[-] Evaluation namingRules (storage.bicep) Skipped!
+$ bicep test storage-cases.biceptest --output-detail all
+[!] Evaluation namingRules (storage.bicep) could not be evaluated!
 Reason: The input "namePrefix" has no value. Supply it from a test case or give it a default.
 [✓] Evaluation sizePolicy (storage.bicep) Passed!
-Evaluation Summary: Failure!
-Total: 2 - Success: 1 - Skipped: 1 - Failed: 0
+Failed! - Failed: 0, Errored: 1, Passed: 1, Total: 2, Duration: 254ms
 ```
 `sizePolicy` still ran because it never reaches `namePrefix`; only the test that needed the missing
 value was affected.
@@ -495,13 +501,12 @@ parameter to `resourceGroup().location` and asserts that the result is an approv
 case exercises a different region without the test declaring a single input:
 
 ```console
-$ bicep test context.biceptest --inputs context.biceptestparam
+$ bicep test context.biceptest --inputs context.biceptestparam --output-detail all
 [✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: primaryRegion] Passed!
-[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: secondaryRegion] Passed!
 [✗] Evaluation regionPolicy (context.bicep) [context.biceptestparam: unapprovedRegion] Failed at 1 / 1 assertions!
 	[✗] Assertion locationIsApproved failed!
-Evaluation Summary: Failure!
-Total: 3 - Success: 2 - Skipped: 0 - Failed: 1
+[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: secondaryRegion] Passed!
+Failed! - Failed: 1, Errored: 0, Passed: 2, Total: 3, Duration: 120ms
 ```
 
 Two properties of this are worth stating plainly:
@@ -511,7 +516,7 @@ Two properties of this are worth stating plainly:
   offline evaluator reports for the corresponding deployment function.
 - **Context is not a parameter source.** A production parameter named `resourceGroupLocation` is not
   assigned by the context property of the same name. Parameters come only from the test's `params`
-  mapping, so a target with an unsatisfied required parameter is still skipped:
+  mapping, so a target with an unsatisfied required parameter still cannot be evaluated:
 
   ```console
   Reason: Evaluating template failed: The value for the template parameter 'resourceGroupLocation' at line '16' and column '30' is not provided.
@@ -573,9 +578,9 @@ test deploymentNames 'deployment-name.bicep' = {
 ```
 
 ```console
-$ bicep test deployment-name.biceptest --inputs deployment-name.biceptestparam
+$ bicep test deployment-name.biceptest --inputs deployment-name.biceptestparam --output-detail all
 [✓] Evaluation deploymentNames (deployment-name.bicep) [deployment-name.biceptestparam: release] Passed!
-All 1 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 161ms
 ```
 
 There is no implicit default. A target that reads `deployment()` without a name being supplied is
@@ -649,10 +654,10 @@ deploysOneAccountPerRegion: {
 ```
 
 ```console
-$ bicep test fleet.biceptest --inputs fleet.biceptestparam
+$ bicep test fleet.biceptest --inputs fleet.biceptestparam --output-detail all
 [✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: twoRegionsNoBackup] Passed!
 [✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: threeRegionsWithBackup] Passed!
-All 2 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 238ms
 ```
 
 The same assertions describe a two-region deployment without a backup account in the first case and a
@@ -689,7 +694,7 @@ onlyStorageIsDeployed: {
 ```
 
 ```console
-$ bicep test fleet-failing.biceptest
+$ bicep test fleet-failing.biceptest --output-detail all
 [✗] Evaluation storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion onlyStorageIsDeployed failed!
 		This fleet is only allowed to deploy storage accounts.
@@ -697,8 +702,7 @@ $ bicep test fleet-failing.biceptest
 		fleet/regionStamp.bicep(24): fleetdev-primary-site
 		fleet/regionStamp.bicep(16): fleetdev-secondary-plan
 		fleet/regionStamp.bicep(24): fleetdev-secondary-site
-Evaluation Summary: Failure!
-Total: 1 - Success: 0 - Skipped: 0 - Failed: 1
+Failed! - Failed: 1, Errored: 0, Passed: 0, Total: 1, Duration: 552ms
 ```
 
 Two calls to the same module produce four findings, not two: the module file declares the same two
@@ -767,12 +771,15 @@ passes because of an unintended answer is worse than one that fails. For the sam
 that answer the same request are rejected before anything runs, rather than resolved by order:
 
 ```console
-$ bicep test dup.biceptest
-[-] Evaluation dup (dup.bicep) Skipped!
+$ bicep test dup.biceptest --inputs dup.biceptestparam --output-detail all
+[!] Evaluation dup (mocks.bicep) [dup.biceptestparam: only] could not be evaluated!
 Reason: Mocks "first", "second" answer the same request. Remove the duplicates so the request has one answer.
-Evaluation Summary: Failure!
-Total: 1 - Success: 0 - Skipped: 1 - Failed: 0
+Failed! - Failed: 0, Errored: 1, Passed: 0, Total: 1, Duration: 44ms
 ```
+
+`dup.biceptest` is a scratch file: two mocks answering the same `reference` request against
+`mocks.bicep`. It is not kept in the example folder, because it would be picked up by the
+whole-folder `--pattern` run shown later and change what that run reports.
 
 A target compiled with symbolic names spells a runtime read as the declaration it came from rather
 than as a resource ID. That is a codegen detail, so it is translated back before matching: a mock is
@@ -797,9 +804,9 @@ response: {
 ```
 
 ```console
-$ bicep test mocks.biceptest --inputs mocks.biceptestparam
+$ bicep test mocks.biceptest --inputs mocks.biceptestparam --output-detail all
 [✓] Evaluation runtimeReads (mocks.bicep) [mocks.biceptestparam: eastus] Passed!
-All 1 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 107ms
 ```
 
 Neither view eagerly reads a field the response does not have, so an envelope only needs to carry
@@ -820,7 +827,7 @@ response: {
 ```
 
 ```console
-$ bicep test mocks-failing.biceptest --inputs mocks-failing.biceptestparam
+$ bicep test mocks-failing.biceptest --inputs mocks-failing.biceptestparam --output-detail all
 [✗] Evaluation unconfiguredField (mocks.bicep) [mocks-failing.biceptestparam: eastus] Failed at 1 / 1 assertions!
 	[✗] Assertion clientIdIsResolved failed!
 		The deployment reads a client ID that no mock answers.
@@ -874,9 +881,9 @@ output artifactKeyName string = artifacts.listKeys().keys[0].keyName
 ```
 
 ```console
-$ bicep test mocks.biceptest --inputs mocks.biceptestparam
+$ bicep test mocks.biceptest --inputs mocks.biceptestparam --output-detail all
 [✓] Evaluation runtimeReads (mocks.bicep) [mocks.biceptestparam: eastus] Passed!
-All 1 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 107ms
 ```
 
 A `reference` answer is a resource envelope: an ordinary `reference` reads its `properties`, and
@@ -920,9 +927,9 @@ grantIsDerivedFromWhatItGrants: {
 ```
 
 ```console
-$ bicep test rbac.biceptest --inputs rbac.biceptestparam
+$ bicep test rbac.biceptest --inputs rbac.biceptestparam --output-detail all
 [✓] Evaluation vaultAccessIsGranted (rbac.bicep) [rbac.biceptestparam: contoso] Passed!
-All 1 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 259ms
 ```
 
 An argument taken from another module's output is only knowable once that module has been evaluated,
@@ -934,12 +941,11 @@ a principal ID belongs. Both are strings, so it compiles and deploys a role assi
 but not the one the policy asked for:
 
 ```console
-$ bicep test rbac-failing.biceptest --inputs rbac-failing.biceptestparam
+$ bicep test rbac-failing.biceptest --inputs rbac-failing.biceptestparam --output-detail all
 [✗] Evaluation vaultAccessIsGranted (rbac-miswired.bicep) [rbac-failing.biceptestparam: contoso] Failed at 1 / 1 assertions!
 	[✗] Assertion grantIsDerivedFromWhatItGrants failed!
 		The role assignment should grant the identity this deployment created.
-Evaluation Summary: Failure!
-Total: 1 - Success: 0 - Skipped: 0 - Failed: 1
+Failed! - Failed: 1, Errored: 0, Passed: 0, Total: 1, Duration: 251ms
 ```
 
 This says nothing about whether the grant would be accepted by Azure. It says what the deployment
@@ -969,13 +975,92 @@ A pattern that matches nothing is an error. An empty run is never reported as a 
 
 `--pattern` and a named input file are alternatives; supply one or the other.
 
+### Choosing how much to report with `--output-detail`
+
+A run reports every failure but, by default, stays quiet about what passed. `--output-detail` selects
+how much of the human-readable log the run prints:
+
+| Level | Prints |
+|-------|--------|
+| `summary` | The counts line only |
+| `failures` | Failed and errored cases, and the counts line. **Default** |
+| `all` | Every case, and the counts line |
+
+The default is `failures` because the common reason to read a test log is to find out what went
+wrong, and a policy suite covering a large repository can report thousands of passing cases that bury
+the handful that did not.
+
+```console
+$ bicep test source-policy-failing.biceptest --output-detail summary
+Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 423ms
+```
+
+```console
+$ bicep test source-policy-failing.biceptest
+[✗] Evaluation forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		blobStorage.bicep(12): storageAccount
+[✗] Evaluation forbidStorageAccounts (modules/fileStorage.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion noStorageAccounts failed!
+		Storage accounts must be created by the platform team, not by service modules.
+		fileStorage.bicep(12): storageAccount
+Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 418ms
+```
+
+```console
+$ bicep test source-policy.biceptest --output-detail all
+[✓] Evaluation moduleSourcePolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation moduleSourcePolicy (modules/fileStorage.bicep) Passed!
+[✓] Evaluation compositionPolicy (app.bicep) Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 3, Total: 3, Duration: 516ms
+```
+
+`--output-detail` affects only the console log. `--output-format json` and `--output-format junit`
+always describe every case, at every level: a host reading a filtered document could not tell a
+passing case from one that was never reported.
+
+### Reading the summary
+
+Every run ends with one line, whatever its outcome:
+
+```console
+Passed! - Failed: 0, Errored: 0, Passed: 3, Total: 3, Duration: 516ms
+Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 418ms
+```
+
+**Failed** and **errored** are different things, and are counted separately:
+
+- A **failed** case was evaluated and an assertion did not hold. The policy has something to say
+  about it.
+- An **errored** case could not be evaluated at all — its target did not compile, an input had no
+  value, or a runtime read had no mock to answer it. The policy never got to run.
+
+Both are failures of the run. An unevaluated target is not a benign skip: a suite whose targets all
+failed to compile has proven nothing, and reporting that as success is exactly the outcome the
+distinction exists to prevent. There is no way for a test to declare itself skipped, and the summary
+has no skipped count.
+
+A run can also fail while every evaluation passed — an input file that could not be read, for
+instance. The summary then says so explicitly rather than leaving a green-looking count beside a
+non-zero exit code:
+
+```console
+Failed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 317ms
+The run failed because errors were reported above, not because an evaluation did.
+```
+
+A passing summary goes to stdout and a failing one to stderr.
+
 ### Listing what would run with `--list`
 
 `--list` reports the inventory of a test file — which tests it declares and which targets each one
 resolves to — without restoring, compiling or evaluating any target:
 
 ```console
-bicep test naming.biceptest --list
+$ bicep test naming.biceptest --list
+naming.biceptest: namingPolicy -> modules/blobStorage.bicep
+naming.biceptest: namingPolicy -> modules/fileStorage.bicep
 ```
 
 This answers "what would run". It deliberately says nothing about whether those targets compile or
@@ -993,7 +1078,7 @@ succeeded or failed:
 ```console
 $ bicep test storage-failing.biceptest --output-format json
 {
-  "version": "1.0",
+  "version": "1.1",
   "mode": "run",
   "cases": [
     {
@@ -1027,7 +1112,7 @@ $ bicep test storage-failing.biceptest --output-format json
     "total": 1,
     "passed": 0,
     "failed": 1,
-    "skipped": 0,
+    "errored": 0,
     "durationMs": 485.507
   }
 }
@@ -1039,7 +1124,7 @@ that violated them, so a host does not have to parse console text to act on a po
 ```console
 $ bicep test source-policy-failing.biceptest --output-format json
 {
-  "version": "1.0",
+  "version": "1.1",
   "mode": "run",
   "cases": [
     {
@@ -1103,7 +1188,7 @@ $ bicep test source-policy-failing.biceptest --output-format json
     "total": 2,
     "passed": 0,
     "failed": 2,
-    "skipped": 0,
+    "errored": 0,
     "durationMs": 642.285
   }
 }
@@ -1119,7 +1204,7 @@ or `unresolved`:
 ```console
 $ bicep test naming.biceptest --list --output-format json
 {
-  "version": "1.0",
+  "version": "1.1",
   "mode": "list",
   "cases": [
     {
@@ -1154,18 +1239,22 @@ $ bicep test naming.biceptest --list --output-format json
 Notes on the contract:
 
 - `version` changes only when the shape changes in a way a consumer must react to. New optional
-  properties may be added without a version bump.
+  properties may be added without a version bump. Version `1.1` renamed the `skipped` summary count
+  and the `skipped` case status to `errored`; `1.0` consumers reading either name must be updated.
 - `caseId` is built from test-file-relative information only, so the same case has the same identity
   regardless of the directory the CLI was invoked from.
 - `target` is `null` when a test could not be resolved to any target; there is no target to name.
 - `inputFile` and `inputCase` name the case a run used. Both are `null` when no input file was
   supplied, so a host that never passes `--inputs` sees exactly the document it saw before.
-- `assertions` is present only for cases that were actually evaluated. A skipped case never reached
+- `assertions` is present only for cases that were actually evaluated. An errored case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares
   none.
+- `status` is `passed`, `failed` or `errored` in `run` mode, and `listed` or `unresolved` in `list`
+  mode. There is no `skipped`: nothing in the framework declines to run, so a case the runner could
+  not evaluate is reported as an error rather than as something benign.
 - `durationMs` is how long this case cost, in milliseconds to three decimal places. It covers the
   whole unit of work attributable to the case, including compiling the target, because that is the
-  cost a slow policy actually imposes. Skipped cases carry one too: deciding a target cannot be
+  cost a slow policy actually imposes. Errored cases carry one too: deciding a target cannot be
   evaluated still takes time. `summary.durationMs` is the sum of the cases, not wall-clock time for
   the process.
 - `durationMs` is absent in `--list` mode. Listing evaluates nothing, so there is no evaluation to
@@ -1215,7 +1304,22 @@ Notes on the mapping:
 - **A case that could not be evaluated is an `<error>`, not `<skipped>`.** JUnit's "skipped" means a
   test was intentionally not run, and CI systems treat it as benign. This framework already counts an
   unevaluated case as a failure of the run, so reporting it as skipped would let a suite whose
-  targets all failed to compile publish as green. The `skipped` count is therefore always `0`.
+  targets all failed to compile publish as green. The `skipped` count is therefore always `0`, and
+  the `errors` count carries what the console summary reports as `Errored`:
+
+  ```xml
+  <?xml version="1.0" encoding="utf-8"?>
+  <testsuites name="bicep test" tests="2" failures="0" errors="1" skipped="0" time="0.255">
+    <testsuite name="storage-cases.biceptest#namingRules" tests="1" failures="0" errors="1" skipped="0" time="0.034">
+      <testcase name="storage.bicep" classname="storage-cases.biceptest#namingRules" time="0.034" file="storage.bicep">
+        <error message="The target could not be evaluated, so its assertions were never reached." type="EvaluationError">The input "namePrefix" has no value. Supply it from a test case or give it a default.</error>
+      </testcase>
+    </testsuite>
+    <testsuite name="storage-cases.biceptest#sizePolicy" tests="1" failures="0" errors="0" skipped="0" time="0.221">
+      <testcase name="storage.bicep" classname="storage-cases.biceptest#sizePolicy" time="0.221" file="storage.bicep" />
+    </testsuite>
+  </testsuites>
+  ```
 - Every failed assertion for a case appears in a single `<failure>` element. The schema permits
   several, but many consumers display only the first, which would silently hide the rest.
 - `time` is seconds, which is what the format specifies, while the JSON contract reports
@@ -1247,8 +1351,7 @@ WARNING: The following experimental Bicep features have been enabled: TestFramew
 	[✗] Assertion noStorageAccounts failed!
 		Storage accounts must be created by the platform team, not by service modules.
 		fileStorage.bicep(12): storageAccount
-Evaluation Summary: Failure!
-Total: 2 - Success: 0 - Skipped: 0 - Failed: 2
+Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 334ms
 ```
 
 `out/policy.xml` then holds exactly the document `--output-format junit` would have written to
@@ -1311,11 +1414,11 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 Running the passing tests:
 
 ```console
-$ bicep test storage.biceptest
+$ bicep test storage.biceptest --output-detail all
 WARNING: The following experimental Bicep features have been enabled: TestFramework. Experimental features should be enabled for testing purposes only, as there are no guarantees about the quality or stability of these features. Do not enable these settings for any production usage, or your production environment may be subject to breaking.
 [✓] Evaluation validPrefix (storage.bicep) Passed!
 [✓] Evaluation prefixAtLengthLimit (storage.bicep) Passed!
-All 2 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 401ms
 ```
 
 The command exits with code `0`. Each result names both the test and the target it was evaluated against, because one test may cover several targets.
@@ -1323,11 +1426,10 @@ The command exits with code `0`. Each result names both the test and the target 
 Running the failing test shows which assertion failed:
 
 ```console
-$ bicep test storage-failing.biceptest
+$ bicep test storage-failing.biceptest --output-detail all
 [✗] Evaluation prefixTooLong (storage.bicep) Failed at 1 / 2 assertions!
 	[✗] Assertion nameWithinLengthLimit failed!
-Evaluation Summary: Failure!
-Total: 1 - Success: 0 - Skipped: 0 - Failed: 1
+Failed! - Failed: 1, Errored: 0, Passed: 0, Total: 1, Duration: 324ms
 ```
 
 The command exits with code `1`. In this example `namePrefix` is long enough that the generated storage account name exceeds the 24 character limit asserted by `storage.bicep`.
@@ -1335,10 +1437,10 @@ The command exits with code `1`. In this example `namePrefix` is long enough tha
 Running the selector-based test applies one declaration to both modules, while skipping the excluded helper:
 
 ```console
-$ bicep test naming.biceptest
+$ bicep test naming.biceptest --output-detail all
 [✓] Evaluation namingPolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation namingPolicy (modules/fileStorage.bicep) Passed!
-All 2 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 394ms
 ```
 
 Adding another module to `modules/` puts it under the same policy automatically.
@@ -1347,17 +1449,17 @@ Source policies assert about the targets without supplying any parameters, becau
 evaluated:
 
 ```console
-$ bicep test source-policy.biceptest
+$ bicep test source-policy.biceptest --output-detail all
 [✓] Evaluation moduleSourcePolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation moduleSourcePolicy (modules/fileStorage.bicep) Passed!
 [✓] Evaluation compositionPolicy (app.bicep) Passed!
-All 3 evaluations passed!
+Passed! - Failed: 0, Errored: 0, Passed: 3, Total: 3, Duration: 516ms
 ```
 
 When a source policy is violated, the failure names the declarations responsible:
 
 ```console
-$ bicep test source-policy-failing.biceptest
+$ bicep test source-policy-failing.biceptest --output-detail all
 [✗] Evaluation forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion noStorageAccounts failed!
 		Storage accounts must be created by the platform team, not by service modules.
@@ -1366,8 +1468,7 @@ $ bicep test source-policy-failing.biceptest
 	[✗] Assertion noStorageAccounts failed!
 		Storage accounts must be created by the platform team, not by service modules.
 		fileStorage.bicep(12): storageAccount
-Evaluation Summary: Failure!
-Total: 2 - Success: 0 - Skipped: 0 - Failed: 2
+Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 394ms
 ```
 
 The locations are relative to the selector root (`modules`), which is the frame of reference the
@@ -1381,12 +1482,50 @@ naming.biceptest: namingPolicy -> modules/blobStorage.bicep
 naming.biceptest: namingPolicy -> modules/fileStorage.bicep
 ```
 
-Running the whole example folder with a pattern gathers every test file into one run:
+Running the whole example folder with a pattern gathers every test file into one run. The examples
+that need an `--inputs` file are not given one here, so they error — which is what the run reports:
 
 ```console
-$ bicep test --pattern "*.biceptest"
+$ bicep test --pattern "*.biceptest" --output-detail all
+[✗] Evaluation context.biceptest: regionPolicy (context.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion locationIsApproved failed!
+[✗] Evaluation deployment-name.biceptest: deploymentNames (deployment-name.bicep) Failed at 2 / 2 assertions!
+	[✗] Assertion rootUsesTheSuppliedName failed!
+		The root deployment should use the name the case supplied.
+		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
+	[✗] Assertion modulesUseTheirOwnNames failed!
+		Each module should see the deployment name its own declaration computed.
+		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
+[✗] Evaluation fleet-failing.biceptest: storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion onlyStorageIsDeployed failed!
+		This fleet is only allowed to deploy storage accounts.
+		fleet/regionStamp.bicep(16): fleetdev-primary-plan
+		fleet/regionStamp.bicep(24): fleetdev-primary-site
+		fleet/regionStamp.bicep(16): fleetdev-secondary-plan
+		fleet/regionStamp.bicep(24): fleetdev-secondary-site
+[✗] Evaluation fleet.biceptest: fleetShape (fleet.bicep) Failed at 4 / 6 assertions!
+	[✗] Assertion deploysOneAccountPerRegion failed!
+		Expected one data account per region, plus the backup account only when enabled.
+		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
+	[✗] Assertion accountNamesAreLowerCase failed!
+		Storage account names must be lower case.
+		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
+	[✗] Assertion stampsAreDistinct failed!
+		Each module call must produce its own stamp resources.
+		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
+	[✗] Assertion primarySiteIsNamedForItsRole failed!
+		The primary stamp must expose the primary site name.
+		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
+[!] Evaluation mocks-failing.biceptest: unconfiguredField (mocks.bicep) could not be evaluated!
+Reason: The input "identityName" has no value. Supply it from a test case or give it a default.
+[!] Evaluation mocks.biceptest: runtimeReads (mocks.bicep) could not be evaluated!
+Reason: The input "identityName" has no value. Supply it from a test case or give it a default.
 [✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
+[!] Evaluation rbac-failing.biceptest: vaultAccessIsGranted (rbac-miswired.bicep) could not be evaluated!
+Reason: The input "workloadName" has no value. Supply it from a test case or give it a default.
+[!] Evaluation rbac.biceptest: vaultAccessIsGranted (rbac.bicep) could not be evaluated!
+Reason: The input "workloadName" has no value. Supply it from a test case or give it a default.
 [✗] Evaluation source-policy-failing.biceptest: forbidStorageAccounts (modules/blobStorage.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion noStorageAccounts failed!
 		Storage accounts must be created by the platform team, not by service modules.
@@ -1398,21 +1537,20 @@ $ bicep test --pattern "*.biceptest"
 [✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation source-policy.biceptest: moduleSourcePolicy (modules/fileStorage.bicep) Passed!
 [✓] Evaluation source-policy.biceptest: compositionPolicy (app.bicep) Passed!
-[-] Evaluation storage-cases.biceptest: namingRules (storage.bicep) Skipped!
+[!] Evaluation storage-cases.biceptest: namingRules (storage.bicep) could not be evaluated!
 Reason: The input "namePrefix" has no value. Supply it from a test case or give it a default.
 [✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) Passed!
 [✗] Evaluation storage-failing.biceptest: prefixTooLong (storage.bicep) Failed at 1 / 2 assertions!
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
-Evaluation Summary: Failure!
-Total: 12 - Success: 8 - Skipped: 1 - Failed: 3
+Failed! - Failed: 7, Errored: 5, Passed: 8, Total: 20, Duration: 532ms
 ```
 
-The command exits with code `1` because `storage-failing.biceptest` and
-`source-policy-failing.biceptest` are expected to fail, and because `storage-cases.biceptest` was run
-without the `--inputs` file its `namingRules` test needs. The failure of one file does not stop the
-others from running, and one summary reports the aggregate.
+The command exits with code `1`. Some of these files are deliberately failing examples; the rest
+error because a pattern cannot supply the `--inputs` file each one needs, which is why `--pattern`
+suits a source-policy suite better than a suite of parameterized tests. The failure of one file does
+not stop the others from running, and one summary reports the aggregate.
 
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
 

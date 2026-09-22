@@ -19,8 +19,9 @@ namespace Bicep.Cli.Services;
 ///
 /// A case that could not be evaluated is reported as an <c>&lt;error&gt;</c>, not
 /// <c>&lt;skipped&gt;</c>. JUnit's "skipped" means a test was intentionally not run, and CI systems
-/// treat it as benign. This framework already counts an unevaluated case as a failure of the run, so
-/// reporting it as skipped would let a suite whose targets all failed to compile publish as green.
+/// treat it as benign. Nothing in this framework declines to run a case, and an unevaluated case is
+/// already a failure of the run, so reporting it as skipped would let a suite whose targets all
+/// failed to compile publish as green.
 ///
 /// A suite is one test declaration and a case is one evaluation, so the granularity of the JSON
 /// contract is preserved exactly: a declaration matching 250 targets reports 250 test cases, not one.
@@ -37,7 +38,7 @@ public static class TestJUnitSerializer
             new XAttribute("name", SuiteName),
             new XAttribute("tests", results.TotalEvaluations),
             new XAttribute("failures", results.FailedEvaluations),
-            new XAttribute("errors", results.SkippedEvaluations),
+            new XAttribute("errors", results.ErroredEvaluations),
             new XAttribute("skipped", 0),
             new XAttribute("time", FormatSeconds(results.TotalDuration)));
 
@@ -57,7 +58,7 @@ public static class TestJUnitSerializer
             new XAttribute("name", group.Key),
             new XAttribute("tests", group.Count()),
             new XAttribute("failures", group.Count(x => x.Result.Status is TestCaseStatus.Failed)),
-            new XAttribute("errors", group.Count(x => x.Result.Status is TestCaseStatus.Skipped)),
+            new XAttribute("errors", group.Count(x => x.Result.Status is TestCaseStatus.Errored)),
             new XAttribute("skipped", 0),
             new XAttribute("time", FormatSeconds(group.Aggregate(TimeSpan.Zero, (total, x) => total + x.Duration))));
 
@@ -88,10 +89,10 @@ public static class TestJUnitSerializer
 
         switch (result.Result.Status)
         {
-            case TestCaseStatus.Skipped:
+            case TestCaseStatus.Errored:
                 testCase.Add(new XElement("error",
                     new XAttribute("message", $"The target could not be evaluated, so its assertions were never reached."),
-                    new XAttribute("type", "EvaluationSkipped"),
+                    new XAttribute("type", "EvaluationError"),
                     new XText(result.Result.Error ?? string.Empty)));
                 break;
 

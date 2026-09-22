@@ -43,9 +43,14 @@ namespace Bicep.Cli.Services
 
         public int FailedEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Failed);
 
-        public int SkippedEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Skipped);
+        /// <summary>
+        /// Evaluations that could not run at all. Counted separately from failures because the two say
+        /// different things - a failure means the policy was broken, an error means it never ran - but
+        /// either one makes the run a failure.
+        /// </summary>
+        public int ErroredEvaluations => Results.Count(x => x.Result.Status == TestCaseStatus.Errored);
 
-        public bool Success => FailedEvaluations == 0 && SkippedEvaluations == 0;
+        public bool Success => FailedEvaluations == 0 && ErroredEvaluations == 0;
     }
     public class TestRunner(BicepCompiler compiler)
     {

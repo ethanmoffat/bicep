@@ -75,6 +75,7 @@ namespace Bicep.Cli.Constants
         // Test
         public const string List = "--list";
         public const string ResultsFile = "--results-file";
+        public const string OutputDetail = "--output-detail";
 
         // PublishExtension binaries
         public const string BinLinuxX64 = "--bin-linux-x64";

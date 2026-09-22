@@ -68,13 +68,13 @@ namespace Bicep.Cli.IntegrationTests
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
                 result.Should().Be(0);
                 output.Should().Contain("Evaluation passing (main.bicep) Passed!");
-                output.Should().Contain("All 1 evaluations passed!");
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
             }
         }
 
@@ -137,13 +137,13 @@ namespace Bicep.Cli.IntegrationTests
             var bicepPath = FileHelper.SaveResultFile(TestContext, "main.bicep", @"test valid 'test.bicep' = {}
 test missing 'missing.bicep' = {}", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", bicepPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", bicepPath);
 
             using (new AssertionScope())
             {
                 result.Should().Be(1);
                 output.Should().Contain("Evaluation valid (test.bicep) Passed!");
-                output.Should().NotContain("All 1 evaluations passed!");
+                output.Should().NotContain("Passed! - Failed:");
                 error.Should().Contain("Error BCP091");
             }
         }
@@ -161,14 +161,14 @@ test missing 'missing.bicep' = {}", outputFileDir);
             var testPath = FileHelper.SaveResultFile(TestContext, "test.bicep", @"// test content here", outputFileDir);
             var bicepPath = FileHelper.SaveResultFile(TestContext, "main.bicep", @"test foo 'test.bicep' = {}", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", bicepPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", bicepPath);
 
             result.Should().Be(0);
             error.Should().NotBeEmpty();
-            error.Should().NotContain("Skipped");
+            error.Should().NotContain("could not be evaluated");
             error.Should().NotContain("Failed");
 
-            output.Should().Contain("All 1 evaluations passed!");
+            output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
         }
 
         [TestMethod]
@@ -184,13 +184,13 @@ test missing 'missing.bicep' = {}", outputFileDir);
                                                                               output foo string = foo", outputFileDir);
             var bicepPath = FileHelper.SaveResultFile(TestContext, "main.bicep", @"test foo 'test.bicep' = {params:{foo:'ShouldSucceed'}}", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", bicepPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", bicepPath);
 
             result.Should().Be(0);
             error.Should().NotBeEmpty();
-            error.Should().NotContain("Skipped");
+            error.Should().NotContain("could not be evaluated");
             error.Should().NotContain("Failed");
-            output.Should().Contain("All 1 evaluations passed!");
+            output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
         }
         [TestMethod]
         public async Task Test_commandAllAssertionsPassed_ShouldSucceed()
@@ -206,15 +206,15 @@ test missing 'missing.bicep' = {}", outputFileDir);
                                                                               assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
             var bicepPath = FileHelper.SaveResultFile(TestContext, "main.bicep", @"test foo 'test.bicep' = {params:{foo:'ShouldSucceed'}}", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", bicepPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", bicepPath);
 
             result.Should().Be(0);
             error.Should().NotBeEmpty();
-            error.Should().NotContain("Skipped");
+            error.Should().NotContain("could not be evaluated");
             error.Should().NotContain("Failed");
 
             output.Should().NotBeEmpty();
-            output.Should().Contain("All 1 evaluations passed!");
+            output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
         }
 
 
@@ -239,7 +239,7 @@ test missing 'missing.bicep' = {}", outputFileDir);
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain("Evaluation foo (test.bicep) Skipped!");
+                error.Should().Contain("Evaluation foo (test.bicep) could not be evaluated!");
             }
 
         }
@@ -264,7 +264,7 @@ test missing 'missing.bicep' = {}", outputFileDir);
                 output.Should().BeEmpty();
 
                 error.Should().NotBeEmpty();
-                error.Should().Contain("Evaluation foo (test.bicep) Skipped!");
+                error.Should().Contain("Evaluation foo (test.bicep) could not be evaluated!");
             }
         }
 
@@ -319,7 +319,7 @@ assert isEqual = foo == 'ShouldSucceed'";
   }
 }", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -327,7 +327,7 @@ assert isEqual = foo == 'ShouldSucceed'";
                 output.Should().Contain("Evaluation policy (modules/one.bicep) Passed!");
                 output.Should().Contain("Evaluation policy (modules/two.bicep) Passed!");
                 output.Should().NotContain("_skipped.bicep");
-                output.Should().Contain("All 2 evaluations passed!");
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2,");
             }
         }
 
@@ -358,13 +358,13 @@ assert isEqual = foo == extra", outputFileDir);
   }
 }", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
                 result.Should().Be(1);
                 output.Should().Contain("Evaluation policy (modules/one.bicep) Passed!");
-                error.Should().Contain("Evaluation policy (modules/two.bicep) Skipped!");
+                error.Should().Contain("Evaluation policy (modules/two.bicep) could not be evaluated!");
 
                 // An evaluation failure must never echo the parameters or template it was given.
                 error.Should().NotContain("ShouldSucceed");
@@ -390,7 +390,7 @@ assert isEqual = foo == extra", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(1);
-                error.Should().Contain("Evaluation policy Skipped!");
+                error.Should().Contain("Evaluation policy could not be evaluated!");
                 error.Should().Contain("matched no files");
             }
         }
@@ -414,7 +414,7 @@ assert isEqual = foo == extra", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(0);
-                error.Should().NotContain("Skipped");
+                error.Should().NotContain("could not be evaluated");
             }
         }
 
@@ -440,7 +440,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
   }
 }", outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
 
             using (new AssertionScope())
             {
@@ -452,8 +452,8 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 output.Should().Contain("Evaluation beta.biceptest: policy (target.bicep) Passed!");
 
                 // One summary covers the whole run rather than one per file.
-                output.Should().Contain("All 2 evaluations passed!");
-                Regex.Matches(output, "evaluations passed").Should().HaveCount(1);
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2,");
+                Regex.Matches(output, "Passed! - Failed:").Should().HaveCount(1);
             }
         }
 
@@ -471,7 +471,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 FileHelper.SaveResultFile(TestContext, $"{name}.biceptest", "test policy 'target.bicep' = {}", outputFileDir);
             }
 
-            var (output, _, result) = await Bicep(settings, "test", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", "--pattern", Path.Combine(outputFileDir, "*.biceptest"));
 
             using (new AssertionScope())
             {
@@ -607,7 +607,7 @@ test failing 'target.bicep' = {
 
                 // No progress text is mixed into the structured stream.
                 output.Should().NotContain("Evaluation");
-                output.Should().NotContain("evaluations passed");
+                output.Should().NotContain("Passed! - Failed:");
 
                 // Nor does the structured stream carry the parameter values the test supplied.
                 output.Should().NotContain("ShouldFail");
@@ -623,7 +623,7 @@ test failing 'target.bicep' = {
             Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
 
             FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "one.bicep"), "assert alwaysTrue = true", outputFileDir);
-            // Does not compile, so it is skipped - and rejecting it still costs time.
+            // Does not compile, so it errors - and rejecting it still costs time.
             FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "broken.bicep"), "resource nope 'Not.A/type' = {}", outputFileDir);
 
             var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
@@ -651,7 +651,7 @@ test failing 'target.bicep' = {
                 }
 
                 // Including the one that could not be evaluated.
-                cases.Should().Contain(x => x.GetProperty("status").GetString() == "skipped");
+                cases.Should().Contain(x => x.GetProperty("status").GetString() == "errored");
 
                 var total = cases.Sum(x => x.GetProperty("durationMs").GetDouble());
                 root.GetProperty("summary").GetProperty("durationMs").GetDouble()
@@ -813,7 +813,7 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 // With the document in a file, the console carries the ordinary human log - here on
                 // stderr, where failures always go - rather than nothing at all.
                 error.Should().Contain("Evaluation failing");
-                error.Should().Contain("Evaluation Summary: Failure!");
+                error.Should().Contain("Failed! - Failed:");
 
                 // And the document is not duplicated onto the console.
                 output.Should().NotContain("<testsuites");
@@ -984,21 +984,21 @@ assert isEqual = foo == 'ShouldSucceed'";
   }
 }", outputFileDir);
 
-            var (firstOutput, _, firstResult) = await Bicep(settings, "test", testPath);
+            var (firstOutput, _, firstResult) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             firstResult.Should().Be(0);
-            firstOutput.Should().Contain("All 1 evaluations passed!");
+            firstOutput.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
 
             // A new matching file is covered by the next run. The test declaration is untouched.
             FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "two.bicep"), target, outputFileDir);
 
-            var (secondOutput, _, secondResult) = await Bicep(settings, "test", testPath);
+            var (secondOutput, _, secondResult) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
                 secondResult.Should().Be(0);
                 secondOutput.Should().Contain("Evaluation policy (modules/two.bicep) Passed!");
-                secondOutput.Should().Contain("All 2 evaluations passed!");
+                secondOutput.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2,");
             }
         }
 
@@ -1185,7 +1185,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, _, result) = await Bicep(settings, "test", testPath);
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -1357,7 +1357,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, _, result) = await Bicep(settings, "test", testPath);
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -1452,7 +1452,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -1505,7 +1505,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, _, result) = await Bicep(settings, "test", testPath);
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -1767,7 +1767,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, _, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -1777,7 +1777,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 output.Should().Contain("Evaluation sizePolicy (src/first.bicep) [policy.biceptestparam: relaxed] Passed!");
                 output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: strict] Passed!");
                 output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: relaxed] Passed!");
-                output.Should().Contain("All 4 evaluations passed!");
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4,");
             }
         }
 
@@ -1814,7 +1814,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -1956,7 +1956,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -2036,7 +2036,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2100,7 +2100,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -2165,7 +2165,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -2200,7 +2200,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 // No name was stated, so the failure names the missing context rather than inventing a
                 // deployment name nobody chose.
                 result.Should().Be(1);
-                error.Should().Contain("Skipped!");
+                error.Should().Contain("could not be evaluated!");
                 error.Should().Contain("no deployment name was supplied");
             }
         }
@@ -2242,7 +2242,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 // Context is evaluation metadata, so a production parameter that happens to share its
                 // name is still unsatisfied rather than silently filled in.
                 result.Should().Be(1);
-                error.Should().Contain("[cases.biceptestparam: onlyContext] Skipped!");
+                error.Should().Contain("[cases.biceptestparam: onlyContext] could not be evaluated!");
                 error.Should().Contain("The value for the template parameter 'resourceGroupLocation'");
             }
         }
@@ -2262,7 +2262,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 test contextPolicy 'main.bicep' = {}
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2326,7 +2326,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2398,7 +2398,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2479,7 +2479,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2534,7 +2534,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -2609,7 +2609,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2693,7 +2693,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -2762,7 +2762,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2915,7 +2915,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -2975,7 +2975,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -3098,7 +3098,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -3160,7 +3160,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -3243,7 +3243,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
 
             using (new AssertionScope())
             {
@@ -3308,7 +3308,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -3373,7 +3373,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 }
                 """, outputFileDir);
 
-            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
 
             using (new AssertionScope())
             {
@@ -3450,6 +3450,182 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
 
                 error.Should().NotBeEmpty();
                 error.Should().Contain("TestFrameWork not enabled");
+            }
+        }
+
+        /// <summary>
+        /// Three targets with three different outcomes, which every reporting test below runs against:
+        /// one passes, one breaks the policy, and one cannot be evaluated at all because it declares a
+        /// parameter the test does not supply.
+        /// </summary>
+        private string SaveMixedOutcomeTestFile(string outputFileDir)
+        {
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "modules"));
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "passes.bicep"), @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "fails.bicep"), @"param foo string
+assert isEqual = foo == 'SomethingElse'", outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, Path.Combine("modules", "errors.bicep"), @"param foo string
+param unsupplied string
+assert isEqual = foo == unsupplied", outputFileDir);
+
+            return FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy = {
+  match: {
+    root: 'modules'
+    include: ['*.bicep']
+  }
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+        }
+
+        [TestMethod]
+        public async Task Test_Summary_CountsFailedAndErroredSeparately()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = SaveMixedOutcomeTestFile(outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+
+                // A broken policy and a policy that never ran call for different action, so they are
+                // counted apart - but neither is reported as anything other than a failure of the run.
+                error.Should().Contain("Failed! - Failed: 1, Errored: 1, Passed: 1, Total: 3,");
+                error.Should().NotContain("Skipped");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Summary_ReportsThePassingRunInTheSameShape()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", @"param foo string
+assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "main.biceptest", @"test policy 'main.bicep' = {
+  params: {
+    foo: 'ShouldSucceed'
+  }
+}", outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+
+                // One shape whatever the outcome, so neither a reader nor a log scraper has to
+                // recognize two different summaries.
+                output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1,");
+                output.Should().MatchRegex(@"Duration: \d");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_OutputDetail_DefaultsToReportingOnlyWhatWentWrong()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = SaveMixedOutcomeTestFile(outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+
+                // A run over many targets is read to find out what is wrong with it. Confirmation that
+                // nothing is wrong with the rest buries that.
+                output.Should().NotContain("modules/passes.bicep");
+                output.Should().NotContain("Passed!");
+
+                error.Should().Contain("modules/fails.bicep");
+                error.Should().Contain("modules/errors.bicep");
+                error.Should().Contain("Failed! - Failed: 1, Errored: 1, Passed: 1, Total: 3,");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_OutputDetail_All_ReportsEveryCase()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = SaveMixedOutcomeTestFile(outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation policy (modules/passes.bicep) Passed!");
+                error.Should().Contain("Evaluation policy (modules/fails.bicep) Failed");
+                error.Should().Contain("Evaluation policy (modules/errors.bicep) could not be evaluated!");
+                error.Should().Contain("Failed! - Failed: 1, Errored: 1, Passed: 1, Total: 3,");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_OutputDetail_Summary_ReportsTheCountsAndNothingElse()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = SaveMixedOutcomeTestFile(outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "summary", testPath);
+
+            using (new AssertionScope())
+            {
+                // Quieter output never changes the verdict: the exit status still carries it.
+                result.Should().Be(1);
+
+                output.Should().NotContain("modules/");
+                error.Should().NotContain("modules/");
+                error.Should().Contain("Failed! - Failed: 1, Errored: 1, Passed: 1, Total: 3,");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_OutputDetail_DoesNotFilterTheMachineReadableDocument()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputdir");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = SaveMixedOutcomeTestFile(outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "summary", "--output-format", "json", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+
+                // The console detail level is a reading aid. A host that received a filtered document
+                // could not tell a case that passed from one that was never reported.
+                var document = JsonDocument.Parse(output);
+                var cases = document.RootElement.GetProperty("cases").EnumerateArray().ToArray();
+
+                cases.Should().HaveCount(3);
+                cases.Select(x => x.GetProperty("status").GetString())
+                    .Should().BeEquivalentTo(["passed", "failed", "errored"]);
             }
         }
     }

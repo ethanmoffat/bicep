@@ -12,5 +12,6 @@ public record TestArguments(
     bool List,
     ImmutableArray<string> Inputs,
     TestOutputFormat? OutputFormat,
+    TestOutputDetail? OutputDetail,
     string? ResultsFile,
     DiagnosticsFormat? DiagnosticsFormat) : IFilePatternInputArguments;

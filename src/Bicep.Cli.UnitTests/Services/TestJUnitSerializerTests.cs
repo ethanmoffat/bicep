@@ -25,7 +25,7 @@ public class TestJUnitSerializerTests
     private static TestEvaluation Failed(string passing, AssertionResult failing)
         => new(null, null, [new AssertionResult(passing, true), failing], [failing]);
 
-    private static TestEvaluation Skipped(string error) => new(null, error, [], []);
+    private static TestEvaluation Errored(string error) => new(null, error, [], []);
 
     private static XElement Parse(string xml) => XDocument.Parse(xml).Root!;
 
@@ -91,7 +91,7 @@ public class TestJUnitSerializerTests
     {
         var root = Parse(TestJUnitSerializer.SerializeResults(new(
         [
-            Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Skipped("Missing parameter 'prefix'.")),
+            Result(Identity("/repo/main.biceptest", "policy", "/repo/one.bicep"), Errored("Missing parameter 'prefix'.")),
         ])));
 
         var testCase = Cases(root).Single();
@@ -101,7 +101,7 @@ public class TestJUnitSerializerTests
         // skipped would let a suite whose targets all failed to compile publish as green.
         testCase.Element("skipped").Should().BeNull();
         testCase.Element("error").Should().NotBeNull();
-        testCase.Element("error")!.Attribute("type")!.Value.Should().Be("EvaluationSkipped");
+        testCase.Element("error")!.Attribute("type")!.Value.Should().Be("EvaluationError");
         testCase.Element("error")!.Value.Should().Contain("Missing parameter 'prefix'.");
 
         root.Attribute("errors")!.Value.Should().Be("1");

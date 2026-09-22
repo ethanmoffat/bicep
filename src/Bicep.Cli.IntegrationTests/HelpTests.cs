@@ -106,6 +106,7 @@ namespace Bicep.Cli.IntegrationTests
                     "--pattern",
                     "--list",
                     "--output-format",
+                    "--output-detail",
                     "--no-restore",
                     "--diagnostics-format");
             }
