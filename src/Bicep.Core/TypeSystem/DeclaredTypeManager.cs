@@ -1801,6 +1801,16 @@ namespace Bicep.Core.TypeSystem
                     // the declared type will be the same as the parent
                     return TryCreateAssignment(ResolveDiscriminatedObjects(moduleType.Body.Type, syntax), syntax);
 
+                case TestDeclarationSyntax:
+                    if (GetDeclaredTypeAssignment(parent)?.Reference.Type is not TestType testType)
+                    {
+                        return null;
+                    }
+
+                    // the object literal's parent is a test declaration, which makes this the body of the test
+                    // the declared type will be the same as the parent
+                    return TryCreateAssignment(ResolveDiscriminatedObjects(testType.Body.Type, syntax), syntax);
+
                 case IfConditionSyntax:
                     if (GetDeclaredTypeAssignment(parent) is not { } ifParentTypeAssignment)
                     {

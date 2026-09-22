@@ -135,6 +135,93 @@ test sourcePolicy = {
     }
 
     [TestMethod]
+    public async Task Completions_inside_an_assertion_body_offer_its_properties()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    noExistingResources: {
+      |
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        completions.Select(c => c.Label).Should().Contain(
+            ["passWhen", "failOn", "message"],
+            "because an assertion body is a typed object, so its properties must be offered");
+    }
+
+    [TestMethod]
+    public async Task Completions_inside_the_match_selector_offer_its_properties()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  match: {
+    |
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        completions.Select(c => c.Label).Should().Contain(
+            ["root", "include", "exclude"],
+            "because the match selector is a typed object, so its properties must be offered");
+    }
+
+    [TestMethod]
+    public async Task Completions_in_a_test_body_offer_the_test_properties()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  |
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        completions.Select(c => c.Label).Should().Contain(
+            ["match", "assertions", "params"],
+            "because a test body is a typed object, so its properties must be offered");
+    }
+
+    [TestMethod]
     public async Task Hovering_the_target_symbol_describes_it()
     {
         var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
