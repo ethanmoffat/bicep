@@ -11,6 +11,7 @@ using Bicep.LangServer.IntegrationTests.Helpers;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using OmniSharp.Extensions.LanguageServer.Protocol;
+using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
 namespace Bicep.LangServer.IntegrationTests;
 
@@ -294,6 +295,365 @@ case shor|tPrefix = {
 
         hover.Should().NotBeNull("because a case is a declared symbol, so hovering it must produce something");
         hover!.Contents.MarkupContent!.Value.Should().Contain("case shortPrefix");
+    }
+
+    [TestMethod]
+    public async Task Completions_in_a_test_body_carry_property_descriptions()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  |
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        // Property keys deliberately do not hover, so completion is the only place these descriptions
+        // can reach an author.
+        foreach (var label in new[] { "match", "assertions", "params" })
+        {
+            var item = completions.Should().ContainSingle(c => c.Label == label).Subject;
+
+            item.Documentation?.MarkupContent?.Value.Should().NotBeNullOrWhiteSpace(
+                $"because the '{label}' property declares a description");
+        }
+    }
+
+    [TestMethod]
+    public async Task Completions_after_target_evaluated_offer_the_evaluated_facts()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    noExistingResources: {
+      failOn: target.evaluated.|
+      message: 'Targets must create the resources they own.'
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        completions.Select(c => c.Label).Should().Contain(
+            ["resources", "outputs", "withModules"],
+            "because 'evaluated' carries what the selected file would produce for this case");
+    }
+
+    [TestMethod]
+    public async Task The_target_symbol_is_not_in_scope_outside_an_assertion()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+var namePrefix = 'contoso'
+
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  params: {
+    prefix: |
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var completions = await file.RequestAndResolveCompletions(cursor);
+
+        var labels = completions.Select(c => c.Label).ToList();
+
+        // The guard: ordinary symbols do complete here, so an empty list cannot make this pass.
+        labels.Should().Contain("namePrefix");
+        labels.Should().NotContain(
+            "target",
+            "because 'target' describes the file under test, and an input value is chosen before one is selected");
+    }
+
+    [TestMethod]
+    public async Task Test_file_reports_an_assertion_that_declares_both_checks()
+    {
+        var diagnostics = await OpenTestFileForDiagnostics(@"
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    cannotBeBoth: {
+      passWhen: true
+      failOn: []
+      message: 'an assertion cannot be phrased two ways at once'
+    }
+  }
+}
+");
+
+        diagnostics.Diagnostics.Should().Contain(
+            d => d.Code!.Value.String == "BCP463",
+            "because an assertion uses exactly one of 'passWhen' or 'failOn'");
+    }
+
+    [TestMethod]
+    public async Task Test_file_reports_an_assertion_that_checks_nothing()
+    {
+        var diagnostics = await OpenTestFileForDiagnostics(@"
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    checksNothing: {}
+  }
+}
+");
+
+        var codes = diagnostics.Diagnostics.Select(d => d.Code!.Value.String).ToList();
+
+        // An assertion that checks nothing passes vacuously, which is the failure mode the framework
+        // exists to prevent, so it is reported twice over: no check, and no message.
+        codes.Should().Contain("BCP463");
+        codes.Should().Contain("BCP035");
+    }
+
+    [TestMethod]
+    public async Task Correcting_a_test_file_clears_its_diagnostics_without_saving()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var mainUri = InMemoryFileResolver.GetFileUri("/path/to/main.bicep");
+
+        var fileResolver = new InMemoryFileResolver(new Dictionary<Uri, string>
+        {
+            [mainUri] = TargetBicep,
+        });
+
+        using var helper = await MultiFileLanguageServerHelper.StartLanguageServer(
+            TestContext,
+            services => services
+                .WithFileExplorer(new FileSystemFileExplorer(fileResolver.MockFileSystem))
+                .WithFeatureOverrides(new(TestContext, TestFrameworkEnabled: true)));
+
+        const string TestFileFormat = @"
+test sourcePolicy = {{
+  match: {{
+    include: ['main.bicep']
+  }}
+  assertions: {{
+    noExistingResources: {{
+      failOn: filter(target.{0}, r => r.existing)
+      message: 'Targets must create the resources they own.'
+    }}
+  }}
+}}
+";
+
+        var withTypo = await helper.OpenFileOnceAsync(TestContext, string.Format(TestFileFormat, "resourcez"), testUri);
+        withTypo.Diagnostics.Should().Contain(d => d.Code!.Value.String == "BCP083");
+
+        var corrected = await helper.ChangeFileAsync(TestContext, string.Format(TestFileFormat, "resources"), testUri, 1);
+
+        corrected.Diagnostics.Should().BeEmpty(
+            "because the server recompiles the in-memory document, so a fix takes effect before the file is saved");
+    }
+
+    [TestMethod]
+    public async Task Formatting_is_supported_for_test_files()
+    {
+        using var server = await MultiFileLanguageServerHelper.StartLanguageServer(
+            TestContext,
+            services => services.WithFeatureOverrides(new(TestContext, TestFrameworkEnabled: true)));
+
+        var helper = new ServerRequestHelper(TestContext, server);
+
+        await helper.OpenFile("/main.bicep", TargetBicep);
+
+        var file = await helper.OpenFile("/policy.biceptest", """
+
+            test    sourcePolicy = {
+                match: {
+              include: ['main.bicep']
+                }
+                  assertions: {
+                noExistingResources:     {
+                        failOn: filter(target.resources, r => r.existing)
+                  message:   'Targets must create the resources they own.'
+                }
+              }
+            }
+            """);
+
+        var textEdit = await file.Format();
+
+        textEdit.NewText.Should().Be("""
+            test sourcePolicy = {
+              match: {
+                include: ['main.bicep']
+              }
+              assertions: {
+                noExistingResources: {
+                  failOn: filter(target.resources, r => r.existing)
+                  message: 'Targets must create the resources they own.'
+                }
+              }
+            }
+
+            """);
+    }
+
+    [TestMethod]
+    public async Task Go_to_definition_from_an_assertion_finds_the_variable()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+var allowedTypes = ['Microsoft.Storage/storageAccounts']
+
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    onlyAllowedTypes: {
+      failOn: filter(target.resources, r => !contains(allowed|Types, r.type))
+      message: 'Only the allowed resource types may be declared.'
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var clientFile = new LanguageClientFile(testUri, testText);
+        var file = new FileRequestHelper(helper.Client, clientFile);
+        var link = await file.GotoDefinition(cursor);
+
+        link.TargetUri.ToString().Should().BeEquivalentTo(testUri.ToString());
+        clientFile.GetOffset(link.TargetSelectionRange.Start).Should().Be(
+            testText.IndexOf("allowedTypes"),
+            "because the definition of a variable referenced from an assertion is its declaration");
+    }
+
+    [TestMethod]
+    public async Task Hovering_a_variable_in_a_test_file_shows_its_type()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+var allowedTypes = ['Microsoft.Storage/storageAccounts']
+
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    onlyAllowedTypes: {
+      failOn: filter(target.resources, r => !contains(allowed|Types, r.type))
+      message: 'Only the allowed resource types may be declared.'
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var hover = await file.RequestHover(cursor);
+
+        hover.Should().NotBeNull();
+        hover!.Contents.MarkupContent!.Value.Should().Contain("var allowedTypes");
+    }
+
+    [TestMethod]
+    public async Task Hovering_a_test_property_key_describes_it()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+test sourcePolicy = {
+  ma|tch: {
+    include: ['main.bicep']
+  }
+  assertions: {
+    noExistingResources: {
+      failOn: filter(target.resources, r => r.existing)
+      message: 'Targets must create the resources they own.'
+    }
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var hover = await file.RequestHover(cursor);
+
+        // Hovering a property key resolves a property symbol, which only exists once the enclosing
+        // object has a declared type. A test body had none, so these keys used to hover as nothing.
+        hover.Should().NotBeNull();
+        hover!.Contents.MarkupContent!.Value.Should().Contain("Selects the files this test runs against");
+    }
+
+    private async Task<PublishDiagnosticsParams> OpenTestFileForDiagnostics(string testFileText)
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var mainUri = InMemoryFileResolver.GetFileUri("/path/to/main.bicep");
+
+        var fileResolver = new InMemoryFileResolver(new Dictionary<Uri, string>
+        {
+            [mainUri] = TargetBicep,
+        });
+
+        using var helper = await MultiFileLanguageServerHelper.StartLanguageServer(
+            TestContext,
+            services => services
+                .WithFileExplorer(new FileSystemFileExplorer(fileResolver.MockFileSystem))
+                .WithFeatureOverrides(new(TestContext, TestFrameworkEnabled: true)));
+
+        return await helper.OpenFileOnceAsync(TestContext, testFileText, testUri);
     }
 
     private Task<LanguageServerHelper> StartServerWithFiles(IReadOnlyDictionary<DocumentUri, string> files, DocumentUri entryFileUri)

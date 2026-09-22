@@ -173,10 +173,21 @@ Top-level completions in a `.biceptest` file are scoped to what a test file can 
 
 Deployment-only declarations are omitted because a test file is never deployed. The `test` keyword is hidden unless the `testFramework` experimental feature is enabled, so the completion list matches what will actually compile.
 
+Inside a test, completion follows the shape of the declaration:
+
+| Where | Offered |
+|-------|---------|
+| The test body | `match`, `assertions`, `params` |
+| `match` | `root`, `include`, `exclude` |
+| An assertion body | `passWhen`, `failOn`, `message` |
+| An assertion expression | `target`, and its facts after `target.` |
+
+`target` is offered only inside an assertion. It describes the file under test, and no file has been
+selected anywhere else in the declaration.
+
 Hovering `target` describes what it is and where it is available. Hovering a `case` name shows its
-`@description`, if it has one. Object property *keys* such as `match` and `assertions` do not hover
--- that is true of `name` and `location` in an ordinary Bicep file too -- but their descriptions are
-shown when they are offered as completions.
+`@description`, if it has one. Property keys such as `match` and `assertions` hover with their type
+and description, the same description shown when they are offered as a completion.
 
 Assertion names are highlighted as declarations rather than as property keys, so the name you chose
 is visually distinct from the fixed `passWhen`/`failOn`/`message` around it:
