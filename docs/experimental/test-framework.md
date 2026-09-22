@@ -173,6 +173,28 @@ Top-level completions in a `.biceptest` file are scoped to what a test file can 
 
 Deployment-only declarations are omitted because a test file is never deployed. The `test` keyword is hidden unless the `testFramework` experimental feature is enabled, so the completion list matches what will actually compile.
 
+Hovering `target` describes what it is and where it is available. Hovering a `case` name shows its
+`@description`, if it has one. Object property *keys* such as `match` and `assertions` do not hover
+-- that is true of `name` and `location` in an ordinary Bicep file too -- but their descriptions are
+shown when they are offered as completions.
+
+Assertion names are highlighted as declarations rather than as property keys, so the name you chose
+is visually distinct from the fixed `passWhen`/`failOn`/`message` around it:
+
+```bicep
+test moduleSourcePolicy = {
+  match: {                        // 'match' is part of the language
+    root: 'modules'
+  }
+  assertions: {
+    onlyAllowedResourceTypes: {   // this name is yours, and is highlighted like a declaration
+      failOn: filter(target.resources, r => !contains(allowedResourceTypes, r.type))
+      message: 'Modules under modules/ may only declare storage accounts.'
+    }
+  }
+}
+```
+
 `.biceptestparam` files are registered the same way, as the `bicep-testparams` language. Their
 top-level completions are scoped to what an input file can declare:
 

@@ -117,11 +117,24 @@ public class SemanticTokenVisitor : CstVisitor
         }
         else
         {
-            AddTokenType(syntax.Key, SemanticTokenType.TypeParameter);
+            AddTokenType(syntax.Key, IsAssertionName(syntax) ? SemanticTokenType.Variable : SemanticTokenType.TypeParameter);
         }
         Visit(syntax.Colon);
         Visit(syntax.Value);
     }
+
+    /// <summary>
+    /// The keys of a test's "assertions" object are names the author invented, not properties of a
+    /// schema: that object type declares no properties at all and accepts any name. Highlighting them
+    /// like every other property key makes an assertion name look like "match" or "failOn", which are
+    /// fixed parts of the language. Treat them as the declarations they are instead.
+    /// </summary>
+    private bool IsAssertionName(ObjectPropertySyntax syntax)
+        => model.Binder.GetParent(syntax) is ObjectSyntax assertions
+            && model.Binder.GetParent(assertions) is ObjectPropertySyntax assertionsProperty
+            && string.Equals(assertionsProperty.TryGetKeyText(), LanguageConstants.TestAssertionsPropertyName, StringComparison.Ordinal)
+            && model.Binder.GetParent(assertionsProperty) is ObjectSyntax testBody
+            && model.Binder.GetParent(testBody) is TestDeclarationSyntax;
 
     public override void VisitOutputDeclarationSyntax(OutputDeclarationSyntax syntax)
     {
@@ -191,6 +204,13 @@ public class SemanticTokenVisitor : CstVisitor
         AddTokenType(syntax.Keyword, SemanticTokenType.Keyword);
         AddTokenType(syntax.Name, SemanticTokenType.Variable);
         base.VisitTestDeclarationSyntax(syntax);
+    }
+
+    public override void VisitTestCaseDeclarationSyntax(TestCaseDeclarationSyntax syntax)
+    {
+        AddTokenType(syntax.Keyword, SemanticTokenType.Keyword);
+        AddTokenType(syntax.Name, SemanticTokenType.Variable);
+        base.VisitTestCaseDeclarationSyntax(syntax);
     }
 
     public override void VisitIfConditionSyntax(IfConditionSyntax syntax)
