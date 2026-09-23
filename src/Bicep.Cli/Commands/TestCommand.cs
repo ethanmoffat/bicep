@@ -114,6 +114,9 @@ namespace Bicep.Cli.Commands
             var documentToStdout = machineReadable && resultsFileUri is null;
             var allResults = ImmutableArray.CreateBuilder<TestResult>();
             var allInventoryEntries = ImmutableArray.CreateBuilder<TestInventoryEntry>();
+            // Which input files turned out to belong to something that was run. An input passed over
+            // for every discovered test file named a test nobody ran, which is a silent loss of cases.
+            var inputsThatBound = new HashSet<IOUri>();
 
             foreach (var inputUri in inputUris)
             {
@@ -145,7 +148,9 @@ namespace Bicep.Cli.Commands
 
                 var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
                 var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
-                var (inputCases, inputErrors) = await LoadInputCasesAsync(args, inputUri);
+                var (inputCases, inputErrors, boundInputs) = await LoadInputCasesAsync(args, inputUri, discovered: args.FilePattern is not null);
+
+                inputsThatBound.UnionWith(boundInputs);
 
                 // A broken input file never stops the remaining ones from running: every case that can
                 // be evaluated still is, and the failure is reported and folded into the exit code.
@@ -177,6 +182,23 @@ namespace Bicep.Cli.Commands
             }
             else
             {
+                // An input file that bound to none of the discovered test files contributed no cases at
+                // all. Nothing above reported it, because each individual file legitimately passed it
+                // over, so the loss would otherwise be invisible.
+                if (args.FilePattern is not null && !args.Inputs.IsDefaultOrEmpty)
+                {
+                    foreach (var input in args.Inputs)
+                    {
+                        var unboundUri = inputOutputArgumentsResolver.PathToUri(input);
+
+                        if (!inputsThatBound.Contains(unboundUri))
+                        {
+                            await io.Error.Writer.WriteLineAsync($"{unboundUri.GetFileName()}: the test file this input supplies cases for was not among the files being run, so none of its cases ran.");
+                            hasErrors = true;
+                        }
+                    }
+                }
+
                 var aggregated = new TestResults(allResults.ToImmutable());
 
                 if (!documentToStdout)
@@ -221,16 +243,23 @@ namespace Bicep.Cli.Commands
         /// Compiles each supplied parameters file and collects the cases it declares for this test file.
         /// A file that cannot contribute cases is reported and skipped rather than aborting the run, so
         /// one bad input file never hides the outcome of the others.
+        ///
+        /// An input file binds to exactly one test file by name. A glob asks for whatever it matches, so
+        /// a file bound to one of the other matches is simply not this file's input and is passed over:
+        /// requiring every input to bind to every discovered file would make cases and discovery
+        /// mutually exclusive. The caller checks afterwards that each input bound to something. A test
+        /// file named outright is different - there is only one file the input could have meant.
         /// </summary>
-        private async Task<(ImmutableArray<TestInputCase> Cases, ImmutableArray<string> Errors)> LoadInputCasesAsync(TestArguments args, IOUri testFileUri)
+        private async Task<(ImmutableArray<TestInputCase> Cases, ImmutableArray<string> Errors, ImmutableArray<IOUri> Bound)> LoadInputCasesAsync(TestArguments args, IOUri testFileUri, bool discovered)
         {
             if (args.Inputs.IsDefaultOrEmpty)
             {
-                return ([], []);
+                return ([], [], []);
             }
 
             var cases = ImmutableArray.CreateBuilder<TestInputCase>();
             var errors = ImmutableArray.CreateBuilder<string>();
+            var bound = ImmutableArray.CreateBuilder<IOUri>();
 
             foreach (var input in args.Inputs)
             {
@@ -243,15 +272,21 @@ namespace Bicep.Cli.Commands
 
                 if (result.Error is { } error)
                 {
+                    if (discovered && result.BoundTestFile is not null)
+                    {
+                        continue;
+                    }
+
                     diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
                     errors.Add($"{inputUri.GetFileName()}: {error}");
                     continue;
                 }
 
+                bound.Add(inputUri);
                 cases.AddRange(result.Cases);
             }
 
-            return (cases.ToImmutable(), errors.ToImmutable());
+            return (cases.ToImmutable(), errors.ToImmutable(), bound.ToImmutable());
         }
 
         /// <summary>
@@ -420,7 +455,7 @@ namespace Bicep.Cli.Commands
             };
             var inputsOption = new System.CommandLine.Option<string[]>(Option.Inputs)
             {
-                Description = "Runs the tests once per case declared in the specified .biceptestparam file. May be specified more than once.",
+                Description = "Runs the tests once per case declared in the specified .biceptestparam file. Each input file applies to the test file it names. May be specified more than once.",
                 AllowMultipleArgumentsPerToken = true,
             };
             var listOption = new System.CommandLine.Option<bool>(Option.List)

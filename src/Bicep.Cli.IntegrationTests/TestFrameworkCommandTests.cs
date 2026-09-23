@@ -1969,6 +1969,125 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_InputCasesApplyToTheDiscoveredTestFileTheyNameAndNotTheOthers()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-discovered");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param capacity int = 1
+
+                output capacity int = capacity
+                """, outputFileDir);
+
+            // One discovered test takes cases; the other takes none. A pattern covering both must
+            // therefore run each with what belongs to it.
+            FileHelper.SaveResultFile(TestContext, "sized.biceptest", """
+                param expected int
+
+                test sizePolicy 'main.bicep' = {
+                  params: {
+                    capacity: expected
+                  }
+                  assertions: {
+                    capacityIsWhatTheCaseAsked: {
+                      passWhen: target.evaluated.outputs.capacity == expected
+                      message: 'The target should deploy the capacity the case supplied.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "shape.biceptest", """
+                test shapePolicy 'main.bicep' = {
+                  assertions: {
+                    declaresNoResources: {
+                      passWhen: length(target.resources) == 0
+                      message: 'The file must declare no resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "sized.biceptestparam", """
+                using 'sized.biceptest'
+
+                case small = {
+                  expected: 2
+                }
+
+                case large = {
+                  expected: 9
+                }
+                """, outputFileDir);
+
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", pattern, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                error.Should().NotContain("not the test file being run");
+                output.Should().Contain("Evaluation sized.biceptest: sizePolicy (main.bicep) [sized.biceptestparam: small] Passed!");
+                output.Should().Contain("Evaluation sized.biceptest: sizePolicy (main.bicep) [sized.biceptestparam: large] Passed!");
+                // The test that declares no inputs is run once, not once per case.
+                output.Should().Contain("Evaluation shape.biceptest: shapePolicy (main.bicep) Passed!");
+                output.Should().Contain("Passed: 3, Total: 3");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCasesNamingATestFileThatIsNotRun_AreReportedRatherThanLost()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-unbound");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "absent.biceptest", "param expected int = 0", outputFileDir);
+
+            var runDir = Path.Combine(outputFileDir, "run");
+            Directory.CreateDirectory(runDir);
+            FileHelper.SaveResultFile(TestContext, "main.bicep", "param unused string = ''", runDir);
+
+            foreach (var name in new[] { "first.biceptest", "second.biceptest" })
+            {
+                FileHelper.SaveResultFile(TestContext, name, """
+                    test shapePolicy 'main.bicep' = {
+                      assertions: {
+                        declaresNoResources: {
+                          passWhen: length(target.resources) == 0
+                          message: 'The file must declare no resources.'
+                        }
+                      }
+                    }
+                    """, runDir);
+            }
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "absent.biceptestparam", """
+                using 'absent.biceptest'
+
+                case only = {
+                  expected: 1
+                }
+                """, outputFileDir);
+
+            // The pattern deliberately excludes the test the input names, so every discovered file
+            // passes the input over and nothing would otherwise say the cases never ran.
+            var pattern = Path.Combine(runDir, "*.biceptest");
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", pattern, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("absent.biceptestparam: the test file this input supplies cases for was not among the files being run, so none of its cases ran.");
+                output.Should().Contain("Evaluation first.biceptest: shapePolicy (main.bicep) Passed!");
+                output.Should().Contain("Evaluation second.biceptest: shapePolicy (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_InputFileWithWrongExtension_IsRejected()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

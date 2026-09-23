@@ -14,7 +14,7 @@ namespace Bicep.Cli.Services;
 /// <summary>
 /// The cases one test parameters file contributes, or the reason it contributed none.
 /// </summary>
-public record TestInputFileResult(IOUri InputFile, ImmutableArray<TestInputCase> Cases, string? Error)
+public record TestInputFileResult(IOUri InputFile, ImmutableArray<TestInputCase> Cases, string? Error, IOUri? BoundTestFile = null)
 {
     public bool IsSuccess => Error is null;
 }
@@ -47,7 +47,10 @@ public static class TestInputCaseLoader
 
         if (boundUri != expectedTestFile)
         {
-            return new(inputFileUri, [], $"The input file supplies cases for \"{boundUri.GetPathRelativeTo(inputFileUri)}\", not the test file being run.");
+            // The bound file is reported alongside the message so a caller running several test
+            // files can tell "these cases belong to one of the others" from "these cases belong to
+            // a test file nobody is running".
+            return new(inputFileUri, [], $"The input file supplies cases for \"{boundUri.GetPathRelativeTo(inputFileUri)}\", not the test file being run.", boundUri);
         }
 
         var context = new EmitterContext(inputFileModel);

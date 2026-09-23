@@ -449,6 +449,42 @@ Every evaluation passed, so the counts alone would have read as success. The ext
 run still failed, rather than leaving a non-zero exit code to be explained by a summary that looks
 green.
 
+### Cases and a glob
+
+An input file names one test file, so when a glob discovers several, an input bound to one of the
+others is simply not this file's input and is passed over. Each discovered test runs with whatever
+was written for it, and a test that takes no cases runs once:
+
+```console
+$ bicep test "*.biceptest" --inputs storage-cases.biceptestparam --output-detail all
+[✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
+[✓] Evaluation storage-cases.biceptest: namingRules (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
+[✓] Evaluation storage-cases.biceptest: namingRules (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
+[✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
+[✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
+... the example folder's other test files, several of them deliberately failing ...
+Failed! - Failed: 7, Errored: 4, Passed: 11, Total: 22, Duration: 673ms
+```
+
+Without the input file the same glob reports `Failed: 7, Errored: 5, Passed: 8, Total: 20`:
+`storage-cases.biceptest` contributes one errored case, because its parameters have no values. With
+it, that one case becomes four that ran.
+
+An input file that binds to none of the discovered test files is a different matter: none of its
+cases ran anywhere, and nothing above would have said so, because every individual file legitimately
+passed it over. That is reported, and the run fails:
+
+```console
+$ bicep test "n*.biceptest" --inputs storage-cases.biceptestparam
+storage-cases.biceptestparam: the test file this input supplies cases for was not among the files being run, so none of its cases ran.
+Failed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 670ms
+The run failed because errors were reported above, not because an evaluation did.
+```
+
+Naming a test file outright keeps the stricter rule above: there is only one file the input could
+have been meant for, so binding to another one is a mistake rather than a file the run will reach.
+
 The same applies within a run. An input with no value from any case and no declared default fails
 only the evaluations that actually reach it:
 
@@ -1567,9 +1603,10 @@ Failed! - Failed: 7, Errored: 5, Passed: 8, Total: 20, Duration: 532ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest
-error because a glob cannot supply the `--inputs` file each one needs, which is why a glob suits a
-source-policy suite better than a suite of parameterized tests. The failure of one file does not stop
-the others from running, and one summary reports the aggregate.
+error because no `--inputs` file was supplied here, so their parameters have no values. A glob can
+take `--inputs` — each discovered test file runs with the cases written for it, and the section
+[Cases and a glob](#cases-and-a-glob) shows the same run with one supplied. The failure of one file
+does not stop the others from running, and one summary reports the aggregate.
 
 Supplying a file that is neither `.bicep` nor `.biceptest` is rejected:
 
