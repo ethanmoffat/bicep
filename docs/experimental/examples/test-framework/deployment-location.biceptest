@@ -1,0 +1,11 @@
+test crossSubscription 'deployment-location.bicep' = {
+  params: {
+    auditSubscriptionId: '00000000-0000-0000-0000-000000000002'
+  }
+  assertions: {
+    moduleInAnotherSubscriptionRuns: {
+      passWhen: target.evaluated.outputs.stamp == 'audit'
+      message: 'A module deployed to another subscription should be evaluated.'
+    }
+  }
+}

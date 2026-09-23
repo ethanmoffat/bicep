@@ -1,0 +1,8 @@
+using 'deployment-location.biceptest'
+
+deploymentContext = {
+  deploymentName: 'contoso-2024-06-01'
+  deploymentLocation: 'westus2'
+}
+
+case audited = {}

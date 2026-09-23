@@ -45,6 +45,7 @@ namespace Bicep.Core
         public const string DeploymentContextResourceGroupPropertyName = "resourceGroup";
         public const string DeploymentContextResourceGroupLocationPropertyName = "resourceGroupLocation";
         public const string DeploymentContextDeploymentNamePropertyName = "deploymentName";
+        public const string DeploymentContextDeploymentLocationPropertyName = "deploymentLocation";
 
         public static bool IsTestParamsLanguage(string? languageId) => string.Equals(TestParamsLanguageId, languageId, StringComparison.OrdinalIgnoreCase);
 
@@ -443,6 +444,7 @@ namespace Bicep.Core
                 new(DeploymentContextResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The resource group the simulated deployment runs in."),
                 new(DeploymentContextResourceGroupLocationPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The location of the resource group the simulated deployment runs in."),
                 new(DeploymentContextDeploymentNamePropertyName, LanguageConstants.String, TypePropertyFlags.None, "The name of the simulated root deployment. A module's own deployment name still comes from its declaration."),
+                new(DeploymentContextDeploymentLocationPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The location the simulated root deployment is submitted to. Subscription, management group and tenant scoped deployments read this, and Bicep emits it for a module deployed to another subscription."),
             ];
 
             return new ObjectType("DeploymentContext", TypeSymbolValidationFlags.Default, properties, null);

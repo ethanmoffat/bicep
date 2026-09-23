@@ -265,7 +265,7 @@ namespace Bicep.Core.IntegrationTests
                 ("app.bicep", DefaultTargetFile));
 
             result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
-                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"deploymentName\", \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
+                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"deploymentLocation\", \"deploymentName\", \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
             });
         }
 

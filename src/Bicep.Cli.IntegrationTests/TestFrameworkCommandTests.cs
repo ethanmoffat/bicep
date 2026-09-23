@@ -2325,6 +2325,139 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_DeploymentLocation_IsSuppliedToTheEvaluation()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-deployment-location");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                output where string = deployment().location
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test located 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    locationComesFromTheCase: {
+                      passWhen: target.evaluated.outputs.where == 'westus2'
+                      message: 'The deployment location should come from the case context.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  deploymentName: 'contoso-deploy'
+                  deploymentLocation: 'westus2'
+                }
+
+                case located = {
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: located] Passed!");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_DeploymentLocation_WhenNotSupplied_ACrossSubscriptionModuleCannotBeEvaluated()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-deployment-location-missing");
+            Directory.CreateDirectory(outputFileDir);
+
+            // Neither file mentions deployment(). Bicep emits "location": "[deployment().location]"
+            // for a module deployed to another subscription, so the template needs a deployment
+            // location that its author never wrote.
+            FileHelper.SaveResultFile(TestContext, "child.bicep", """
+                targetScope = 'subscription'
+
+                param tag string
+
+                output stamp string = tag
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                param otherSubscriptionId string
+
+                module reader 'child.bicep' = {
+                  name: 'reader'
+                  scope: subscription(otherSubscriptionId)
+                  params: {
+                    tag: 'leaf'
+                  }
+                }
+
+                output stamp string = reader.outputs.stamp
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test crossSubscription 'main.bicep' = {
+                  params: {
+                    otherSubscriptionId: '00000000-0000-0000-0000-000000000000'
+                  }
+                  assertions: {
+                    moduleRuns: {
+                      passWhen: target.evaluated.outputs.stamp == 'leaf'
+                      message: 'The cross-subscription module should be evaluated.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var withoutPath = FileHelper.SaveResultFile(TestContext, "without.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  deploymentName: 'contoso-deploy'
+                }
+
+                case unstated = {
+                }
+                """, outputFileDir);
+
+            var withPath = FileHelper.SaveResultFile(TestContext, "with.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  deploymentName: 'contoso-deploy'
+                  deploymentLocation: 'westus2'
+                }
+
+                case stated = {
+                }
+                """, outputFileDir);
+
+            var (_, withoutError, withoutResult) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", withoutPath);
+            var (withOutput, _, withResult) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", withPath);
+
+            using (new AssertionScope())
+            {
+                // Without a stated location the compiler-emitted read has no answer, and the
+                // evaluation says which property is missing rather than guessing a region.
+                withoutResult.Should().Be(1);
+                withoutError.Should().Contain("'location' doesn't exist");
+
+                // Stating it is all that is needed; nothing in the source changes.
+                withResult.Should().Be(0);
+                withOutput.Should().Contain("[with.biceptestparam: stated] Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

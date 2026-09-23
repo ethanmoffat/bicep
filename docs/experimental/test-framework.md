@@ -527,8 +527,8 @@ case unapprovedRegion = {}
 ```
 
 The available properties are `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup`,
-`resourceGroupLocation` and `deploymentName`. Each has a matching decorator that a single case may
-apply.
+`resourceGroupLocation`, `deploymentName` and `deploymentLocation`. Each has a matching decorator
+that a single case may apply.
 
 A decorator **replaces one property** of the file defaults for that case only. There is no deep
 merge, a case cannot replace the context wholesale, and the case that overrides a property does not
@@ -631,6 +631,66 @@ not given an invented one:
 ```console
 Reason: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
 ```
+
+### Where the deployment is submitted
+
+`deploymentLocation` supplies `deployment().location`. That is the region the deployment itself is
+submitted to, which is not the same thing as `resourceGroupLocation` — a subscription, management
+group or tenant scoped deployment has a location of its own and no resource group at all.
+
+A template can need this without its author ever writing `deployment()`. Bicep emits
+`"location": "[deployment().location]"` for a module deployed to **another subscription**, so the
+read is compiler-generated:
+
+[`deployment-location.bicep`](./examples/test-framework/deployment-location.bicep)
+
+```bicep
+targetScope = 'subscription'
+
+param auditSubscriptionId string
+
+module reader 'deployment-location/reader.bicep' = {
+  name: 'audit-reader'
+  scope: subscription(auditSubscriptionId)
+  params: {
+    tag: 'audit'
+  }
+}
+
+output stamp string = reader.outputs.stamp
+```
+
+[`deployment-location.biceptestparam`](./examples/test-framework/deployment-location.biceptestparam)
+
+```bicep
+using 'deployment-location.biceptest'
+
+deploymentContext = {
+  deploymentName: 'contoso-2024-06-01'
+  deploymentLocation: 'westus2'
+}
+
+case audited = {}
+```
+
+```console
+$ bicep test deployment-location.biceptest --inputs deployment-location.biceptestparam --output-detail all
+[✓] Evaluation crossSubscription (deployment-location.bicep) [deployment-location.biceptestparam: audited] Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 160ms
+```
+
+Like the name, there is no invented default. Dropping `deploymentLocation` from that same file
+leaves the compiler-generated read unanswered:
+
+```console
+	[✗] Assertion moduleInAnotherSubscriptionRuns failed!
+		A module deployed to another subscription should be evaluated.
+		Could not be evaluated: The language expression property 'location' doesn't exist, available properties are 'name, properties'.
+```
+
+`deploymentLocation` on its own does nothing: without a `deploymentName` there is no simulated
+deployment to have a location, so `deployment()` stays unavailable and the message above about the
+missing name is what you get.
 
 ## Evaluated values
 
@@ -1452,6 +1512,10 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `deployment-name/stamp.bicep` | A module that reports the deployment name it was given |
 | `deployment-name.biceptest` | Asserts the root and module deployment names |
 | `deployment-name.biceptestparam` | Supplies a deterministic `deploymentName` |
+| `deployment-location.bicep` | A target with a module deployed to another subscription |
+| `deployment-location/reader.bicep` | The module the other subscription receives |
+| `deployment-location.biceptest` | Asserts the cross-subscription module is evaluated |
+| `deployment-location.biceptestparam` | Supplies the `deploymentLocation` the compiler-generated read needs |
 | `mocks.bicep` | A target that reads an existing identity and a storage account's keys |
 | `mocks.biceptest` | Test-owned `reference` and `listKeys` mocks |
 | `mocks.biceptestparam` | One case supplying the names the mocks are built from |

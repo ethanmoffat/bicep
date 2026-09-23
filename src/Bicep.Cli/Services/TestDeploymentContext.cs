@@ -20,7 +20,8 @@ public record TestDeploymentContext(
     string? SubscriptionId = null,
     string? ResourceGroup = null,
     string? ResourceGroupLocation = null,
-    string? DeploymentName = null)
+    string? DeploymentName = null,
+    string? DeploymentLocation = null)
 {
     public static readonly TestDeploymentContext Empty = new();
 
@@ -35,7 +36,8 @@ public record TestDeploymentContext(
             overrides.SubscriptionId ?? SubscriptionId,
             overrides.ResourceGroup ?? ResourceGroup,
             overrides.ResourceGroupLocation ?? ResourceGroupLocation,
-            overrides.DeploymentName ?? DeploymentName);
+            overrides.DeploymentName ?? DeploymentName,
+            overrides.DeploymentLocation ?? DeploymentLocation);
 
     public TestDeploymentContext WithProperty(string name, string value) => name switch
     {
@@ -45,6 +47,7 @@ public record TestDeploymentContext(
         LanguageConstants.DeploymentContextResourceGroupPropertyName => this with { ResourceGroup = value },
         LanguageConstants.DeploymentContextResourceGroupLocationPropertyName => this with { ResourceGroupLocation = value },
         LanguageConstants.DeploymentContextDeploymentNamePropertyName => this with { DeploymentName = value },
+        LanguageConstants.DeploymentContextDeploymentLocationPropertyName => this with { DeploymentLocation = value },
         _ => this,
     };
 
@@ -82,22 +85,31 @@ public record TestDeploymentContext(
         if (DeploymentName is null)
         {
             // No deployment name was stated, so `deployment()` stays unavailable rather than resolving
-            // to a name nobody chose.
+            // to values nobody chose. A location on its own describes a deployment that does not exist.
             return applied;
+        }
+
+        var deployment = new JObject
+        {
+            ["name"] = DeploymentName,
+            ["properties"] = new JObject
+            {
+                ["mode"] = "Incremental",
+            },
+        };
+
+        if (DeploymentLocation is not null)
+        {
+            // Only present when stated. Bicep emits `deployment().location` for a module deployed to
+            // another subscription, so a template can need this without ever writing it.
+            deployment["location"] = DeploymentLocation;
         }
 
         return applied with
         {
             Metadata = new Dictionary<string, JToken>(applied.Metadata)
             {
-                [DeploymentMetadataName] = new JObject
-                {
-                    ["name"] = DeploymentName,
-                    ["properties"] = new JObject
-                    {
-                        ["mode"] = "Incremental",
-                    },
-                },
+                [DeploymentMetadataName] = deployment,
             },
         };
     }
