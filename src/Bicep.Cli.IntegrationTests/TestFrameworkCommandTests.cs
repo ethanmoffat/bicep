@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.IO.Abstractions;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -8,8 +9,11 @@ using Bicep.Core;
 using Bicep.Core.UnitTests;
 using Bicep.Core.UnitTests.Assertions;
 using Bicep.Core.UnitTests.Utils;
+using Bicep.IO.Abstraction;
+using Bicep.IO.FileSystem;
 using FluentAssertions;
 using FluentAssertions.Execution;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Bicep.Cli.IntegrationTests
@@ -1727,6 +1731,135 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
 
                 document.GetProperty("summary").GetProperty("passed").GetInt32().Should().Be(1);
                 document.GetProperty("summary").GetProperty("failed").GetInt32().Should().Be(1);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_CompileEachTargetOnceHoweverManyCasesRun()
+        {
+            // Compilation depends only on the target: a case supplies parameters to the emitted
+            // template and cannot change how a target compiles. Recompiling per case would therefore
+            // multiply the cost of a run by the number of cases while producing the same model.
+            async Task<(int first, int second, int total)> RunWithCases(string caseDeclarations)
+            {
+                var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+                var outputFileDir = FileHelper.GetResultFilePath(TestContext, $"compile-once-{caseDeclarations.GetHashCode():x}");
+                Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+                FileHelper.SaveResultFile(TestContext, "src/first.bicep", "param unused string = ''", outputFileDir);
+                FileHelper.SaveResultFile(TestContext, "src/second.bicep", "param unused string = ''", outputFileDir);
+                var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                    param maxResources int
+
+                    test sizePolicy = {
+                      match: {
+                        root: 'src'
+                        include: ['*.bicep']
+                      }
+                      assertions: {
+                        boundedResourceCount: {
+                          passWhen: length(target.resources) <= maxResources
+                          message: 'At most ${maxResources} resources.'
+                        }
+                      }
+                    }
+                    """, outputFileDir);
+                var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", $"""
+                    using 'policy.biceptest'
+
+                    {caseDeclarations}
+                    """, outputFileDir);
+
+                var fileSystem = new FileSystem();
+                var explorer = new CountingFileExplorer(new FileSystemFileExplorer(fileSystem));
+
+                var (output, _, result) = await Bicep(
+                    settings,
+                    services => services
+                        .AddSingleton<IFileSystem>(fileSystem)
+                        .AddSingleton<IFileExplorer>(explorer),
+                    TestContext.CancellationTokenSource.Token,
+                    "test",
+                    "--output-detail",
+                    "all",
+                    testPath,
+                    "--inputs",
+                    inputPath);
+
+                result.Should().Be(0, "the run has to succeed for its reads to mean anything");
+
+                return (explorer.GetReadCount("first.bicep"), explorer.GetReadCount("second.bicep"), Regex.Matches(output, "Passed!").Count - 1);
+            }
+
+            var single = await RunWithCases("case only = { maxResources: 5 }");
+            var triple = await RunWithCases("""
+                case low = { maxResources: 5 }
+
+                case mid = { maxResources: 6 }
+
+                case high = { maxResources: 7 }
+                """);
+
+            using (new AssertionScope())
+            {
+                // Guards the comparison below: two counts that are both zero would agree for the wrong
+                // reason, and three times the work has to actually have been requested.
+                single.first.Should().BeGreaterThan(0);
+                single.total.Should().Be(2);
+                triple.total.Should().Be(6);
+
+                triple.first.Should().Be(single.first, "a target is read to compile it, and it compiles once however many cases run");
+                triple.second.Should().Be(single.second, "a target is read to compile it, and it compiles once however many cases run");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_NameTheCaseWhenATargetCannotBeCompiled()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "broken-target-cases");
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "src"));
+
+            FileHelper.SaveResultFile(TestContext, "src/broken.bicep", "var value = noSuchSymbol", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test sizePolicy = {
+                  match: {
+                    root: 'src'
+                    include: ['*.bicep']
+                  }
+                  assertions: {
+                    boundedResourceCount: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources} resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case strict = {
+                  maxResources: 0
+                }
+
+                case relaxed = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // A target that will not compile fails every case that was going to run against it, and
+                // each one says which case it was: otherwise two outcomes report as the same thing and a
+                // host cannot tell how many cases were lost.
+                result.Should().Be(1);
+                error.Should().Contain("Evaluation sizePolicy (src/broken.bicep) [policy.biceptestparam: strict] could not be evaluated!");
+                error.Should().Contain("Evaluation sizePolicy (src/broken.bicep) [policy.biceptestparam: relaxed] could not be evaluated!");
+                error.Should().Contain("Failed: 0, Errored: 2");
             }
         }
 

@@ -69,18 +69,20 @@ namespace Bicep.Cli.Services
 
             foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
             {
-                foreach (var inputCase in cases)
+                if (testDeclaration.DeclaringTest.IsTargetless)
                 {
-                    if (testDeclaration.DeclaringTest.IsTargetless)
+                    testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration, cases));
+                }
+                else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
+                    semanticModel is SemanticModel testSemanticModel)
+                {
+                    // A literal target names one file, so the test file's own directory is the frame of
+                    // reference its facts are reported in.
+                    var factRoot = testFileModel.SourceFile.FileHandle.GetParent().Uri;
+
+                    foreach (var inputCase in cases)
                     {
-                        testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration, inputCase));
-                    }
-                    else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
-                        semanticModel is SemanticModel testSemanticModel)
-                    {
-                        // A literal target names one file, so the test file's own directory is the frame of
-                        // reference its facts are reported in.
-                        testResults.Add(Timed(() => Evaluate(testFileModel, testDeclaration, testSemanticModel, testFileModel.SourceFile.FileHandle.GetParent().Uri, inputCase)));
+                        testResults.Add(Timed(() => Evaluate(testFileModel, testDeclaration, testSemanticModel, factRoot, inputCase)));
                     }
                 }
             }
@@ -91,32 +93,53 @@ namespace Bicep.Cli.Services
         /// <summary>
         /// Expands a body-owned selector into its targets and evaluates each one independently, so that
         /// a target which fails to compile or bind never hides the outcome of the others.
+        ///
+        /// A target is compiled once and then evaluated against every case. Compilation depends only on
+        /// the target: a case supplies parameters to the emitted template, and can change neither which
+        /// targets are selected nor how one of them compiles. Results are still returned case by case,
+        /// so doing the work target-major does not change the order anything is reported in.
         /// </summary>
-        private async Task<IEnumerable<TestResult>> RunSelectedTargetsAsync(SemanticModel testFileModel, TestSymbol testDeclaration, TestInputCase? inputCase)
+        private async Task<IEnumerable<TestResult>> RunSelectedTargetsAsync(SemanticModel testFileModel, TestSymbol testDeclaration, TestInputCase?[] cases)
         {
             var testFileHandle = testFileModel.SourceFile.FileHandle;
             var testFileUri = testFileHandle.Uri;
 
             if (TestTargetSelectorBinder.TryBind(testDeclaration.DeclaringTest) is not { } selector)
             {
-                return [Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.", inputCase))];
+                return [.. cases.Select(inputCase => Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, "The test declares no usable 'match' selector.", inputCase)))];
             }
 
             var discovery = TestTargetDiscovery.Discover(testFileHandle.GetParent(), selector);
 
             if (discovery.Error is { } error)
             {
-                return [Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message, inputCase))];
+                return [.. cases.Select(inputCase => Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, error.Message, inputCase)))];
             }
 
-            var results = new List<TestResult>();
+            var factRoot = discovery.Root ?? testFileHandle.GetParent().Uri;
+            // One bucket per case, each holding that case's results in target order, so that what is
+            // reported stays case-major even though the work is now done target-major.
+            var resultsByCase = cases.Select(_ => new List<TestResult>()).ToArray();
 
             foreach (var targetUri in discovery.Targets)
             {
-                results.Add(await TimedAsync(() => EvaluateTargetAsync(testFileModel, testDeclaration, targetUri, discovery.Root ?? testFileHandle.GetParent().Uri, inputCase)));
+                var compileStart = Stopwatch.GetTimestamp();
+                var compiled = await CompileTargetAsync(targetUri);
+                var compileDuration = Stopwatch.GetElapsedTime(compileStart);
+
+                for (var caseIndex = 0; caseIndex < cases.Length; caseIndex++)
+                {
+                    var inputCase = cases[caseIndex];
+                    var result = Timed(() => EvaluateCompiledTarget(testFileModel, testDeclaration, compiled, targetUri, factRoot, inputCase));
+
+                    // The compilation is charged to the case that triggered it and to no other, so the
+                    // durations still sum to the work actually done rather than counting it once a case.
+                    resultsByCase[caseIndex].Add(result with { Duration = result.Duration + compileDuration });
+                    compileDuration = TimeSpan.Zero;
+                }
             }
 
-            return results;
+            return resultsByCase.SelectMany(results => results);
         }
 
         /// <summary>
@@ -131,17 +154,15 @@ namespace Bicep.Cli.Services
             return result with { Duration = Stopwatch.GetElapsedTime(start) };
         }
 
-        private static async Task<TestResult> TimedAsync(Func<Task<TestResult>> evaluate)
-        {
-            var start = Stopwatch.GetTimestamp();
-            var result = await evaluate();
+        /// <summary>
+        /// A target compiled once, ready to be evaluated against any number of cases. Carries the reason
+        /// instead of a model when the target could not be compiled, so that every case reports that
+        /// failure rather than the first case absorbing it.
+        /// </summary>
+        private record CompiledTarget(SemanticModel? Model, string? Error);
 
-            return result with { Duration = Stopwatch.GetElapsedTime(start) };
-        }
-
-        private async Task<TestResult> EvaluateTargetAsync(SemanticModel testFileModel, TestSymbol testDeclaration, IOUri targetUri, IOUri factRoot, TestInputCase? inputCase)
+        private async Task<CompiledTarget> CompileTargetAsync(IOUri targetUri)
         {
-            var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             SemanticModel targetModel;
 
             try
@@ -151,12 +172,24 @@ namespace Bicep.Cli.Services
             }
             catch (Exception exception)
             {
-                return Unevaluated(testFileUri, testDeclaration, targetUri, SanitizeEvaluationError(exception), inputCase);
+                return new CompiledTarget(null, SanitizeEvaluationError(exception));
             }
 
             if (targetModel.HasErrors())
             {
-                return Unevaluated(testFileUri, testDeclaration, targetUri, $"The target has compilation errors and cannot be evaluated.");
+                return new CompiledTarget(null, "The target has compilation errors and cannot be evaluated.");
+            }
+
+            return new CompiledTarget(targetModel, null);
+        }
+
+        private static TestResult EvaluateCompiledTarget(SemanticModel testFileModel, TestSymbol testDeclaration, CompiledTarget compiled, IOUri targetUri, IOUri factRoot, TestInputCase? inputCase)
+        {
+            var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
+
+            if (compiled.Model is not { } targetModel)
+            {
+                return Unevaluated(testFileUri, testDeclaration, targetUri, compiled.Error ?? "The target could not be compiled.", inputCase);
             }
 
             return Evaluate(testFileModel, testDeclaration, targetModel, factRoot, inputCase);

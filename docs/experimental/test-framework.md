@@ -1394,10 +1394,12 @@ Notes on the contract:
   mode. There is no `skipped`: nothing in the framework declines to run, so a case the runner could
   not evaluate is reported as an error rather than as something benign.
 - `durationMs` is how long this case cost, in milliseconds to three decimal places. It covers the
-  whole unit of work attributable to the case, including compiling the target, because that is the
-  cost a slow policy actually imposes. Errored cases carry one too: deciding a target cannot be
-  evaluated still takes time. `summary.durationMs` is the sum of the cases, not wall-clock time for
-  the process.
+  whole unit of work attributable to the case, because that is the cost a slow policy actually
+  imposes. A target is compiled once and then evaluated against every case, so the compilation is
+  charged to the first case that runs against that target and to no other: the durations still sum
+  to the work the run did, rather than counting one compilation once per case. Errored cases carry
+  a duration too: deciding a target cannot be evaluated still takes time. `summary.durationMs` is
+  the sum of the cases, not wall-clock time for the process.
 - `durationMs` is absent in `--list` mode. Listing evaluates nothing, so there is no evaluation to
   time, and reporting zero would be a measurement rather than an absence.
 - Because durations differ between runs, two reports of the same suite are no longer byte-identical.
