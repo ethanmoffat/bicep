@@ -302,6 +302,12 @@ import carries `path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
 `resource storageAccount '…' = { … }` — not the resource's ARM name, which source facts deliberately
 do not claim to know.
 
+`type` is the type in the resource provider's own casing, which is not necessarily the casing the
+source happens to use: a resource declared as `microsoft.insights/metricAlerts@2018-03-01` reports
+its type as `Microsoft.Insights/metricAlerts`. String comparison is case-sensitive, so compare with
+`toLower(r.type)` unless the canonical spelling is known. This matters most for `failOn`, where a
+filter that accidentally matches nothing passes.
+
 `file` and `resolvedFile` are relative to the selector root, not the working directory, so a policy
 phrased in repository-relative terms means the same thing no matter where the CLI was invoked from.
 
