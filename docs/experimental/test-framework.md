@@ -888,6 +888,32 @@ A target compiled with symbolic names spells a runtime read as the declaration i
 than as a resource ID. That is a codegen detail, so it is translated back before matching: a mock is
 written against the resource ID either way.
 
+The ID a read is matched against is the one the **declaration** addresses, not the one the
+deployment happens to run at. A resource that states a `scope` lives where that scope says:
+
+```bicep
+targetScope = 'subscription'
+
+resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: 'contoso-identity'
+  scope: resourceGroup('identity-rg')
+}
+
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: 'contoso-vault'
+  scope: resourceGroup('00000000-0000-0000-0000-000000000009', 'vault-rg')
+}
+```
+
+is read as
+
+```
+/subscriptions/<deploymentContext.subscriptionId>/resourceGroups/identity-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity
+/subscriptions/00000000-0000-0000-0000-000000000009/resourceGroups/vault-rg/providers/Microsoft.KeyVault/vaults/contoso-vault
+```
+
+so that is what the mock states. Write the resource ID Azure would use, and it matches.
+
 ### One response answers both views of a resource
 
 Reading `identity.properties.principalId` asks Azure for the resource's properties. Reading

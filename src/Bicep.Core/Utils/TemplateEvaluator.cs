@@ -262,7 +262,12 @@ namespace Bicep.Core.Utils
             );
         }
 
-        private static string GetResourceId(string scopeString, TemplateResource resource)
+        /// <summary>
+        /// The resource ID a resource is addressed by. A declaration may state a subscription or
+        /// resource group of its own, which is where the resource actually lives; using the deployment's
+        /// scope for it would address something else entirely.
+        /// </summary>
+        private static string GetResourceId(string scopeString, string subscriptionId, TemplateResource resource)
         {
             var typeSegments = resource.Type.Value.Split('/');
             var nameSegments = resource.Name.Value.Split('/');
@@ -270,7 +275,22 @@ namespace Bicep.Core.Utils
             var types = new[] { typeSegments.First() }
                 .Concat(typeSegments.Skip(1).Zip(nameSegments, (type, name) => $"{type}/{name}"));
 
-            return $"{scopeString}providers/{string.Join('/', types)}";
+            return $"{GetScopeString(scopeString, subscriptionId, resource)}providers/{string.Join('/', types)}";
+        }
+
+        private static string GetScopeString(string deploymentScopeString, string subscriptionId, TemplateResource resource)
+        {
+            var declaredSubscriptionId = resource.SubscriptionId?.Value;
+            var declaredResourceGroup = resource.ResourceGroup?.Value;
+
+            if (declaredResourceGroup is { Length: > 0 })
+            {
+                return $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : subscriptionId)}/resourceGroups/{declaredResourceGroup}/";
+            }
+
+            return declaredSubscriptionId is { Length: > 0 }
+                ? $"/subscriptions/{declaredSubscriptionId}/"
+                : deploymentScopeString;
         }
 
         private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope)
@@ -284,14 +304,14 @@ namespace Bicep.Core.Utils
                 _ => throw new InvalidOperationException(),
             };
 
-            var resourceLookup = template.Resources.ToOrdinalInsensitiveDictionary(x => GetResourceId(scopeString, x));
+            var resourceLookup = template.Resources.ToOrdinalInsensitiveDictionary(x => GetResourceId(scopeString, config.SubscriptionId, x));
             var symbolicResourceIds = new OrdinalInsensitiveDictionary<string>();
 
             foreach (var resource in template.Resources)
             {
                 if (resource.SymbolicName is { } symbolicName)
                 {
-                    symbolicResourceIds[symbolicName] = GetResourceId(scopeString, resource);
+                    symbolicResourceIds[symbolicName] = GetResourceId(scopeString, config.SubscriptionId, resource);
                 }
             }
 

@@ -3032,6 +3032,92 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Mocks_AreMatchedByTheScopeAResourceDeclares()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "mocks-declared-scope");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The deployment runs at subscription scope, and each resource says where it actually lives.
+            // The identity is in another resource group, and the vault is in another subscription too.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                  scope: resourceGroup('identity-rg')
+                }
+
+                resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+                  name: 'contoso-vault'
+                  scope: resourceGroup('00000000-0000-0000-0000-000000000009', 'vault-rg')
+                }
+
+                output principalId string = identity.properties.principalId
+                output vaultUri string = vault.properties.vaultUri
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                mocks = {
+                  identity: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/identity-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity'
+                    apiVersion: '2023-01-31'
+                    response: {
+                      properties: {
+                        principalId: 'principal-1'
+                      }
+                    }
+                  }
+                  vault: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000009/resourceGroups/vault-rg/providers/Microsoft.KeyVault/vaults/contoso-vault'
+                    apiVersion: '2023-07-01'
+                    response: {
+                      properties: {
+                        vaultUri: 'https://contoso-vault.vault.azure.net/'
+                      }
+                    }
+                  }
+                }
+
+                test scopes 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    identityInAnotherResourceGroup: {
+                      passWhen: target.evaluated.outputs.principalId == 'principal-1'
+                      message: 'A mock should be matched by the resource group the declaration names.'
+                    }
+                    vaultInAnotherSubscription: {
+                      passWhen: target.evaluated.outputs.vaultUri == 'https://contoso-vault.vault.azure.net/'
+                      message: 'A mock should be matched by the subscription the declaration names.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  subscriptionId: '00000000-0000-0000-0000-000000000001'
+                }
+
+                case scoped = {}
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // Addressing either one by the deployment's own scope would name a resource that does
+                // not exist, and the mock written against the real ID would never be reached.
+                result.Should().Be(0);
+                output.Should().Contain("[cases.biceptestparam: scoped] Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_UnsetResponseField_FailsWhenConsumed()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
