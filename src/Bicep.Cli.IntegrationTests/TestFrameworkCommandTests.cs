@@ -2408,6 +2408,83 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_GivesEachModuleLoopIterationItsOwnArguments()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-module-loop");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "stamp.bicep", """
+                param stamp object
+                param position string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: '${toLower(stamp.role)}data${position}'
+                  location: 'eastus'
+                }
+                """, outputFileDir);
+
+            // Every argument each iteration passes is written as copyIndex() into the caller's own
+            // values, so nothing here resolves unless the iteration the instance belongs to is known.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param roles string[]
+
+                var stamps = [for role in roles: [
+                  { role: role, tier: 'hot' }
+                  { role: role, tier: 'cold' }
+                ]]
+
+                module stamp 'stamp.bicep' = [for (entry, index) in flatten(stamps): {
+                  name: 'stamp-${index}'
+                  params: {
+                    stamp: entry
+                    position: '${index}${entry.tier}'
+                  }
+                }]
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param roles string[]
+
+                test shape 'main.bicep' = {
+                  params: {
+                    roles: roles
+                  }
+                  assertions: {
+                    everyIterationIsDeployed: {
+                      passWhen: length(target.evaluated.withModules.resources) == length(roles) * 2
+                      message: 'The loop deploys two stamps per role.'
+                    }
+                    eachIterationSeesItsOwnItem: {
+                      passWhen: join(map(target.evaluated.withModules.resources, r => r.name), ',') == 'primarydata0hot,primarydata1cold,secondarydata2hot,secondarydata3cold'
+                      message: 'Each iteration is evaluated with the item and index it was given.'
+                    }
+                    instanceIdsAreDistinct: {
+                      passWhen: length(union(map(target.evaluated.withModules.resources, r => r.instanceId), [])) == length(roles) * 2
+                      message: 'Each iteration of a looped module call is its own instance.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case twoRoles = {
+                  roles: ['primary', 'secondary']
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation shape (main.bicep) [policy.biceptestparam: twoRoles] Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Evaluated_ViolationsPointAtTheDeclaringModuleLine()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

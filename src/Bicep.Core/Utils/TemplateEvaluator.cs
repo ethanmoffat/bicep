@@ -57,7 +57,12 @@ namespace Bicep.Core.Utils
                 this.config = config;
             }
 
-            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config)
+            /// <summary>
+            /// <paramref name="copyContext"/> is the loop position of the resource whose expressions are
+            /// about to be evaluated. It is what copyIndex() reads, so an expression belonging to a
+            /// copy-expanded resource must be evaluated in a context built for that resource.
+            /// </summary>
+            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config, TemplateCopyContext? copyContext = null)
             {
                 var context = TemplateEngine.GetExpressionEvaluationContext(
                     config.ManagementGroup,
@@ -65,6 +70,7 @@ namespace Bicep.Core.Utils
                     config.ResourceGroup,
                     template,
                     NoOpTemplateMetricRecorder.Instance,
+                    copyContext: copyContext,
                     onGetExtension: static (_, _) => null);
 
                 return new TemplateEvaluationContext(context, context.Scope, resourceLookup, symbolicResourceIds, config);
@@ -304,17 +310,24 @@ namespace Bicep.Core.Utils
                     }
                     ;
 
+                    // The copy has already been expanded into one resource per iteration, but the
+                    // expressions inside each one still say copyIndex(). Only a context built for this
+                    // resource knows which iteration it is, so a looped resource is evaluated in its own.
+                    var resourceContext = resource.CopyContext is null
+                        ? evaluationContext
+                        : TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config, resource.CopyContext);
+
                     // A value a resource needs may come from a deployment this pass has not evaluated yet.
                     // A caller resolving that chain asks for tolerance and repeats; a caller that expects
                     // every value to be available gets the failure.
                     resource.Properties.Value = config.TolerateUnresolvedValues
                         ? ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
                             root: resource.Properties.Value,
-                            evaluationContext: evaluationContext,
+                            evaluationContext: resourceContext,
                             skipEvaluationPaths: skipEvaluationPaths)
                         : ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
                             root: resource.Properties.Value,
-                            evaluationContext: evaluationContext,
+                            evaluationContext: resourceContext,
                             skipEvaluationPaths: skipEvaluationPaths);
                 }
             }

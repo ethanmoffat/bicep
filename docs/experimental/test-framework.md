@@ -626,7 +626,8 @@ would this case deploy*. The two differ wherever the source is conditional:
   something else owns.
 - A module is **deduplicated in source** — the same file contributes its declarations once, however
   many times it is called — but **each call is its own evaluated instance**, evaluated with the
-  arguments that call actually passed.
+  arguments that call actually passed. A module called in a `for` loop is one call per iteration,
+  and each iteration is evaluated with the item and index that iteration computed.
 
 `fleet.bicep` exercises all four. It declares one looped storage account and one conditional one, and
 calls `fleet/regionStamp.bicep` twice:
