@@ -1857,8 +1857,9 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 // each one says which case it was: otherwise two outcomes report as the same thing and a
                 // host cannot tell how many cases were lost.
                 result.Should().Be(1);
-                error.Should().Contain("Evaluation sizePolicy (src/broken.bicep) [policy.biceptestparam: strict] could not be evaluated!");
-                error.Should().Contain("Evaluation sizePolicy (src/broken.bicep) [policy.biceptestparam: relaxed] could not be evaluated!");
+                error.Should().Contain("Evaluation sizePolicy (src/broken.bicep) - 0/2 cases passed");
+                error.Should().Contain("[!] Case policy.biceptestparam: strict could not be evaluated!");
+                error.Should().Contain("[!] Case policy.biceptestparam: relaxed could not be evaluated!");
                 error.Should().Contain("Failed: 0, Errored: 2");
             }
         }
@@ -1906,10 +1907,10 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             {
                 // Two targets times two cases. A case never changes which targets a test applies to.
                 result.Should().Be(0);
-                output.Should().Contain("Evaluation sizePolicy (src/first.bicep) [policy.biceptestparam: strict] Passed!");
-                output.Should().Contain("Evaluation sizePolicy (src/first.bicep) [policy.biceptestparam: relaxed] Passed!");
-                output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: strict] Passed!");
-                output.Should().Contain("Evaluation sizePolicy (src/second.bicep) [policy.biceptestparam: relaxed] Passed!");
+                output.Should().Contain("Evaluation sizePolicy (src/first.bicep) - 2/2 cases passed");
+                output.Should().Contain("Evaluation sizePolicy (src/second.bicep) - 2/2 cases passed");
+                output.Should().Contain("[✓] Case policy.biceptestparam: strict Passed!");
+                output.Should().Contain("[✓] Case policy.biceptestparam: relaxed Passed!");
                 output.Should().Contain("Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4,");
             }
         }
@@ -1954,10 +1955,126 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 // The case values reach the target through the test's own typed inputs, so the target's
                 // own assertion is what decides each outcome.
                 result.Should().Be(1);
-                output.Should().Contain("Evaluation namingRules (main.bicep) [naming.biceptestparam: withinLimit] Passed!");
-                error.Should().Contain("Evaluation namingRules (main.bicep) [naming.biceptestparam: tooLong] Failed");
+                // One case passes and one fails, so the group is not a pass and is reported together on
+                // the error stream rather than split across two streams that redirect separately.
+                error.Should().Contain("Evaluation namingRules (main.bicep) - 1/2 cases passed");
+                error.Should().Contain("[✓] Case naming.biceptestparam: withinLimit Passed!");
+                error.Should().Contain("[✗] Case naming.biceptestparam: tooLong Failed");
                 error.Should().Contain("Assertion nameWithinLengthLimit failed!");
             }
+        }
+
+        [TestMethod]
+        public async Task Test_Console_ReportsOneCaseWithoutAGroupHeading()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "group-single");
+            Directory.CreateDirectory(outputFileDir);
+
+            var (output, _, result) = await Bicep(settings, "test", "--output-detail", "all", WriteSizePolicy(outputFileDir, """
+                case only = {
+                  maxResources: 5
+                }
+                """), "--inputs", Path.Combine(outputFileDir, "policy.biceptestparam"));
+
+            using (new AssertionScope())
+            {
+                // A heading exists to gather siblings. One case has none, so it keeps the flat line it
+                // has always had and nothing about a single-case run changes.
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation sizePolicy (main.bicep) [policy.biceptestparam: only] Passed!");
+                output.Should().NotContain("cases passed");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Console_ReportsAPartlyFailingGroupEntirelyOnOneStream()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "group-mixed");
+            Directory.CreateDirectory(outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", WriteSizePolicy(outputFileDir, """
+                case allowed = {
+                  maxResources: 5
+                }
+
+                case forbidden = {
+                  maxResources: 0
+                }
+                """), "--inputs", Path.Combine(outputFileDir, "policy.biceptestparam"));
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                // A heading on one stream and its cases on the other would tear the group in half
+                // whenever the two are redirected separately, leaving a heading with nothing under it.
+                // So the whole group goes to the stream its aggregate outcome implies.
+                error.Should().Contain("Evaluation sizePolicy (main.bicep) - 1/2 cases passed");
+                error.Should().Contain("[✓] Case policy.biceptestparam: allowed Passed!");
+                error.Should().Contain("[✗] Case policy.biceptestparam: forbidden Failed");
+                output.Should().NotContain("Case policy.biceptestparam");
+                output.Should().NotContain("cases passed");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Console_KeepsTheGroupHeadingWhenOnlyFailuresAreReported()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "group-failures");
+            Directory.CreateDirectory(outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--output-detail", "failures", WriteSizePolicy(outputFileDir, """
+                case allowed = {
+                  maxResources: 5
+                }
+
+                case forbidden = {
+                  maxResources: 0
+                }
+                """), "--inputs", Path.Combine(outputFileDir, "policy.biceptestparam"));
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                // The passing case is suppressed, but the heading still says how many there were, so a
+                // reader is not left to assume the one failure was the only case that ran.
+                error.Should().Contain("Evaluation sizePolicy (main.bicep) - 1/2 cases passed");
+                error.Should().Contain("[✗] Case policy.biceptestparam: forbidden Failed");
+                error.Should().NotContain("allowed");
+            }
+        }
+
+        /// <summary>
+        /// A one-resource target and a test that bounds its resource count, plus the supplied cases.
+        /// Shared by the grouping tests, which differ only in how many cases run and which of them pass.
+        /// </summary>
+        private string WriteSizePolicy(string outputFileDir, string cases)
+        {
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' existing = {
+                  name: 'server'
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", $"""
+                using 'policy.biceptest'
+
+                {cases}
+                """, outputFileDir);
+
+            return FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test sizePolicy 'main.bicep' = {
+                  assertions: {
+                    bounded: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources} resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
         }
 
         [TestMethod]
@@ -2162,8 +2279,9 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             {
                 result.Should().Be(0);
                 error.Should().NotContain("not the test file being run");
-                output.Should().Contain("Evaluation sized.biceptest: sizePolicy (main.bicep) [sized.biceptestparam: small] Passed!");
-                output.Should().Contain("Evaluation sized.biceptest: sizePolicy (main.bicep) [sized.biceptestparam: large] Passed!");
+                output.Should().Contain("Evaluation sized.biceptest: sizePolicy (main.bicep) - 2/2 cases passed");
+                output.Should().Contain("[✓] Case sized.biceptestparam: small Passed!");
+                output.Should().Contain("[✓] Case sized.biceptestparam: large Passed!");
                 // The test that declares no inputs is run once, not once per case.
                 output.Should().Contain("Evaluation shape.biceptest: shapePolicy (main.bicep) Passed!");
                 output.Should().Contain("Passed: 3, Total: 3");
@@ -2359,9 +2477,9 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                 // File defaults reach every case, a decorator replaces only the property it names, and
                 // the overriding case never mutates the defaults the following case inherits.
                 result.Should().Be(0);
-                output.Should().Contain("[cases.biceptestparam: usesFileDefaults] Passed!");
-                output.Should().Contain("[cases.biceptestparam: overridesOneProperty] Passed!");
-                output.Should().Contain("[cases.biceptestparam: inheritsAfterAnOverride] Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: usesFileDefaults Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: overridesOneProperty Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: inheritsAfterAnOverride Passed!");
             }
         }
 
@@ -3001,8 +3119,8 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(0);
-                output.Should().Contain("[cases.biceptestparam: contoso] Passed!");
-                output.Should().Contain("[cases.biceptestparam: fabrikam] Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: contoso Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: fabrikam Passed!");
             }
         }
 
@@ -3713,8 +3831,8 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(0);
-                output.Should().Contain("[cases.biceptestparam: first] Passed!");
-                output.Should().Contain("[cases.biceptestparam: second] Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: first Passed!");
+                output.Should().Contain("[✓] Case cases.biceptestparam: second Passed!");
             }
         }
 
@@ -3861,9 +3979,11 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             using (new AssertionScope())
             {
                 result.Should().Be(1);
-                error.Should().Contain("[cases.biceptestparam: incomplete]");
+                // The two cases are reported together, and the group is not a pass, so both lines are
+                // on the error stream.
+                error.Should().Contain("Case cases.biceptestparam: incomplete");
                 error.Should().Contain("'clientId' doesn't exist");
-                output.Should().Contain("[cases.biceptestparam: complete] Passed!");
+                error.Should().Contain("[✓] Case cases.biceptestparam: complete Passed!");
             }
         }
 

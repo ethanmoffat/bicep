@@ -397,12 +397,19 @@ cannot influence what it computes.
 
 ```console
 $ bicep test storage-cases.biceptest --inputs storage-cases.biceptestparam --output-detail all
-[✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
-[✓] Evaluation namingRules (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
-[✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
-[✓] Evaluation sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
-Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4, Duration: 152ms
+Evaluation namingRules (storage.bicep) - 2/2 cases passed
+  [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
+  [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
+Evaluation sizePolicy (storage.bicep) - 2/2 cases passed
+  [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
+  [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4, Duration: 159ms
 ```
+
+The cases of one test and target are reported together under a heading that tallies them. A target
+with a single case keeps a single line; the heading appears only where there are siblings to gather.
+A group whose cases did not all pass is written to the error stream as a whole, so that redirecting
+the two streams separately never leaves a heading without its cases.
 
 `--inputs` may be given more than once to combine several input files into one run.
 
@@ -417,14 +424,16 @@ same test and target that differ only in their values are never reported as the 
 
 ```console
 $ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestparam --output-detail all
-[✗] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: prefixTooLong] Failed at 1 / 2 assertions!
-	[✗] Assertion nameWithinLengthLimit failed!
-[✓] Evaluation namingRules (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
-[✗] Evaluation sizePolicy (storage.bicep) [storage-cases-failing.biceptestparam: prefixTooLong] Failed at 1 / 1 assertions!
-	[✗] Assertion boundedResourceCount failed!
-		A target may declare at most 0 resources.
-[✓] Evaluation sizePolicy (storage.bicep) [storage-cases-failing.biceptestparam: withinLimits] Passed!
-Failed! - Failed: 2, Errored: 0, Passed: 2, Total: 4, Duration: 147ms
+Evaluation namingRules (storage.bicep) - 1/2 cases passed
+  [✗] Case storage-cases-failing.biceptestparam: prefixTooLong Failed at 1 / 2 assertions!
+    [✗] Assertion nameWithinLengthLimit failed!
+  [✓] Case storage-cases-failing.biceptestparam: withinLimits Passed!
+Evaluation sizePolicy (storage.bicep) - 1/2 cases passed
+  [✗] Case storage-cases-failing.biceptestparam: prefixTooLong Failed at 1 / 1 assertions!
+    [✗] Assertion boundedResourceCount failed!
+      A target may declare at most 0 resources.
+  [✓] Case storage-cases-failing.biceptestparam: withinLimits Passed!
+Failed! - Failed: 2, Errored: 0, Passed: 2, Total: 4, Duration: 162ms
 ```
 
 An assertion's `message` is ordinary Bicep and may interpolate the values the assertion actually ran
@@ -459,12 +468,14 @@ was written for it, and a test that takes no cases runs once:
 $ bicep test "*.biceptest" --inputs storage-cases.biceptestparam --output-detail all
 [✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
 [✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
-[✓] Evaluation storage-cases.biceptest: namingRules (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
-[✓] Evaluation storage-cases.biceptest: namingRules (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
-[✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
-[✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
+Evaluation storage-cases.biceptest: namingRules (storage.bicep) - 2/2 cases passed
+  [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
+  [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
+Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) - 2/2 cases passed
+  [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
+  [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
 ... the example folder's other test files, several of them deliberately failing ...
-Failed! - Failed: 8, Errored: 4, Passed: 11, Total: 23, Duration: 673ms
+Failed! - Failed: 8, Errored: 4, Passed: 11, Total: 23, Duration: 764ms
 ```
 
 Without the input file the same glob reports `Failed: 8, Errored: 5, Passed: 8, Total: 21`:
@@ -544,11 +555,12 @@ case exercises a different region without the test declaring a single input:
 
 ```console
 $ bicep test context.biceptest --inputs context.biceptestparam --output-detail all
-[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: primaryRegion] Passed!
-[✗] Evaluation regionPolicy (context.bicep) [context.biceptestparam: unapprovedRegion] Failed at 1 / 1 assertions!
-	[✗] Assertion locationIsApproved failed!
-[✓] Evaluation regionPolicy (context.bicep) [context.biceptestparam: secondaryRegion] Passed!
-Failed! - Failed: 1, Errored: 0, Passed: 2, Total: 3, Duration: 120ms
+Evaluation regionPolicy (context.bicep) - 2/3 cases passed
+  [✓] Case context.biceptestparam: primaryRegion Passed!
+  [✓] Case context.biceptestparam: secondaryRegion Passed!
+  [✗] Case context.biceptestparam: unapprovedRegion Failed at 1 / 1 assertions!
+    [✗] Assertion locationIsApproved failed!
+Failed! - Failed: 1, Errored: 0, Passed: 2, Total: 3, Duration: 81ms
 ```
 
 Two properties of this are worth stating plainly:
@@ -758,9 +770,10 @@ deploysOneAccountPerRegion: {
 
 ```console
 $ bicep test fleet.biceptest --inputs fleet.biceptestparam --output-detail all
-[✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: twoRegionsNoBackup] Passed!
-[✓] Evaluation fleetShape (fleet.bicep) [fleet.biceptestparam: threeRegionsWithBackup] Passed!
-Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 238ms
+Evaluation fleetShape (fleet.bicep) - 2/2 cases passed
+  [✓] Case fleet.biceptestparam: twoRegionsNoBackup Passed!
+  [✓] Case fleet.biceptestparam: threeRegionsWithBackup Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 333ms
 ```
 
 The same assertions describe a two-region deployment without a backup account in the first case and a
@@ -1160,6 +1173,21 @@ Passed! - Failed: 0, Errored: 0, Passed: 3, Total: 3, Duration: 516ms
 `--output-detail` affects only the console log. `--output-format json` and `--output-format junit`
 always describe every case, at every level: a host reading a filtered document could not tell a
 passing case from one that was never reported.
+
+Filtering suppresses cases but never their heading, which keeps its full tally. A reader who sees one
+failing case is told how many ran beside it, rather than being left to assume it was the only one:
+
+```console
+$ bicep test storage-cases.biceptest --inputs storage-cases-failing.biceptestparam
+Evaluation namingRules (storage.bicep) - 1/2 cases passed
+  [✗] Case storage-cases-failing.biceptestparam: prefixTooLong Failed at 1 / 2 assertions!
+    [✗] Assertion nameWithinLengthLimit failed!
+Evaluation sizePolicy (storage.bicep) - 1/2 cases passed
+  [✗] Case storage-cases-failing.biceptestparam: prefixTooLong Failed at 1 / 1 assertions!
+    [✗] Assertion boundedResourceCount failed!
+      A target may declare at most 0 resources.
+Failed! - Failed: 2, Errored: 0, Passed: 2, Total: 4, Duration: 332ms
+```
 
 ### Reading the summary
 

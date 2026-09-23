@@ -24,6 +24,12 @@ namespace Bicep.Cli.Commands
         private const string FailureSymbol = "[✗]";
         private const string ErrorSymbol = "[!]";
 
+        /// <summary>
+        /// How far a case is indented under the heading that groups it. Spaces rather than a tab so the
+        /// tree lines up the same however a terminal or log viewer renders tab stops.
+        /// </summary>
+        private const string GroupIndent = "  ";
+
         private readonly ILogger logger;
         private readonly IOContext io;
         private readonly DiagnosticLogger diagnosticLogger;
@@ -329,65 +335,143 @@ namespace Bicep.Cli.Commands
                 return;
             }
 
-            foreach (var (testDeclaration, identity, evaluation) in testResults.Results)
+            // Cases of the same test and target are reported together, because they are variations of
+            // one thing rather than unrelated outcomes. Grouping preserves the order results arrived
+            // in, so the cases under a heading stay in the order the input file declared them.
+            foreach (var group in testResults.Results.GroupBy(x => (x.Identity.TestFile, x.Identity.TestName, x.Identity.TargetFile)))
             {
+                var members = group.ToArray();
                 // A passing case says only that nothing is wrong with it, so it is reported only when
                 // the whole log was asked for. What went wrong is never filtered out.
-                if (evaluation.Success && detail is not TestOutputDetail.All)
+                var reported = detail is TestOutputDetail.All
+                    ? members
+                    : [.. members.Where(x => !x.Result.Success)];
+
+                if (reported.Length == 0)
                 {
                     continue;
                 }
 
-                // A test may resolve to several targets, so the target is always named: without it two
-                // outcomes of the same declaration would be indistinguishable. When several test files
-                // run together the file is named too, since test names are only unique within a file.
-                var name = qualifyWithTestFile
-                    ? $"{identity.TestFileName}: {testDeclaration.Name}"
-                    : testDeclaration.Name;
-                var label = identity.IsSelfTargeted
-                    ? name
-                    : $"{name} ({identity.RelativeTargetPath})";
-
-                // The case is named so that two outcomes of the same test and target, differing only in
-                // the values they ran with, are never reported as the same thing.
-                if (identity.Inputs is { } inputs)
+                if (members.Length < 2)
                 {
-                    label = $"{label} [{inputs.InputFileName}: {inputs.Name}]";
-                }
-
-                if (evaluation.Success)
-                {
-                    io.Output.Writer.WriteLine($"{SuccessSymbol} Evaluation {label} Passed!");
-                }
-                else if (evaluation.Errored)
-                {
-                    io.Error.Writer.WriteLine($"{ErrorSymbol} Evaluation {label} could not be evaluated!");
-                    io.Error.Writer.WriteLine($"Reason: {evaluation.Error}");
-                }
-                else
-                {
-                    io.Error.Writer.WriteLine($"{FailureSymbol} Evaluation {label} Failed at {evaluation.FailedAssertions.Length} / {evaluation.AllAssertions.Length} assertions!");
-                    foreach (var assertion in evaluation.FailedAssertions)
+                    foreach (var result in reported)
                     {
-                        io.Error.Writer.WriteLine($"\t{FailureSymbol} Assertion {assertion.Source} failed!");
-
-                        if (assertion.Message is { } message)
-                        {
-                            io.Error.Writer.WriteLine($"\t\t{message}");
-                        }
-
-                        if (assertion.Error is { } assertionError)
-                        {
-                            io.Error.Writer.WriteLine($"\t\tCould not be evaluated: {assertionError}");
-                        }
-
-                        // Naming the offending declarations is what makes a source policy actionable;
-                        // a count alone leaves the author to find them by hand.
-                        foreach (var violation in assertion.Violations)
-                        {
-                            io.Error.Writer.WriteLine($"\t\t{violation}");
-                        }
+                        LogResult(result, indent: string.Empty, $"Evaluation {DescribeCase(result, qualifyWithTestFile)}");
                     }
+
+                    continue;
+                }
+
+                LogCaseGroup(members, reported, qualifyWithTestFile);
+            }
+        }
+
+        /// <summary>
+        /// Reports several cases of one test and target under a single heading, so that variations of
+        /// one thing read as one thing. The heading carries the tally, because with the cases indented
+        /// beneath it the reader would otherwise have to count them.
+        ///
+        /// The whole group goes to one stream, chosen by whether any of its cases did not pass. Sending
+        /// each line to the stream its own outcome implies would tear the group in half whenever the
+        /// two streams are redirected separately, leaving a heading with no cases under it.
+        /// </summary>
+        private void LogCaseGroup(TestResult[] members, TestResult[] reported, bool qualifyWithTestFile)
+        {
+            var passed = members.Count(x => x.Result.Success);
+            var writer = passed == members.Length ? io.Output.Writer : io.Error.Writer;
+
+            writer.WriteLine($"Evaluation {DescribeTarget(members[0], qualifyWithTestFile)} - {passed}/{members.Length} cases passed");
+
+            foreach (var result in reported)
+            {
+                // Only what distinguishes this case from its siblings is left to say: the heading above
+                // has already named the test and the target.
+                var label = result.Identity.Inputs is { } inputs
+                    ? $"Case {inputs.InputFileName}: {inputs.Name}"
+                    : $"Case {DescribeCase(result, qualifyWithTestFile)}";
+
+                LogResult(result, GroupIndent, label, writer);
+            }
+        }
+
+        /// <summary>
+        /// Names the test and target a result belongs to. When several test files run together the file
+        /// is named too, since test names are only unique within a file. The target is always named:
+        /// without it two outcomes of the same declaration would be indistinguishable.
+        /// </summary>
+        private static string DescribeTarget(TestResult result, bool qualifyWithTestFile)
+        {
+            var identity = result.Identity;
+            var name = qualifyWithTestFile
+                ? $"{identity.TestFileName}: {result.Source.Name}"
+                : result.Source.Name;
+
+            return identity.IsSelfTargeted ? name : $"{name} ({identity.RelativeTargetPath})";
+        }
+
+        /// <summary>
+        /// What to call one result. Under a heading that has already named the test and target, only
+        /// what distinguishes this case from its siblings is left: the values it ran with.
+        /// </summary>
+        private static string DescribeCase(TestResult result, bool qualifyWithTestFile)
+        {
+            var target = DescribeTarget(result, qualifyWithTestFile);
+
+            // The case is named so that two outcomes of the same test and target, differing only in
+            // the values they ran with, are never reported as the same thing.
+            return result.Identity.Inputs is { } inputs
+                ? $"{target} [{inputs.InputFileName}: {inputs.Name}]"
+                : target;
+        }
+
+        private void LogResult(TestResult result, string indent, string label, TextWriter? groupWriter = null)
+        {
+            var evaluation = result.Result;
+
+            if (evaluation.Success)
+            {
+                (groupWriter ?? io.Output.Writer).WriteLine($"{indent}{SuccessSymbol} {label} Passed!");
+
+                return;
+            }
+
+            var writer = groupWriter ?? io.Error.Writer;
+
+            if (evaluation.Errored)
+            {
+                writer.WriteLine($"{indent}{ErrorSymbol} {label} could not be evaluated!");
+                writer.WriteLine($"{indent}Reason: {evaluation.Error}");
+
+                return;
+            }
+
+            writer.WriteLine($"{indent}{FailureSymbol} {label} Failed at {evaluation.FailedAssertions.Length} / {evaluation.AllAssertions.Length} assertions!");
+
+            // An ungrouped result keeps the tabs it has always used, so its output is unchanged. Inside
+            // a group everything is spaces, because a tab following the group's own indent lands on a
+            // tab stop that has nothing to do with the tree it is supposed to line up with.
+            var assertionIndent = indent.Length == 0 ? "\t" : $"{indent}  ";
+            var detailIndent = indent.Length == 0 ? "\t\t" : $"{indent}    ";
+
+            foreach (var assertion in evaluation.FailedAssertions)
+            {
+                writer.WriteLine($"{assertionIndent}{FailureSymbol} Assertion {assertion.Source} failed!");
+
+                if (assertion.Message is { } message)
+                {
+                    writer.WriteLine($"{detailIndent}{message}");
+                }
+
+                if (assertion.Error is { } assertionError)
+                {
+                    writer.WriteLine($"{detailIndent}Could not be evaluated: {assertionError}");
+                }
+
+                // Naming the offending declarations is what makes a source policy actionable;
+                // a count alone leaves the author to find them by hand.
+                foreach (var violation in assertion.Violations)
+                {
+                    writer.WriteLine($"{detailIndent}{violation}");
                 }
             }
         }
