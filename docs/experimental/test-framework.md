@@ -464,10 +464,10 @@ $ bicep test "*.biceptest" --inputs storage-cases.biceptestparam --output-detail
 [✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: shortPrefix] Passed!
 [✓] Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) [storage-cases.biceptestparam: prefixAtLengthLimit] Passed!
 ... the example folder's other test files, several of them deliberately failing ...
-Failed! - Failed: 7, Errored: 4, Passed: 11, Total: 22, Duration: 673ms
+Failed! - Failed: 8, Errored: 4, Passed: 11, Total: 23, Duration: 673ms
 ```
 
-Without the input file the same glob reports `Failed: 7, Errored: 5, Passed: 8, Total: 20`:
+Without the input file the same glob reports `Failed: 8, Errored: 5, Passed: 8, Total: 21`:
 `storage-cases.biceptest` contributes one errored case, because its parameters have no values. With
 it, that one case becomes four that ran.
 
@@ -1634,6 +1634,10 @@ need an `--inputs` file are not given one here, so they error — which is what 
 $ bicep test "*.biceptest" --output-detail all
 [✗] Evaluation context.biceptest: regionPolicy (context.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion locationIsApproved failed!
+[✗] Evaluation deployment-location.biceptest: crossSubscription (deployment-location.bicep) Failed at 1 / 1 assertions!
+	[✗] Assertion moduleInAnotherSubscriptionRuns failed!
+		A module deployed to another subscription should be evaluated.
+		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
 [✗] Evaluation deployment-name.biceptest: deploymentNames (deployment-name.bicep) Failed at 2 / 2 assertions!
 	[✗] Assertion rootUsesTheSuppliedName failed!
 		The root deployment should use the name the case supplied.
@@ -1689,7 +1693,7 @@ Reason: The input "namePrefix" has no value. Supply it from a test case or give 
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
-Failed! - Failed: 7, Errored: 5, Passed: 8, Total: 20, Duration: 532ms
+Failed! - Failed: 8, Errored: 5, Passed: 8, Total: 21, Duration: 532ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest
