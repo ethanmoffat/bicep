@@ -4249,6 +4249,71 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_ReportsTheBodyOfADeploymentResourceTheAuthorDeclared()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "authored-deployment");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "empty.bicep", """
+                output done bool = true
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param subscriptionIds array
+
+                module helper 'parts/empty.bicep' = {
+                  name: 'helper'
+                }
+
+                resource remote 'Microsoft.Resources/deployments@2022-09-01' = [for id in subscriptionIds: {
+                  name: 'remote-${id}'
+                  properties: {
+                    mode: 'Incremental'
+                    expressionEvaluationOptions: {
+                      scope: 'inner'
+                    }
+                    template: {
+                      '$schema': 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+                      contentVersion: '1.0.0.0'
+                      resources: []
+                    }
+                  }
+                }]
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test authored 'main.bicep' = {
+                  params: {
+                    subscriptionIds: ['sub-a', 'sub-b']
+                  }
+                  assertions: {
+                    // The author wrote this deployment's body, so it is reported like any resource's.
+                    authoredBodyIsReported: {
+                      passWhen: map(filter(target.evaluated.resources, r => r.symbolicName == 'remote'), r => r.properties.mode) == ['Incremental', 'Incremental']
+                      message: 'A deployment resource the author declared should report its own properties.'
+                    }
+                    // A module call is the compiler's wrapper, which stays hidden; its resources are
+                    // reached through withModules instead.
+                    moduleWrapperIsNotReported: {
+                      failOn: filter(target.evaluated.resources, r => r.symbolicName == 'helper')
+                      message: 'A module call should not be reported as a resource.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation authored (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_AnswerReferenceAndListRequests()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

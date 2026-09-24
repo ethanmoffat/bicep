@@ -372,13 +372,16 @@ public sealed class TestEvaluatedFactsProvider(
             var (declaringFile, line) = ResolveDeclaration(deployment.File, symbolicName);
 
             // A module this evaluator could not follow is still a deployment, and its properties are the
-            // compiler's generated wrapper rather than anything the author wrote.
-            var isDeployment = string.Equals(type, DeploymentResourceType, StringComparison.OrdinalIgnoreCase);
+            // compiler's generated wrapper rather than anything the author wrote. A deployment resource
+            // the author declared directly is their own body, and is reported like any other.
+            var isModuleWrapper =
+                string.Equals(type, DeploymentResourceType, StringComparison.OrdinalIgnoreCase) &&
+                sourceFacts.WithModules.Modules.Any(module => module.File == deployment.File && module.Name == symbolicName);
             var body = new JObject();
 
             foreach (var key in TestTargetType.EvaluatedBodyPropertyNames)
             {
-                body[key] = isDeployment && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
+                body[key] = isModuleWrapper && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
             }
 
             collected.Add(new TestEvaluatedResource(
