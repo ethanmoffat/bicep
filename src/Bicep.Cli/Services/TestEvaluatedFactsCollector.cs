@@ -46,7 +46,8 @@ public sealed class TestEvaluatedFactsProvider(
         JObject? Inputs,
         string File,
         TestDeploymentContext Context,
-        ImmutableDictionary<string, EvaluatedDeployment> Modules);
+        ImmutableDictionary<string, EvaluatedDeployment> Modules,
+        ImmutableDictionary<string, string> Unresolved);
 
     private EvaluatedDeployment? root;
     private ImmutableArray<TestEvaluatedResource>? local;
@@ -99,10 +100,40 @@ public sealed class TestEvaluatedFactsProvider(
         }
 
         // Everything the modules contribute is known by now, so nothing needs to be tolerated: a value
-        // that still cannot be computed is a real failure and is reported as one.
-        var authoritative = EvaluateTemplate(template, inputs, context, mocks, ModuleOutputResolver(modules), strictOutputs: false, tolerant: false);
+        // that still cannot be computed is a real failure. It is recorded against the resource that needs
+        // it rather than failing the template, because a value the deployment only knows once Azure has
+        // created something - a principal ID, an address - says nothing about which instances exist.
+        //
+        // A module call whose arguments could not be computed was evaluated with placeholders, so its
+        // outputs are withheld and the caller evaluated again: anything that read them is then recorded
+        // as unresolved too, rather than reported with a value no deployment would produce.
+        var withheld = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
 
-        return new EvaluatedDeployment(authoritative, template, inputs, file, context, modules);
+        while (true)
+        {
+            var unresolved = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            var authoritative = EvaluateTemplate(
+                template,
+                inputs,
+                context,
+                mocks,
+                ModuleOutputResolver(modules.RemoveRange(withheld)),
+                strictOutputs: false,
+                tolerant: false,
+                onUnresolvedProperties: (symbolicName, exception) => unresolved[symbolicName] = exception.Message);
+
+            var unresolvedModules = Deployments(authoritative)
+                .Select(deployment => deployment.Key)
+                .Where(unresolved.ContainsKey)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (unresolvedModules.IsSubsetOf(withheld))
+            {
+                return new EvaluatedDeployment(authoritative, template, inputs, file, context, modules, unresolved.ToImmutable());
+            }
+
+            withheld = withheld.Union(unresolvedModules);
+        }
     }
 
     /// <summary>
@@ -159,7 +190,8 @@ public sealed class TestEvaluatedFactsProvider(
         TestMockRegistry? mocks,
         TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference,
         bool strictOutputs,
-        bool tolerant)
+        bool tolerant,
+        TemplateEvaluator.OnUnresolvedResourcePropertiesDelegate? onUnresolvedProperties = null)
         => (JObject)TemplateEvaluator.Evaluate(
             template,
             inputs,
@@ -168,6 +200,7 @@ public sealed class TestEvaluatedFactsProvider(
                 OnUnresolvedReferenceFunc = onUnresolvedReference,
                 StrictOutputs = strictOutputs,
                 TolerateUnresolvedValues = tolerant,
+                OnUnresolvedResourcePropertiesFunc = onUnresolvedProperties,
             }).ToJToken();
 
     /// <summary>
@@ -188,6 +221,15 @@ public sealed class TestEvaluatedFactsProvider(
             if (deployment["properties"]?["template"] is not JObject nestedTemplate)
             {
                 throw new InvalidOperationException($"The module deployed by '{key}' has no inline template to evaluate.");
+            }
+
+            // An argument whose whole entry is still an expression - a conditional argument inside a
+            // loop is emitted that way - cannot be handed to the module yet. The call is left
+            // unevaluated; if it is still unresolved at the end, it is reported as such.
+            if (deployment["properties"]?["parameters"] is { } arguments &&
+                (arguments is not JObject argumentObject || argumentObject.Properties().Any(argument => argument.Value is not JObject)))
+            {
+                continue;
             }
 
             var nestedInputs = new JObject
@@ -271,6 +313,20 @@ public sealed class TestEvaluatedFactsProvider(
 
             var type = resource[TestTargetType.TypePropertyName]?.Value<string>() ?? string.Empty;
             var instanceId = instancePrefix + property.Name;
+
+            // A module evaluated with arguments its caller could not compute would describe a deployment
+            // that never happens, so its instances are not reported at all.
+            if (deployment.Unresolved.TryGetValue(property.Name, out var reason) &&
+                string.Equals(type, DeploymentResourceType, StringComparison.OrdinalIgnoreCase) &&
+                TryGetModuleFile(deployment.File, symbolicName) is not null)
+            {
+                if (recurse)
+                {
+                    throw new InvalidOperationException($"The arguments of module '{property.Name}' could not be evaluated for this case: {reason}");
+                }
+
+                continue;
+            }
 
             if (deployment.Modules.TryGetValue(property.Name, out var module))
             {

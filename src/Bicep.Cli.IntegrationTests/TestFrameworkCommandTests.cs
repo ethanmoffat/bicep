@@ -3130,6 +3130,140 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_InstancesAreNotFailedByValuesOnlyAzureAssigns()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-unresolved-properties");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "grant.bicep", """
+                param principalId string
+
+                resource assignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid(principalId)
+                  properties: {
+                    principalId: principalId
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                output accountName string = 'sa${uniqueString(principalId)}'
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "tagged.bicep", """
+                param accountName string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'contosodata'
+                  location: 'eastus'
+                  kind: 'StorageV2'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  tags: {
+                    peer: accountName
+                  }
+                }
+                """, outputFileDir);
+
+            // A principal ID exists only once Azure has created the identity, so offline it is never known.
+            // The loop's conditional argument is emitted as one expression for the whole entry.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+                  name: 'workload'
+                  location: 'eastus'
+                }
+
+                resource assignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('workload')
+                  properties: {
+                    principalId: identity.properties.principalId
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                module grant 'grant.bicep' = {
+                  name: 'grant'
+                  params: {
+                    principalId: identity.properties.principalId
+                  }
+                }
+
+                module grants 'grant.bicep' = [for i in range(0, 2): {
+                  name: 'grant${i}'
+                  params: {
+                    principalId: i == 0 ? 'known' : identity.properties.principalId
+                  }
+                }]
+                """, outputFileDir);
+
+            // Declared first, so it is reported first: its argument reads a module that could not be evaluated.
+            FileHelper.SaveResultFile(TestContext, "chain.bicep", """
+                module tagged 'tagged.bicep' = {
+                  name: 'tagged'
+                  params: {
+                    accountName: grant.outputs.accountName
+                  }
+                }
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+                  name: 'workload'
+                  location: 'eastus'
+                }
+
+                module grant 'grant.bicep' = {
+                  name: 'grant'
+                  params: {
+                    principalId: identity.properties.principalId
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test instances 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    deploysTheIdentityAndItsGrant: {
+                      passWhen: sort(map(target.evaluated.resources, r => r.symbolicName), (a, b) => a < b) == ['assignment', 'identity']
+                      message: 'Which instances exist does not depend on a principal ID.'
+                    }
+                  }
+                }
+
+                test modules 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    readsTheModules: {
+                      passWhen: length(target.evaluated.withModules.resources) > 0
+                      message: 'A module needs the arguments it is called with.'
+                    }
+                  }
+                }
+
+                test chained 'chain.bicep' = {
+                  params: {}
+                  assertions: {
+                    readsTheModules: {
+                      passWhen: length(target.evaluated.withModules.resources) > 0
+                      message: 'An argument read from an unevaluated module is not known either.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation instances (main.bicep) Passed!");
+                error.Should().Contain("The arguments of module 'grant' could not be evaluated for this case");
+                error.Should().Contain("The arguments of module 'tagged' could not be evaluated for this case");
+                error.Should().NotContain("Cannot access child value");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Evaluated_IsComputedPerInputCase()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

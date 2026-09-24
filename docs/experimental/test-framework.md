@@ -836,6 +836,22 @@ reports something Azure assigns when the resource is created, such as a public I
 that value does not exist. A policy about which instances are deployed does not read outputs, so it is
 not failed by one it never asked about, and needs no mock to stand in for it.
 
+The same holds inside a resource. A role assignment granting a newly created identity reads the
+identity's principal ID, which Azure assigns, so offline it cannot be computed. That value does not
+decide whether the assignment is deployed or what it is called, so a policy about
+`target.evaluated.resources` still sees every instance. A module call is different: its arguments
+are what the module runs with, so when one cannot be computed the module's instances are unknown.
+Reading `target.evaluated.withModules` then fails and names the module call:
+
+```text
+Could not be evaluated: The arguments of module 'grant' could not be evaluated for this case: ...
+```
+
+The same applies to anything that takes a value from that module's outputs, including another
+module's arguments. Those outputs are withheld rather than computed from a placeholder, so no policy
+can pass on a value the deployment would never produce. Mock the runtime read the argument depends on
+to evaluate the module.
+
 An unevaluatable condition is an error rather than a silent exclusion. Reporting "not deployed" for a
 condition that could not be computed would let a policy pass by describing a smaller deployment than
 the case actually produces.
@@ -1750,6 +1766,7 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - Module-to-module argument flow is resolved by repeated evaluation, up to a bounded number of rounds. A longer chain than that is left unresolved.
 - Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
 - `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
+- A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

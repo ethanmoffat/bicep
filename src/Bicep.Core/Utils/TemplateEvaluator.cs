@@ -220,6 +220,12 @@ namespace Bicep.Core.Utils
         /// </summary>
         public delegate JToken? OnUnresolvedReferenceDelegate(string reference, string? apiVersion, bool fullBody);
 
+        /// <summary>
+        /// Reports that the properties of one resource could not be computed. <paramref name="symbolicName"/>
+        /// is the key the resource is emitted under.
+        /// </summary>
+        public delegate void OnUnresolvedResourcePropertiesDelegate(string symbolicName, Exception exception);
+
         public record EvaluationConfiguration(
             string TenantId,
             string ManagementGroup,
@@ -249,6 +255,13 @@ namespace Bicep.Core.Utils
             /// caller resolving values across nested deployments can evaluate again with more known.
             /// </summary>
             public bool TolerateUnresolvedValues { get; init; }
+
+            /// <summary>
+            /// Reports a resource whose properties cannot be computed, instead of failing the whole
+            /// template. The resource keeps whatever could be computed; the caller decides whether that
+            /// resource's values matter. Ignored when <see cref="TolerateUnresolvedValues"/> is set.
+            /// </summary>
+            public OnUnresolvedResourcePropertiesDelegate? OnUnresolvedResourcePropertiesFunc { get; init; }
 
             public static EvaluationConfiguration Default = new(
                 DummyTenantId,
@@ -339,16 +352,42 @@ namespace Bicep.Core.Utils
 
                     // A value a resource needs may come from a deployment this pass has not evaluated yet.
                     // A caller resolving that chain asks for tolerance and repeats; a caller that expects
-                    // every value to be available gets the failure.
-                    resource.Properties.Value = config.TolerateUnresolvedValues
-                        ? ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
-                            root: resource.Properties.Value,
-                            evaluationContext: resourceContext,
-                            skipEvaluationPaths: skipEvaluationPaths)
-                        : ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                    // every value to be available gets the failure, either for the whole template or,
+                    // when it asks to be told, for this resource alone.
+                    if (config.TolerateUnresolvedValues)
+                    {
+                        resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
                             root: resource.Properties.Value,
                             evaluationContext: resourceContext,
                             skipEvaluationPaths: skipEvaluationPaths);
+                    }
+                    else if (config.OnUnresolvedResourcePropertiesFunc is { } onUnresolved && resource.SymbolicName is { } symbolicName)
+                    {
+                        var unevaluated = resource.Properties.Value.DeepClone();
+
+                        try
+                        {
+                            resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                                root: resource.Properties.Value,
+                                evaluationContext: resourceContext,
+                                skipEvaluationPaths: skipEvaluationPaths);
+                        }
+                        catch (Exception exception)
+                        {
+                            onUnresolved(symbolicName, exception);
+                            resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                                root: unevaluated,
+                                evaluationContext: resourceContext,
+                                skipEvaluationPaths: skipEvaluationPaths);
+                        }
+                    }
+                    else
+                    {
+                        resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                            root: resource.Properties.Value,
+                            evaluationContext: resourceContext,
+                            skipEvaluationPaths: skipEvaluationPaths);
+                    }
                 }
             }
 
