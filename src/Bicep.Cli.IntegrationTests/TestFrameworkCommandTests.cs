@@ -4184,6 +4184,71 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_ResolvesAnObjectArgumentTakenFromAnotherModuleOutput()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "object-module-argument");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "tagging.bicep", """
+                param owner string
+
+                output tags object = {
+                  owner: owner
+                }
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "account.bicep", """
+                param tags object
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'contosodata'
+                  location: 'eastus'
+                  tags: tags
+                }
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module tagging 'parts/tagging.bicep' = {
+                  name: 'tagging'
+                  params: {
+                    owner: 'platform'
+                  }
+                }
+
+                module account 'parts/account.bicep' = {
+                  name: 'account'
+                  params: {
+                    tags: union({ env: 'prod' }, tagging.outputs.tags)
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test tagged 'main.bicep' = {
+                  assertions: {
+                    // Until the tagging module has been evaluated, the argument is still an expression,
+                    // which the account module's object parameter would reject.
+                    tagsFlowFromTheOtherModule: {
+                      passWhen: target.evaluated.withModules.resources[0].tags == { env: 'prod', owner: 'platform' }
+                      message: 'An object argument taken from another module output should be resolved.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Expected a value of type 'Object'");
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation tagged (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_AnswerReferenceAndListRequests()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

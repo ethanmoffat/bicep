@@ -1364,7 +1364,9 @@ Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 259ms
 
 An argument taken from another module's output is only knowable once that module has been evaluated,
 and the module it is passed to cannot be evaluated until then. Evaluation therefore repeats until the
-module outputs stop changing, resolving one more link of the chain each round.
+module outputs stop changing, resolving one more link of the chain each round. A module whose arguments
+are not all known yet waits for a later round rather than being handed a placeholder, so the argument
+may be of any type - an object of tags built with `union()`, say, or an array.
 
 That is what makes a miswiring visible. `rbac-miswired.bicep` passes the identity's resource ID where
 a principal ID belongs. Both are strings, so it compiles and deploys a role assignment either way —

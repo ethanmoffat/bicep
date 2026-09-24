@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Azure.Deployments.Expression.Engines;
 using Bicep.Core.Semantics;
 using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
@@ -86,7 +87,7 @@ public sealed class TestEvaluatedFactsProvider(
 
         for (var round = 0; round < MaxResolutionRounds; round++)
         {
-            var next = EvaluateModules(evaluated, context, file);
+            var next = EvaluateModules(evaluated, template, context, file);
             var settled = Fingerprint(next) == Fingerprint(modules);
 
             modules = next;
@@ -210,7 +211,7 @@ public sealed class TestEvaluatedFactsProvider(
     /// Evaluates each module call this template makes, keyed by the symbolic name the caller used so
     /// the caller can read the outputs back.
     /// </summary>
-    private ImmutableDictionary<string, EvaluatedDeployment> EvaluateModules(JObject template, TestDeploymentContext context, string file)
+    private ImmutableDictionary<string, EvaluatedDeployment> EvaluateModules(JObject template, JToken source, TestDeploymentContext context, string file)
     {
         var modules = ImmutableDictionary.CreateBuilder<string, EvaluatedDeployment>(StringComparer.OrdinalIgnoreCase);
 
@@ -235,6 +236,17 @@ public sealed class TestEvaluatedFactsProvider(
                 continue;
             }
 
+            // Likewise an argument that reads something not known yet - typically another module's
+            // output - is still its own expression text. Handed over as is, the module would reject it
+            // as the wrong type, or compute from a placeholder, so the call waits for a later round.
+            if (deployment["properties"]?["parameters"] is JObject evaluatedArguments &&
+                source[TestTargetType.ResourcesPropertyName] is JObject declaredResources &&
+                declaredResources[BaseSymbolicName(key)]?["properties"]?["parameters"] is JObject declaredArguments &&
+                HoldsUnevaluatedExpression(evaluatedArguments, declaredArguments))
+            {
+                continue;
+            }
+
             var nestedInputs = new JObject
             {
                 ["$schema"] = DeploymentParametersSchema,
@@ -247,6 +259,22 @@ public sealed class TestEvaluatedFactsProvider(
 
         return modules.ToImmutable();
     }
+
+    /// <summary>
+    /// Whether a value still contains an expression exactly as it was declared. Optimistic evaluation
+    /// leaves what it cannot compute untouched, whereas a computed string that merely looks like an
+    /// expression - an escaped <c>[[</c> literal, say - differs from its declaration.
+    /// </summary>
+    private static bool HoldsUnevaluatedExpression(JToken evaluated, JToken? declared) => (evaluated, declared) switch
+    {
+        (JObject evaluatedObject, JObject declaredObject) => evaluatedObject.Properties().Any(property => HoldsUnevaluatedExpression(property.Value, declaredObject[property.Name])),
+        (JArray evaluatedArray, JArray declaredArray) => evaluatedArray.Select((item, index) => index < declaredArray.Count && HoldsUnevaluatedExpression(item, declaredArray[index])).Any(holds => holds),
+        (JValue { Type: JTokenType.String } evaluatedValue, JValue { Type: JTokenType.String } declaredValue) =>
+            evaluatedValue.Value<string>() is { } text &&
+            text == declaredValue.Value<string>() &&
+            ExpressionsEngine.IsLanguageExpression(text),
+        _ => false,
+    };
 
     private static JObject CollectOutputs(JObject template)
     {
