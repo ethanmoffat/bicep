@@ -1478,7 +1478,8 @@ Failed! - Failed: 2, Errored: 0, Passed: 0, Total: 2, Duration: 418ms
 - A **failed** case was evaluated and an assertion did not hold. The policy has something to say
   about it.
 - An **errored** case could not be evaluated at all — its target did not compile, an input had no
-  value, or a runtime read had no mock to answer it. The policy never got to run.
+  value, a runtime read had no mock to answer it, or the test itself has errors. The policy never
+  got to run.
 
 Both are failures of the run. An unevaluated target is not a benign skip: a suite whose targets all
 failed to compile has proven nothing, and reporting that as success is exactly the outcome the
@@ -1495,6 +1496,26 @@ The run failed because errors were reported above, not because an evaluation did
 ```
 
 A passing summary goes to stdout and a failing one to stderr.
+
+### A test with errors is not run
+
+A test that does not compile is not the test its author wrote, so nothing it computed would mean
+what its name says. It is reported as errored instead, and the tests beside it still run:
+
+```console
+$ bicep test policy.biceptest
+policy.biceptest(9,36) : Error BCP083: The type "target" does not contain property "module". Did you mean "modules"?
+[!] Evaluation declaresNoModules (good.bicep) could not be evaluated!
+Reason: The test has errors, reported above, so it was not evaluated.
+Failed! - Failed: 0, Errored: 1, Passed: 1, Total: 2, Duration: 150ms
+```
+
+Errors are charged to the test declaration they appear in. An error outside every test — in a
+parameter, a variable or the mocks — may reach any of them, so it stops the whole file:
+"The test file has errors, reported above, so none of its tests were evaluated." A literal target
+that does not compile is reported the same way a `match`-selected one is, as "The target has
+compilation errors and cannot be evaluated.", and a literal target that cannot be read at all is
+still counted, rather than leaving its test out of the results.
 
 ### Listing what would run with `--list`
 
@@ -2039,5 +2060,7 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
+- `bicep lint` accepts `.biceptest` but not `.biceptestparam`; an input file's diagnostics are reported by `bicep test --inputs` and in the editor.
+- Comparing a fact with a value it can never take, such as `target.targetScope == 'subscripton'`, is not diagnosed; the assertion simply never holds.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

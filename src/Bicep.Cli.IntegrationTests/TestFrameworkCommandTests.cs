@@ -3010,6 +3010,119 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_CompileErrors_KeepOnlyTheTestsTheyAffectFromRunning()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "compile-errors-per-test");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "good.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'account'
+                  location: 'westus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "broken.bicep", """
+                output count int = 'text'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test fine 'good.bicep' = {
+                  assertions: {
+                    one: { passWhen: length(target.resources) == 1, message: 'one' }
+                  }
+                }
+
+                test misspelled 'good.bicep' = {
+                  assertions: {
+                    one: { passWhen: length(target.resourcez) == 1, message: 'one' }
+                  }
+                }
+
+                test brokenTarget 'broken.bicep' = {
+                  assertions: {
+                    one: { passWhen: true, message: 'one' }
+                  }
+                }
+
+                test missingTarget 'nope.bicep' = {
+                  assertions: {
+                    one: { passWhen: true, message: 'one' }
+                  }
+                }
+
+                test selected = {
+                  match: { include: ['good.bicep'] }
+                  assertions: {
+                    one: { passWhen: length(target.resources) == 1, message: 'one' }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                // Each broken test is reported as not run, never with a verdict computed from something
+                // other than what its author wrote, and the tests beside it still run.
+                result.Should().Be(1);
+                error.Should().Contain("BCP083");
+                error.Should().Contain("Evaluation misspelled (good.bicep) could not be evaluated!");
+                error.Should().Contain("The test has errors, reported above, so it was not evaluated.");
+                error.Should().Contain("Evaluation brokenTarget (broken.bicep) could not be evaluated!");
+                error.Should().Contain("The target has compilation errors and cannot be evaluated.");
+                // A target that cannot be read used to produce no result at all, as if the test did not exist.
+                error.Should().Contain("Evaluation missingTarget could not be evaluated!");
+                output.Should().Contain("Evaluation fine (good.bicep) Passed!");
+                output.Should().Contain("Evaluation selected (good.bicep) Passed!");
+                error.Should().Contain("Failed! - Failed: 0, Errored: 3, Passed: 2, Total: 5");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_AnErrorOutsideEveryTest_KeepsAllOfThemFromRunning()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "compile-errors-file");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string = 'x'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var expected int = 'one'
+
+                test first 'main.bicep' = {
+                  assertions: {
+                    one: { passWhen: length(target.parameters) == 1, message: 'one' }
+                  }
+                }
+
+                test second = {
+                  match: { include: ['main.bicep'] }
+                  assertions: {
+                    one: { passWhen: length(target.parameters) == 1, message: 'one' }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                // A variable, parameter or mock may be read by any test, so an error in one is charged to all.
+                result.Should().Be(1);
+                error.Should().Contain("BCP033");
+                error.Should().Contain("Evaluation first (main.bicep) could not be evaluated!");
+                error.Should().Contain("Evaluation second could not be evaluated!");
+                error.Should().Contain("The test file has errors, reported above, so none of its tests were evaluated.");
+                output.Should().NotContain("Passed!");
+                error.Should().Contain("Failed! - Failed: 0, Errored: 2, Passed: 0, Total: 2");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WaitsFor_ReportsDeploymentOrderWithoutEvaluating()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
@@ -3087,7 +3200,7 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             Directory.CreateDirectory(outputFileDir);
 
             FileHelper.SaveResultFile(TestContext, "main.bicep", """
-                param resourceGroupLocation string
+                param resourceGroupLocation string?
 
                 assert locationIsSet = !empty(resourceGroupLocation)
                 """, outputFileDir);
@@ -3114,10 +3227,12 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             using (new AssertionScope())
             {
                 // Context is evaluation metadata, so a production parameter that happens to share its
-                // name is still unsatisfied rather than silently filled in.
+                // name is left unset rather than silently filled in. The parameter is nullable so that
+                // the test compiles and the evaluation actually runs.
                 result.Should().Be(1);
-                error.Should().Contain("[cases.biceptestparam: onlyContext] could not be evaluated!");
-                error.Should().Contain("The value for the template parameter 'resourceGroupLocation'");
+                error.Should().NotContain("could not be evaluated");
+                error.Should().Contain("[cases.biceptestparam: onlyContext] Failed at 1 / 1 assertions!");
+                error.Should().Contain("Assertion locationIsSet failed!");
             }
         }
 

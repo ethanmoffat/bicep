@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using Azure.Deployments.Core.Definitions.Schema;
 using Bicep.Core;
+using Bicep.Core.Diagnostics;
 using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
@@ -67,10 +68,30 @@ namespace Bicep.Cli.Services
             // every existing test file already relies on.
             TestInputCase?[] cases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
 
-            foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
+            // A test with compile errors is not what its author wrote, so whatever it computed would be
+            // reported against the wrong test. Errors are located rather than counted: one broken test
+            // leaves the others runnable, while an error outside every test (a parameter, a variable, the
+            // mocks) may reach any of them, so none is run.
+            var tests = testFileModel.Root.TestDeclarations;
+            var errorPositions = testFileModel.GetAllDiagnostics().Where(x => x.IsError()).Select(x => x.Span.Position).ToImmutableArray();
+            var fileError = errorPositions.Any(position => !tests.Any(test => test.DeclaringTest.Span.ContainsInclusive(position)))
+                ? "The test file has errors, reported above, so none of its tests were evaluated."
+                : null;
+
+            foreach (var testDeclaration in tests)
             {
+                var testError = fileError ?? (errorPositions.Any(testDeclaration.DeclaringTest.Span.ContainsInclusive)
+                    ? "The test has errors, reported above, so it was not evaluated."
+                    : null);
+
                 if (testDeclaration.DeclaringTest.IsTargetless)
                 {
+                    if (testError is not null)
+                    {
+                        testResults.AddRange(cases.Select(inputCase => Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, testError, inputCase))));
+                        continue;
+                    }
+
                     testResults.AddRange(await RunSelectedTargetsAsync(testFileModel, testDeclaration, cases));
                 }
                 else if (testDeclaration.TryGetSemanticModel().IsSuccess(out var semanticModel, out var _) &&
@@ -79,11 +100,20 @@ namespace Bicep.Cli.Services
                     // A literal target names one file, so the test file's own directory is the frame of
                     // reference its facts are reported in.
                     var factRoot = testFileModel.SourceFile.FileHandle.GetParent().Uri;
+                    var targetError = testSemanticModel.HasErrors() ? "The target has compilation errors and cannot be evaluated." : testError;
 
                     foreach (var inputCase in cases)
                     {
-                        testResults.Add(Timed(() => Evaluate(testFileModel, testDeclaration, testSemanticModel, factRoot, inputCase)));
+                        testResults.Add(targetError is not null
+                            ? Timed(() => Unevaluated(testFileUri, testDeclaration, testSemanticModel.SourceFile.FileHandle.Uri, targetError, inputCase))
+                            : Timed(() => Evaluate(testFileModel, testDeclaration, testSemanticModel, factRoot, inputCase)));
                     }
+                }
+                else
+                {
+                    // The reason is already among the errors reported above; what matters here is that
+                    // the test is counted as not run rather than silently left out of the results.
+                    testResults.AddRange(cases.Select(inputCase => Timed(() => Unevaluated(testFileUri, testDeclaration, testFileUri, testError ?? "The target could not be compiled.", inputCase))));
                 }
             }
 
