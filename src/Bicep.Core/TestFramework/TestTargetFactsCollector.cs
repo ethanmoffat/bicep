@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Bicep.Core.Emit;
 using Bicep.Core.Navigation;
 using Bicep.Core.Parsing;
 using Bicep.Core.Semantics;
@@ -99,6 +100,7 @@ public static class TestTargetFactsCollector
     {
         var file = RelativePath(model.SourceFile.FileHandle.Uri, factRoot);
         var lineStarts = model.SourceFile.LineStarts;
+        var dependencies = ResourceDependencyVisitor.GetResourceDependencies(model);
 
         var resources = model.DeclaredResources
             .Select(resource => new TestResourceFact(
@@ -106,7 +108,8 @@ public static class TestTargetFactsCollector
                 resource.Type.TypeReference.FormatType(),
                 resource.IsExistingResource,
                 file,
-                GetLine(lineStarts, resource.Symbol.DeclaringSyntax)))
+                GetLine(lineStarts, resource.Symbol.DeclaringSyntax),
+                WaitsFor(resource.Symbol, dependencies)))
             .ToImmutableArray();
 
         var modules = model.Root.ModuleDeclarations
@@ -115,7 +118,8 @@ public static class TestTargetFactsCollector
                 (module.DeclaringModule.Path as StringSyntax)?.TryGetLiteralValue() ?? string.Empty,
                 TryGetReferencedModel(module) is { } referenced ? RelativePath(referenced.SourceFile.FileHandle.Uri, factRoot) : string.Empty,
                 file,
-                GetLine(lineStarts, module.DeclaringModule)))
+                GetLine(lineStarts, module.DeclaringModule),
+                WaitsFor(module, dependencies)))
             .ToImmutableArray();
 
         var imports = model.SourceFile.ProgramSyntax.Children
@@ -172,6 +176,47 @@ public static class TestTargetFactsCollector
 
     private static SemanticModel? TryGetReferencedModel(ModuleSymbol module)
         => module.TryGetSemanticModel().IsSuccess(out var model) ? model as SemanticModel : null;
+
+    /// <summary>
+    /// Everything a declaration waits for, directly or not, from the same dependency analysis the emitter
+    /// uses for ARM's <c>dependsOn</c>: explicit <c>dependsOn</c> entries, references and parent/child
+    /// relationships. Variables are followed rather than listed. An <c>existing</c> resource is followed
+    /// but never listed, because nothing deploys it; what its name or scope needs is still waited for.
+    /// Names are returned in source order.
+    /// </summary>
+    private static ImmutableArray<string> WaitsFor(
+        DeclaredSymbol declaration,
+        ImmutableDictionary<DeclaredSymbol, ImmutableHashSet<ResourceDependency>> dependencies)
+    {
+        var reached = new HashSet<DeclaredSymbol>();
+        var pending = new Stack<DeclaredSymbol>([declaration]);
+
+        while (pending.TryPop(out var current))
+        {
+            if (!dependencies.TryGetValue(current, out var direct))
+            {
+                continue;
+            }
+
+            foreach (var dependency in direct)
+            {
+                if (!ReferenceEquals(dependency.Resource, declaration) && reached.Add(dependency.Resource))
+                {
+                    pending.Push(dependency.Resource);
+                }
+            }
+        }
+
+        return [.. reached
+            .Where(symbol => symbol switch
+            {
+                ModuleSymbol => true,
+                ResourceSymbol resource => !resource.DeclaringResource.IsExistingResource(),
+                _ => false,
+            })
+            .OrderBy(symbol => symbol.DeclaringSyntax.Span.Position)
+            .Select(symbol => symbol.Name)];
+    }
 
     /// <summary>
     /// The declared type as its author wrote it, so a named type keeps its name. The compiler's own

@@ -49,5 +49,11 @@ test vaultAccessIsGranted 'rbac.bicep' = {
       passWhen: length(filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/roleAssignments')) == 1
       message: 'The composition should deploy exactly one role assignment.'
     }
+    grantWaitsForTheIdentity: {
+      // A source fact: whether the access module is deployed after the identity module, directly or
+      // through anything in between. Passing the principal ID along is what creates that ordering.
+      passWhen: contains(filter(target.modules, m => m.symbolicName == 'vaultAccess')[0].waitsFor, 'identity')
+      message: 'The vault grant must not be deployed before the identity it grants.'
+    }
   }
 }

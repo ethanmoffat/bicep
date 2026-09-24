@@ -14,7 +14,8 @@ namespace Bicep.Core.TestFramework;
 /// <param name="Existing">Whether the declaration is an 'existing' reference rather than a new resource.</param>
 /// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
 /// <param name="Line">The 1-based line the declaration starts on.</param>
-public record TestResourceFact(string Name, string Type, bool Existing, string File, int Line);
+/// <param name="WaitsFor">The symbolic names of the resources and modules in the same file that must be deployed first, directly or not. See <see cref="TestTargetFactsCollector"/>.</param>
+public record TestResourceFact(string Name, string Type, bool Existing, string File, int Line, ImmutableArray<string> WaitsFor);
 
 /// <summary>
 /// A module declaration, preserving both the path as written and the file it resolved to.
@@ -24,7 +25,8 @@ public record TestResourceFact(string Name, string Type, bool Existing, string F
 /// <param name="ResolvedFile">The resolved file relative to the fact root, or an empty string if it did not resolve to a local file.</param>
 /// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
 /// <param name="Line">The 1-based line the declaration starts on.</param>
-public record TestModuleFact(string Name, string Path, string ResolvedFile, string File, int Line);
+/// <param name="WaitsFor">The symbolic names of the resources and modules in the same file that must be deployed first, directly or not.</param>
+public record TestModuleFact(string Name, string Path, string ResolvedFile, string File, int Line, ImmutableArray<string> WaitsFor);
 
 /// <summary>
 /// A compile-time import statement. One fact describes one statement, however many symbols it names,

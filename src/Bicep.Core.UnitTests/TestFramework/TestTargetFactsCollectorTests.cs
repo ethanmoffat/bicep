@@ -446,4 +446,144 @@ output value string = probe
 
         facts.TargetScope.Should().Be(expected);
     }
+
+    [TestMethod]
+    public void Collect_ReportsWhatEachDeclarationWaitsForDirectlyOrNot()
+    {
+        // The same analysis the emitter turns into ARM dependsOn, closed transitively: explicit
+        // dependsOn, references (even to an id), parents and module arguments all count, variables
+        // are followed, and an existing resource is followed but never listed.
+        var facts = Collect(
+            ("main.bicep", """
+module mod 'child.bicep' = {
+  name: 'mod'
+  params: { x: 'rg' }
+}
+
+resource a 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+  name: 'a'
+  location: 'westus'
+  sku: { name: 'Standard_LRS' }
+  kind: 'StorageV2'
+
+  resource blobs 'blobServices' = {
+    name: 'default'
+  }
+}
+
+resource b 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'b'
+  location: 'westus'
+  tags: { owner: a.id }
+}
+
+resource c 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'c'
+  location: 'westus'
+  dependsOn: [ b ]
+}
+
+var fromA = a.properties.primaryEndpoints.blob
+
+resource d 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'd'
+  location: 'westus'
+  properties: { dnsSettings: { domainNameLabel: fromA } }
+}
+
+resource e 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+  name: 'e'
+  scope: resourceGroup(mod.outputs.rg)
+}
+
+resource f 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'f'
+  location: 'westus'
+  tags: { ref: e.id }
+}
+
+resource g 'Microsoft.Network/publicIPAddresses@2023-04-01' = [for i in range(0, 2): {
+  name: 'g${i}'
+  location: 'westus'
+  tags: { c: c.id }
+}]
+
+module mod2 'child.bicep' = {
+  name: 'mod2'
+  params: { x: g[0].name }
+}
+
+resource lone 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'lone'
+  location: 'westus'
+}
+"""),
+            ("child.bicep", """
+param x string
+output rg string = x
+"""));
+
+        facts.Local.Resources.ToDictionary(x => x.Name, x => x.WaitsFor.ToArray()).Should().BeEquivalentTo(
+            new Dictionary<string, string[]>
+            {
+                ["a"] = [],
+                ["blobs"] = ["a"],
+                ["b"] = ["a"],
+                ["c"] = ["a", "b"],
+                ["d"] = ["a"],
+                ["e"] = ["mod"],
+                ["f"] = ["mod"],
+                ["g"] = ["a", "b", "c"],
+                ["lone"] = [],
+            },
+            options => options.WithStrictOrdering());
+
+        facts.Local.Modules.ToDictionary(x => x.Name, x => x.WaitsFor.ToArray()).Should().BeEquivalentTo(
+            new Dictionary<string, string[]>
+            {
+                ["mod"] = [],
+                ["mod2"] = ["a", "b", "c", "g"],
+            },
+            options => options.WithStrictOrdering());
+    }
+
+    [TestMethod]
+    public void Collect_KeepsWhatAModuleDeclarationWaitsForWithinItsOwnFile()
+    {
+        // A resource inside a module waits for siblings in that module. Ordering against the caller is
+        // carried by the module call, not attributed to the module's resources.
+        var facts = Collect(
+            ("main.bicep", """
+resource first 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'first'
+  location: 'westus'
+}
+
+module child 'modules/child.bicep' = {
+  name: 'child'
+  params: { upstream: first.id }
+}
+"""),
+            ("modules/child.bicep", """
+param upstream string
+
+resource inner 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'inner'
+  location: 'westus'
+  tags: { upstream: upstream }
+}
+
+resource after 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+  name: 'after'
+  location: 'westus'
+  tags: { inner: inner.id }
+}
+"""));
+
+        facts.Local.Modules.Single().WaitsFor.Should().Equal("first");
+        facts.WithModules.Resources.Select(x => (x.Name, string.Join(",", x.WaitsFor))).Should().Equal(
+            ("first", ""),
+            ("inner", ""),
+            ("after", "inner"));
+    }
 }

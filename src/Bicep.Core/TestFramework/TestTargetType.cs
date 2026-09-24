@@ -38,6 +38,7 @@ public static class TestTargetType
     public const string RequiredPropertyName = "required";
     public const string HasDefaultPropertyName = "hasDefault";
     public const string TargetScopePropertyName = "targetScope";
+    public const string WaitsForPropertyName = "waitsFor";
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -61,6 +62,7 @@ public static class TestTargetType
             new NamedTypeProperty(ExistingPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration references an existing resource rather than declaring a new one."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(WaitsForPropertyName, new TypedArrayType(LanguageConstants.String, TypeSymbolValidationFlags.Default), TypePropertyFlags.ReadOnly, "The symbolic names of the resources and modules in the same file that must be deployed first, directly or not, in source order. Explicit dependsOn entries, references and parent resources all count; variables are followed; existing resources are followed but never listed, because nothing deploys them."),
         ],
         null);
 
@@ -73,6 +75,7 @@ public static class TestTargetType
             new NamedTypeProperty(ResolvedFilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The file the path resolved to, relative to the selector root. Empty if it did not resolve to a local file."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(WaitsForPropertyName, new TypedArrayType(LanguageConstants.String, TypeSymbolValidationFlags.Default), TypePropertyFlags.ReadOnly, "The symbolic names of the resources and modules in the same file that must be deployed first, directly or not, in source order. Explicit dependsOn entries, references and parent resources all count; variables are followed; existing resources are followed but never listed, because nothing deploys them."),
         ],
         null);
 

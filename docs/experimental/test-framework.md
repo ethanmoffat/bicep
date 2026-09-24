@@ -297,9 +297,9 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.withModules` | Resources, modules, imports, parameters and outputs for the file **plus every module it transitively reaches** |
 | `target.evaluated` | What the file would actually produce for this input case, computed offline — see [Evaluated values](#evaluated-values) |
 
-Each resource carries `symbolicName`, `type` (without the API version), `existing`, `file` and `line`.
-Each module carries `symbolicName`, `path` (as written), `resolvedFile`, `file` and `line`. Each
-import carries `path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
+Each resource carries `symbolicName`, `type` (without the API version), `existing`, `waitsFor`, `file`
+and `line`. Each module carries `symbolicName`, `path` (as written), `resolvedFile`, `waitsFor`, `file`
+and `line`. Each import carries `path`, `resolvedFile`, `symbols`, `wildcard`, `file` and `line`.
 
 `symbolicName` is the name the declaration has in Bicep source — `storageAccount` in
 `resource storageAccount '…' = { … }` — not the resource's ARM name, which source facts deliberately
@@ -372,6 +372,49 @@ test compositionPolicy = {
 
 These assertions are in [`source-policy.biceptest`](examples/test-framework/source-policy.biceptest),
 alongside a module policy requiring each storage module to output the name it chose.
+
+#### Deployment order with `waitsFor`
+
+`waitsFor` lists the symbolic names of the resources and modules in the same file that must be
+deployed before a declaration, **directly or not**, in source order. It comes from the analysis the
+compiler turns into ARM's `dependsOn`, so it counts everything that creates an ordering:
+
+- an explicit `dependsOn` entry;
+- a reference, even one that only reads `id` or `name`;
+- a parent resource, for a nested or `parent:`-declared child;
+- a module argument or scope computed from another declaration.
+
+Variables are followed, not listed: a resource reading a variable that reads `a` waits for `a`. An
+`existing` resource is followed but never listed, because nothing deploys it; if its name or scope
+comes from a module's output, a resource reading it waits for that module. The order is **closed
+transitively**: if `c` depends on `b` and `b` on `a`, `c` waits for both, so a policy does not break
+when someone inserts a declaration in the middle of a chain.
+
+`waitsFor` stays within one file. A resource inside a module lists only the module's own
+declarations; ordering against the caller belongs to the module call, which appears in the
+caller's `target.modules`.
+
+The flow an ordering policy protects is often invisible to value assertions. In
+[`rbac.biceptest`](examples/test-framework/rbac.biceptest), replacing
+`identity.outputs.principalId` with the literal ID the test expects keeps every evaluated value
+correct, but the grant would then be submitted without waiting for the identity it grants. Only the
+ordering assertion notices:
+
+```bicep
+grantWaitsForTheIdentity: {
+  passWhen: contains(filter(target.modules, m => m.symbolicName == 'vaultAccess')[0].waitsFor, 'identity')
+  message: 'The vault grant must not be deployed before the identity it grants.'
+}
+```
+
+```text
+[✗] Evaluation vaultAccessIsGranted (rbac.bicep) [rbac.biceptestparam: contoso] Failed at 1 / 4 assertions!
+	[✗] Assertion grantWaitsForTheIdentity failed!
+		The vault grant must not be deployed before the identity it grants.
+```
+
+`waitsFor` is a source fact: it describes the declarations, not the instances of a loop or which
+branch of a condition a case takes.
 
 Assertion expressions are ordinary Bicep, so the usual functions (`filter`, `map`, `contains`,
 `length`, `startsWith`, `union`, …) all apply, and they may reference variables declared in the test
@@ -1788,7 +1831,7 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `rbac.bicep` | A composition whose second module is wired from the first module's output |
 | `rbac/workloadIdentity.bicep` | Creates an identity whose principal ID Azure assigns |
 | `rbac/vaultSecretsAccess.bicep` | Grants a principal vault access, naming the grant after what it grants |
-| `rbac.biceptest` | Mocks only the principal ID and asserts everything derived from it |
+| `rbac.biceptest` | Mocks only the principal ID, asserts everything derived from it, and that the grant waits for the identity |
 | `rbac.biceptestparam` | One case supplying the workload and vault names |
 | `rbac-miswired.bicep` | The same composition with the identity's resource ID passed as a principal ID |
 | `rbac-failing.biceptest` | The same policy, catching the miswiring |

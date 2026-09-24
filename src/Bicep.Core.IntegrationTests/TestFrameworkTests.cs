@@ -460,6 +460,34 @@ test foo = {
         }
 
         [TestMethod]
+        public void Deployment_order_facts_are_typed()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    resourceTypo: {
+      failOn: filter(target.resources, r => r.waitFor)
+      message: 'oops'
+    }
+    moduleIsAListOfNames: {
+      passWhen: !target.modules[0].waitsFor
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"resourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP083", DiagnosticLevel.Error, "The type \"resourceFact\" does not contain property \"waitFor\". Did you mean \"waitsFor\"?"),
+                ("BCP044", DiagnosticLevel.Error, "Cannot apply operator \"!\" to operand of type \"string[]\"."),
+            });
+        }
+
+        [TestMethod]
         public void A_source_fact_names_its_declaration_symbolically()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
@@ -498,7 +526,7 @@ test foo = {
 
             result.Should().HaveDiagnostics(new[] {
                 ("BCP070", DiagnosticLevel.Error, "Argument of type \"resourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
-                ("BCP053", DiagnosticLevel.Error, "The type \"resourceFact\" does not contain property \"name\". Available properties include \"existing\", \"file\", \"line\", \"symbolicName\", \"type\"."),
+                ("BCP053", DiagnosticLevel.Error, "The type \"resourceFact\" does not contain property \"name\". Available properties include \"existing\", \"file\", \"line\", \"symbolicName\", \"type\", \"waitsFor\"."),
             });
         }
 

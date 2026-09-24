@@ -2959,6 +2959,76 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_WaitsFor_ReportsDeploymentOrderWithoutEvaluating()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "waits-for");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param principalId string
+
+                module identity 'child.bicep' = {
+                  name: 'identity'
+                }
+
+                module grant 'child.bicep' = {
+                  name: 'grant'
+                  params: { upstream: identity.outputs.value }
+                }
+
+                module unordered 'child.bicep' = {
+                  name: 'unordered'
+                  params: { upstream: principalId }
+                }
+
+                resource after 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
+                  name: 'after'
+                  location: 'westus'
+                  dependsOn: [ grant ]
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "child.bicep", """
+                param upstream string = ''
+                output value string = upstream
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "order.biceptest", """
+                test order = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    grantWaitsForIdentity: {
+                      passWhen: filter(target.modules, m => m.symbolicName == 'grant')[0].waitsFor == ['identity']
+                      message: 'The grant is wired from the identity.'
+                    }
+                    orderIsTransitive: {
+                      passWhen: filter(target.resources, r => r.symbolicName == 'after')[0].waitsFor == ['identity', 'grant']
+                      message: 'after waits for grant, and so for identity too.'
+                    }
+                    unorderedWaitsForNothing: {
+                      failOn: filter(target.modules, m => m.symbolicName == 'unordered' && !empty(m.waitsFor))
+                      message: 'A parameter creates no ordering.'
+                    }
+                    withModulesCarriesIt: {
+                      passWhen: length(filter(target.withModules.modules, m => contains(m.waitsFor, 'identity'))) == 1
+                      message: 'withModules module facts carry waitsFor too.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Failed");
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation order (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

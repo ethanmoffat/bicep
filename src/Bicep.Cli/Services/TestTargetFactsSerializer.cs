@@ -56,6 +56,7 @@ public static class TestTargetFactsSerializer
         [TestTargetType.ExistingPropertyName] = resource.Existing,
         [TestTargetType.FilePropertyName] = resource.File,
         [TestTargetType.LinePropertyName] = resource.Line,
+        [TestTargetType.WaitsForPropertyName] = new JArray(resource.WaitsFor.ToArray<object>()),
     }).ToArray<object>());
 
     private static JArray SerializeModules(TestFactSet facts) => new(facts.Modules.Select(module => new JObject
@@ -65,6 +66,7 @@ public static class TestTargetFactsSerializer
         [TestTargetType.ResolvedFilePropertyName] = module.ResolvedFile,
         [TestTargetType.FilePropertyName] = module.File,
         [TestTargetType.LinePropertyName] = module.Line,
+        [TestTargetType.WaitsForPropertyName] = new JArray(module.WaitsFor.ToArray<object>()),
     }).ToArray<object>());
 
     private static JArray SerializeImports(TestFactSet facts) => new(facts.Imports.Select(import => new JObject
