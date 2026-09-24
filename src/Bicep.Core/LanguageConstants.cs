@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Bicep.Core.Features;
 using Bicep.Core.Parsing;
+using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.TypeSystem;
 using Bicep.Core.TypeSystem.Types;
 
@@ -46,6 +47,7 @@ namespace Bicep.Core
         public const string DeploymentContextResourceGroupLocationPropertyName = "resourceGroupLocation";
         public const string DeploymentContextDeploymentNamePropertyName = "deploymentName";
         public const string DeploymentContextDeploymentLocationPropertyName = "deploymentLocation";
+        public const string DeploymentContextEnvironmentPropertyName = "environment";
 
         public static bool IsTestParamsLanguage(string? languageId) => string.Equals(TestParamsLanguageId, languageId, StringComparison.OrdinalIgnoreCase);
 
@@ -445,6 +447,7 @@ namespace Bicep.Core
                 new(DeploymentContextResourceGroupLocationPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The location of the resource group the simulated deployment runs in."),
                 new(DeploymentContextDeploymentNamePropertyName, LanguageConstants.String, TypePropertyFlags.None, "The name of the simulated root deployment. A module's own deployment name still comes from its declaration."),
                 new(DeploymentContextDeploymentLocationPropertyName, LanguageConstants.String, TypePropertyFlags.None, "The location the simulated root deployment is submitted to. Subscription, management group and tenant scoped deployments read this, and Bicep emits it for a module deployed to another subscription."),
+                new(DeploymentContextEnvironmentPropertyName, AzNamespaceType.EnvironmentType, TypePropertyFlags.None, "What environment() returns: the cloud the simulated deployment runs in. State only the fields the template reads; reading one that is not stated fails the value that reads it."),
             ];
 
             return new ObjectType("DeploymentContext", TypeSymbolValidationFlags.Default, properties, null);

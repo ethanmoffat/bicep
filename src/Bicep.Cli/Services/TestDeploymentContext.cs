@@ -21,7 +21,8 @@ public record TestDeploymentContext(
     string? ResourceGroup = null,
     string? ResourceGroupLocation = null,
     string? DeploymentName = null,
-    string? DeploymentLocation = null)
+    string? DeploymentLocation = null,
+    JObject? Environment = null)
 {
     public static readonly TestDeploymentContext Empty = new();
 
@@ -37,7 +38,8 @@ public record TestDeploymentContext(
             overrides.ResourceGroup ?? ResourceGroup,
             overrides.ResourceGroupLocation ?? ResourceGroupLocation,
             overrides.DeploymentName ?? DeploymentName,
-            overrides.DeploymentLocation ?? DeploymentLocation);
+            overrides.DeploymentLocation ?? DeploymentLocation,
+            overrides.Environment ?? Environment);
 
     public TestDeploymentContext WithProperty(string name, string value) => name switch
     {
@@ -51,6 +53,12 @@ public record TestDeploymentContext(
         _ => this,
     };
 
+    /// <summary>
+    /// Replaces the environment whole. A case for another cloud must not inherit endpoints from the
+    /// file's environment, so nothing is merged.
+    /// </summary>
+    public TestDeploymentContext WithEnvironment(JObject environment) => this with { Environment = environment };
+
     public static TestDeploymentContext FromObject(JObject source)
     {
         var context = Empty;
@@ -60,6 +68,10 @@ public record TestDeploymentContext(
             if (property.Value.Type is JTokenType.String && property.Value.Value<string>() is { } value)
             {
                 context = context.WithProperty(property.Name, value);
+            }
+            else if (property.Name == LanguageConstants.DeploymentContextEnvironmentPropertyName && property.Value is JObject environment)
+            {
+                context = context.WithEnvironment(environment);
             }
         }
 
@@ -81,6 +93,19 @@ public record TestDeploymentContext(
             ResourceGroup = ResourceGroup ?? configuration.ResourceGroup,
             RgLocation = ResourceGroupLocation ?? configuration.RgLocation,
         };
+
+        if (Environment is not null)
+        {
+            // Only what the input file states. There is no default cloud: a template that reads an
+            // endpoint nobody stated fails there, rather than passing against one Bicep guessed.
+            applied = applied with
+            {
+                Metadata = new Dictionary<string, JToken>(applied.Metadata)
+                {
+                    [EnvironmentMetadataName] = Environment.DeepClone(),
+                },
+            };
+        }
 
         if (DeploymentName is null)
         {
@@ -115,4 +140,6 @@ public record TestDeploymentContext(
     }
 
     private const string DeploymentMetadataName = "deployment";
+
+    private const string EnvironmentMetadataName = "environment";
 }

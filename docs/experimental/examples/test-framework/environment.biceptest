@@ -1,0 +1,24 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// The same source deploys a different origin host in each cloud. Which cloud a case runs in is
+// stated by its input file's deploymentContext, never assumed.
+
+@description('The storage DNS suffix of the cloud the case deploys to.')
+param expectedStorageSuffix string
+
+test cdnOrigin 'environment.bicep' = {
+  params: {
+    accountName: 'contosoassets'
+  }
+  assertions: {
+    originIsTheAccountInThisCloud: {
+      passWhen: length(filter(target.evaluated.resources, r => r.type == 'Microsoft.Cdn/profiles/originGroups/origins' && r.properties.hostName == 'contosoassets.blob.${expectedStorageSuffix}')) == 1
+      message: 'The CDN origin must point at the account in the cloud being deployed to.'
+    }
+    endpointIsTheAccountInThisCloud: {
+      passWhen: target.evaluated.outputs.blobEndpoint == 'https://contosoassets.blob.${expectedStorageSuffix}/'
+      message: 'The published endpoint must be the account in the cloud being deployed to.'
+    }
+  }
+}

@@ -2236,6 +2236,14 @@ namespace Bicep.Core.Semantics.Namespaces
                 yield return CreateDeploymentContextDecorator(
                     LanguageConstants.DeploymentContextDeploymentLocationPropertyName,
                     "Overrides the location the root deployment is submitted to for this case. This is the location deployment() reports, not the resource group's location.");
+
+                // Replaces the whole environment rather than merging into it, like every other override:
+                // a case for another cloud should not inherit endpoints from the file's.
+                yield return new DecoratorBuilder(LanguageConstants.DeploymentContextEnvironmentPropertyName)
+                    .WithDescription("Overrides what environment() returns for this case. The object replaces the input file's environment; nothing is merged.")
+                    .WithParameter("value", AzNamespaceType.EnvironmentType, "The environment to use for this case.", FunctionParameterFlags.Required | FunctionParameterFlags.Constant)
+                    .WithFlags(FunctionFlags.TestCaseDecorator)
+                    .Build();
             }
 
             static Decorator CreateDeploymentContextDecorator(string name, string description)

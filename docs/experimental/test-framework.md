@@ -475,10 +475,10 @@ Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) - 2/2 cases passe
   [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
   [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
 ... the example folder's other test files, several of them deliberately failing ...
-Failed! - Failed: 8, Errored: 4, Passed: 11, Total: 23, Duration: 764ms
+Failed! - Failed: 9, Errored: 4, Passed: 11, Total: 24, Duration: 620ms
 ```
 
-Without the input file the same glob reports `Failed: 8, Errored: 5, Passed: 8, Total: 21`:
+Without the input file the same glob reports `Failed: 9, Errored: 5, Passed: 8, Total: 22`:
 `storage-cases.biceptest` contributes one errored case, because its parameters have no values. With
 it, that one case becomes four that ran.
 
@@ -538,8 +538,8 @@ case unapprovedRegion = {}
 ```
 
 The available properties are `tenantId`, `managementGroup`, `subscriptionId`, `resourceGroup`,
-`resourceGroupLocation`, `deploymentName` and `deploymentLocation`. Each has a matching decorator
-that a single case may apply.
+`resourceGroupLocation`, `deploymentName`, `deploymentLocation` and `environment`. Each has a
+matching decorator that a single case may apply.
 
 A decorator **replaces one property** of the file defaults for that case only. There is no deep
 merge, a case cannot replace the context wholesale, and the case that overrides a property does not
@@ -703,6 +703,95 @@ leaves the compiler-generated read unanswered:
 `deploymentLocation` on its own does nothing: without a `deploymentName` there is no simulated
 deployment to have a location, so `deployment()` stays unavailable and the message above about the
 missing name is what you get.
+
+### Which cloud the deployment runs in
+
+`environment` supplies `environment()`: the cloud's name, its endpoints and its DNS suffixes. A
+template that reads `environment().suffixes.storage` deploys a different host name to the public
+cloud than to a sovereign one, and a case has to say which cloud it means:
+
+[`environment.bicep`](./examples/test-framework/environment.bicep)
+
+```bicep
+resource origin 'Microsoft.Cdn/profiles/originGroups/origins@2023-05-01' = {
+  parent: originGroup
+  name: 'blob'
+  properties: {
+    hostName: '${accountName}.blob.${environment().suffixes.storage}'
+  }
+}
+```
+
+[`environment.biceptestparam`](./examples/test-framework/environment.biceptestparam)
+
+```bicep
+using 'environment.biceptest'
+
+deploymentContext = {
+  environment: {
+    name: 'AzureCloud'
+    suffixes: {
+      storage: 'core.windows.net'
+    }
+  }
+}
+
+case publicCloud = {
+  expectedStorageSuffix: 'core.windows.net'
+}
+
+// Replaces the whole environment for this case. Nothing is merged from the file's value.
+@environment({
+  name: 'AzureChinaCloud'
+  suffixes: {
+    storage: 'core.chinacloudapi.cn'
+  }
+})
+case chinaCloud = {
+  expectedStorageSuffix: 'core.chinacloudapi.cn'
+}
+```
+
+```console
+$ bicep test environment.biceptest --inputs environment.biceptestparam --output-detail all
+Evaluation cdnOrigin (environment.bicep) - 2/2 cases passed
+  [✓] Case environment.biceptestparam: publicCloud Passed!
+  [✓] Case environment.biceptestparam: chinaCloud Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 124ms
+```
+
+Hard-coding `core.windows.net` into the origin passes the public case and fails the China case, which
+is the regression the second case exists to catch.
+
+The object has the same shape as the value `environment()` returns, and is type-checked against it,
+so a misspelt key is an error in the input file rather than a silently ignored value:
+
+```
+Error BCP089: The property "suffix" is not allowed on objects of type "environment". Did you mean "suffixes"?
+```
+
+Three rules differ from what you might expect:
+
+- **Only what you state exists.** Bicep does not ship the values for any cloud, and the runner does
+  not invent them. State the fields the target reads; reading one you did not state fails the case
+  and names it:
+
+  ```console
+  Could not be evaluated: The properties of 'origin' (environment.bicep(23)) could not be evaluated for this case: The language expression property 'suffixes' doesn't exist, available properties are 'name'.
+  ```
+
+- **`@environment()` replaces the object whole.** Like every other context decorator, it replaces one
+  property of the file defaults, and here that property is the entire environment. A case that
+  states only `name` has no `suffixes`, even if the file's environment has them.
+- **There is no default cloud.** With no environment stated, `environment()` is unavailable, and the
+  failure says so rather than evaluating against the public cloud:
+
+  ```console
+  Could not be evaluated: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
+  ```
+
+  A failure while computing a resource's body keeps the name of the resource in front of that
+  message. A target that never reads `environment()` does not need one.
 
 ## Evaluated values
 
@@ -1633,6 +1722,9 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `deployment-location/reader.bicep` | The module the other subscription receives |
 | `deployment-location.biceptest` | Asserts the cross-subscription module is evaluated |
 | `deployment-location.biceptestparam` | Supplies the `deploymentLocation` the compiler-generated read needs |
+| `environment.bicep` | A CDN origin whose host name depends on the cloud it is deployed to |
+| `environment.biceptest` | Asserts the origin and endpoint point at the account in the case's cloud |
+| `environment.biceptestparam` | A public-cloud default and a case that replaces it with a sovereign cloud |
 | `mocks.bicep` | A target that reads an existing identity and a storage account's keys |
 | `mocks.biceptest` | Test-owned `reference` and `listKeys` mocks |
 | `mocks.biceptestparam` | One case supplying the names the mocks are built from |
@@ -1736,6 +1828,13 @@ $ bicep test "*.biceptest" --output-detail all
 	[✗] Assertion modulesUseTheirOwnNames failed!
 		Each module should see the deployment name its own declaration computed.
 		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
+[✗] Evaluation environment.biceptest: cdnOrigin (environment.bicep) Failed at 2 / 2 assertions!
+	[✗] Assertion originIsTheAccountInThisCloud failed!
+		The CDN origin must point at the account in the cloud being deployed to.
+		Could not be evaluated: The properties of 'origin' (environment.bicep(23)) could not be evaluated for this case: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
+	[✗] Assertion endpointIsTheAccountInThisCloud failed!
+		The published endpoint must be the account in the cloud being deployed to.
+		Could not be evaluated: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
 [✗] Evaluation fleet-failing.biceptest: storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion onlyStorageIsDeployed failed!
 		This fleet is only allowed to deploy storage accounts.
@@ -1790,7 +1889,7 @@ Reason: The input "namePrefix" has no value. Supply it from a test case or give 
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
-Failed! - Failed: 8, Errored: 5, Passed: 8, Total: 21, Duration: 532ms
+Failed! - Failed: 9, Errored: 5, Passed: 8, Total: 22, Duration: 718ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest

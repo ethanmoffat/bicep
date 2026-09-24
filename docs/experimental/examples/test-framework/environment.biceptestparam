@@ -1,0 +1,30 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using 'environment.biceptest'
+
+// Every case deploys to the public cloud unless it says otherwise. Only the values the target
+// reads need to be stated; reading one that is not stated fails the case by name.
+deploymentContext = {
+  environment: {
+    name: 'AzureCloud'
+    suffixes: {
+      storage: 'core.windows.net'
+    }
+  }
+}
+
+case publicCloud = {
+  expectedStorageSuffix: 'core.windows.net'
+}
+
+// Replaces the whole environment for this case. Nothing is merged from the file's value.
+@environment({
+  name: 'AzureChinaCloud'
+  suffixes: {
+    storage: 'core.chinacloudapi.cn'
+  }
+})
+case chinaCloud = {
+  expectedStorageSuffix: 'core.chinacloudapi.cn'
+}

@@ -263,24 +263,22 @@ public static class BicepValueEvaluator
             message = message[staging.Length..];
         }
 
-        if (message.Contains("deployment metadata 'DEPLOYMENT'", StringComparison.OrdinalIgnoreCase))
-        {
-            // The engine only knows a metadata key is absent. The author needs to know which piece of
-            // simulated context they never supplied.
-            return Translate(message);
-        }
-
-        return message.TrimEnd();
+        // The engine only knows a metadata key is absent. The author needs to know which piece of
+        // simulated context they never supplied.
+        return Translate(message.TrimEnd());
     }
 
     /// <summary>
-    /// Rewrites engine messages whose wording describes an internal metadata lookup rather than the
-    /// authoring mistake that caused it.
+    /// Rewrites engine phrases that describe an internal metadata lookup rather than the authoring
+    /// mistake that caused it. Whatever surrounds the phrase, such as the resource that read the
+    /// value, is kept.
     /// </summary>
     public static string Translate(string message)
-        => message.Contains("deployment metadata 'DEPLOYMENT'", StringComparison.OrdinalIgnoreCase)
-            ? "deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName()."
-            : message;
+        => message
+            .Replace(MissingMetadata("DEPLOYMENT"), "deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().", StringComparison.OrdinalIgnoreCase)
+            .Replace(MissingMetadata("ENVIRONMENT"), "environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().", StringComparison.OrdinalIgnoreCase);
+
+    private static string MissingMetadata(string name) => $"The deployment metadata '{name}' is not valid.";
 
     private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters);
 

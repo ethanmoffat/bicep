@@ -265,7 +265,7 @@ namespace Bicep.Core.IntegrationTests
                 ("app.bicep", DefaultTargetFile));
 
             result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
-                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"deploymentLocation\", \"deploymentName\", \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
+                ("BCP037", DiagnosticLevel.Error, "The property \"region\" is not allowed on objects of type \"DeploymentContext\". Permissible properties include \"deploymentLocation\", \"deploymentName\", \"environment\", \"managementGroup\", \"resourceGroup\", \"resourceGroupLocation\", \"subscriptionId\", \"tenantId\"."),
             });
         }
 
@@ -293,6 +293,68 @@ namespace Bicep.Core.IntegrationTests
                 ("app.bicep", DefaultTargetFile));
 
             result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void An_environment_can_be_supplied_and_replaced_by_a_case()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    deploymentContext = {
+                      environment: {
+                        name: 'AzureCloud'
+                        suffixes: {
+                          storage: 'core.windows.net'
+                        }
+                      }
+                    }
+
+                    case usesFileDefault = {
+                      location: 'westus'
+                    }
+
+                    @environment({
+                      name: 'AzureChinaCloud'
+                    })
+                    case replacesTheEnvironment = {
+                      location: 'chinaeast2'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void An_environment_is_checked_against_the_shape_environment_returns()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    deploymentContext = {
+                      environment: {
+                        suffixes: {
+                          storge: 'core.windows.net'
+                        }
+                      }
+                    }
+
+                    @environment('AzureCloud')
+                    case westus = {
+                      location: 'westus'
+                    }
+                    """),
+                TestFile(DefaultTestFile),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP089", DiagnosticLevel.Error, "The property \"storge\" is not allowed on objects of type \"suffixesProperties\". Did you mean \"storage\"?"),
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"'AzureCloud'\" is not assignable to parameter of type \"environment\"."),
+            });
         }
 
         [TestMethod]

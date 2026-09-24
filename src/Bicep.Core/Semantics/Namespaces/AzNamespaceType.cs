@@ -217,7 +217,17 @@ namespace Bicep.Core.Semantics.Namespaces
             }, null);
         }
 
-        private static ObjectType GetEnvironmentReturnType()
+        private static ObjectType GetEnvironmentReturnType() => EnvironmentType;
+
+        /// <summary>
+        /// The shape <c>environment()</c> returns. Every property is optional, which is also what lets a
+        /// test's deployment context state only the fields a template reads.
+        /// </summary>
+        public static ObjectType EnvironmentType => environmentType ??= CreateEnvironmentType();
+
+        private static ObjectType? environmentType;
+
+        private static ObjectType CreateEnvironmentType()
         {
             return new ObjectType("environment", TypeSymbolValidationFlags.Default, new[]
             {

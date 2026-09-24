@@ -2708,6 +2708,175 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             }
         }
 
+        private const string EnvironmentTarget = """
+            resource sa 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+              name: 'contosodata'
+              location: 'westus2'
+              kind: 'StorageV2'
+              sku: {
+                name: 'Standard_LRS'
+              }
+              properties: {
+                customDomain: {
+                  name: 'contosodata.blob.${environment().suffixes.storage}'
+                }
+              }
+            }
+
+            output cloud string = environment().name
+            """;
+
+        private const string EnvironmentTest = """
+            param expectedCloud string
+            param expectedSuffix string
+
+            test clouds 'main.bicep' = {
+              params: {}
+              assertions: {
+                outputSeesTheCloud: {
+                  passWhen: target.evaluated.outputs.cloud == expectedCloud
+                  message: 'The output should see the environment the case states.'
+                }
+                bodySeesTheSuffix: {
+                  passWhen: target.evaluated.resources[0].properties.customDomain.name == 'contosodata.blob.${expectedSuffix}'
+                  message: 'The deployed body should see the environment the case states.'
+                }
+              }
+            }
+            """;
+
+        [TestMethod]
+        public async Task Test_Environment_ComesFromTheInputFileAndACaseReplacesItWhole()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-environment");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", EnvironmentTarget, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", EnvironmentTest, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  environment: {
+                    name: 'AzureCloud'
+                    suffixes: {
+                      storage: 'core.windows.net'
+                    }
+                  }
+                }
+
+                case fileLevel = {
+                  expectedCloud: 'AzureCloud'
+                  expectedSuffix: 'core.windows.net'
+                }
+
+                @environment({
+                  name: 'AzureChinaCloud'
+                  suffixes: {
+                    storage: 'core.chinacloudapi.cn'
+                  }
+                })
+                case overridden = {
+                  expectedCloud: 'AzureChinaCloud'
+                  expectedSuffix: 'core.chinacloudapi.cn'
+                }
+
+                @environment({
+                  name: 'AzureChinaCloud'
+                })
+                case partial = {
+                  expectedCloud: 'AzureChinaCloud'
+                  expectedSuffix: 'core.windows.net'
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // A group containing a failure is written to one stream, so its passes are there too.
+                result.Should().Be(1);
+                error.Should().Contain("Case cases.biceptestparam: fileLevel Passed!");
+                error.Should().Contain("Case cases.biceptestparam: overridden Passed!");
+
+                // The partial override replaces the file's environment rather than being merged
+                // into it, so the file's storage suffix is gone and reading it names what is missing.
+                error.Should().Contain("Case cases.biceptestparam: partial Failed at 1 / 2 assertions!");
+                error.Should().Contain("The properties of 'sa' (main.bicep(1)) could not be evaluated for this case: The language expression property 'suffixes' doesn't exist, available properties are 'name'.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Environment_WhenNotSupplied_ReportsTheMissingContext()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-environment-missing");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", EnvironmentTarget, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", EnvironmentTest, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                case unstated = {
+                  expectedCloud: 'AzureCloud'
+                  expectedSuffix: 'core.windows.net'
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                // No environment was stated, so both reads name the missing context instead of
+                // assuming the public cloud; the body failure still says which resource it was.
+                result.Should().Be(1);
+                error.Should().Contain("Failed at 2 / 2 assertions!");
+                error.Should().Contain("Could not be evaluated: environment() was evaluated but no environment was supplied.");
+                error.Should().Contain("The properties of 'sa' (main.bicep(1)) could not be evaluated for this case: environment() was evaluated but no environment was supplied.");
+                error.Should().NotContain("'ENVIRONMENT' is not valid");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Environment_IsTypeCheckedAgainstTheEnvironmentShape()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "cases-environment-typed");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", EnvironmentTarget, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", EnvironmentTest, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  environment: {
+                    suffix: {
+                      storage: 'core.windows.net'
+                    }
+                  }
+                }
+
+                @environment('AzureCloud')
+                case named = {
+                  expectedCloud: 'AzureCloud'
+                  expectedSuffix: 'core.windows.net'
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("BCP089: The property \"suffix\" is not allowed on objects of type \"environment\". Did you mean \"suffixes\"?");
+                error.Should().Contain("BCP070: Argument of type \"'AzureCloud'\" is not assignable to parameter of type \"environment\".");
+                error.Should().Contain("The input file has compilation errors and cannot supply any cases.");
+            }
+        }
+
         [TestMethod]
         public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
         {

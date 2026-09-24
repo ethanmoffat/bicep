@@ -114,6 +114,16 @@ public static class TestInputCaseLoader
                 continue;
             }
 
+            if (call.Name.IdentifierName == LanguageConstants.DeploymentContextEnvironmentPropertyName)
+            {
+                if (BicepValueEvaluator.Evaluate(context, call.Arguments[0].Expression, "object") is JObject environment)
+                {
+                    resolved = resolved.WithEnvironment(environment);
+                }
+
+                continue;
+            }
+
             if (BicepValueEvaluator.Evaluate(context, call.Arguments[0].Expression, "string").Value<string>() is { } value)
             {
                 resolved = resolved.WithProperty(call.Name.IdentifierName, value);
