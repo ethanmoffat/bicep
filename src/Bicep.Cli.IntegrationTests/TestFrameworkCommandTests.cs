@@ -2878,6 +2878,87 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_DeclaredContract_IsAvailableWithoutSupplyingParameterValues()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "declared-contract");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                type DataProtection = { days: int }
+
+                param location string
+                param data_protection DataProtection?
+                param allow_public_access bool = false
+
+                module child 'child.bicep' = {
+                  name: 'child'
+                  scope: resourceGroup('rg')
+                  params: { probePath: '/health' }
+                }
+
+                output endpoint string = child.outputs.endpoint
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "child.bicep", """
+                param probePath string
+                output endpoint string = probePath
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "contract.biceptest", """
+                test contract = {
+                  match: {
+                    include: ['main.bicep']
+                  }
+                  assertions: {
+                    deploysToASubscription: {
+                      passWhen: target.targetScope == 'subscription'
+                      message: 'The entrypoint deploys to a subscription.'
+                    }
+                    theCallerDecidesDataProtection: {
+                      passWhen: filter(target.parameters, p => p.name == 'data_protection')[0] == {
+                        name: 'data_protection'
+                        type: 'DataProtection?'
+                        required: false
+                        hasDefault: false
+                        file: 'main.bicep'
+                        line: 6
+                      }
+                      message: 'data_protection is nullable with no default.'
+                    }
+                    requiredParametersAreKnown: {
+                      passWhen: map(filter(target.parameters, p => p.required), p => p.name) == ['location']
+                      message: 'Only location is required.'
+                    }
+                    defaultedParametersAreKnown: {
+                      passWhen: map(filter(target.parameters, p => p.hasDefault), p => p.name) == ['allow_public_access']
+                      message: 'Only allow_public_access has a default.'
+                    }
+                    outputsAreDeclared: {
+                      passWhen: map(target.outputs, o => '${o.name}:${o.type}') == ['endpoint:string']
+                      message: 'The entrypoint declares one string output.'
+                    }
+                    moduleContractsAreIncludedWithModules: {
+                      passWhen: map(target.withModules.parameters, p => '${p.file}:${p.name}') == ['main.bicep:location', 'main.bicep:data_protection', 'main.bicep:allow_public_access', 'child.bicep:probePath'] && length(target.withModules.outputs) == 2
+                      message: 'Module parameters and outputs are included with modules.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                // Source facts need no production values, so a match-selected target with a required
+                // parameter evaluates without a params block.
+                error.Should().NotContain("Failed");
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation contract (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_DeploymentContext_DoesNotAssignProductionParametersOfTheSameName()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

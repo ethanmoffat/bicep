@@ -18,13 +18,36 @@ public static class TestTargetFactsSerializer
         [TestTargetType.ResourcesPropertyName] = SerializeResources(facts.Local),
         [TestTargetType.ModulesPropertyName] = SerializeModules(facts.Local),
         [TestTargetType.ImportsPropertyName] = SerializeImports(facts.Local),
+        [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.Local),
+        [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.Local),
+        [TestTargetType.TargetScopePropertyName] = facts.TargetScope,
         [TestTargetType.WithModulesPropertyName] = new JObject
         {
             [TestTargetType.ResourcesPropertyName] = SerializeResources(facts.WithModules),
             [TestTargetType.ModulesPropertyName] = SerializeModules(facts.WithModules),
             [TestTargetType.ImportsPropertyName] = SerializeImports(facts.WithModules),
+            [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.WithModules),
+            [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.WithModules),
         },
     };
+
+    private static JArray SerializeParameters(TestFactSet facts) => new(facts.Parameters.Select(parameter => new JObject
+    {
+        [TestTargetType.NamePropertyName] = parameter.Name,
+        [TestTargetType.TypePropertyName] = parameter.Type,
+        [TestTargetType.RequiredPropertyName] = parameter.Required,
+        [TestTargetType.HasDefaultPropertyName] = parameter.HasDefault,
+        [TestTargetType.FilePropertyName] = parameter.File,
+        [TestTargetType.LinePropertyName] = parameter.Line,
+    }).ToArray<object>());
+
+    private static JArray SerializeOutputs(TestFactSet facts) => new(facts.Outputs.Select(output => new JObject
+    {
+        [TestTargetType.NamePropertyName] = output.Name,
+        [TestTargetType.TypePropertyName] = output.Type,
+        [TestTargetType.FilePropertyName] = output.File,
+        [TestTargetType.LinePropertyName] = output.Line,
+    }).ToArray<object>());
 
     private static JArray SerializeResources(TestFactSet facts) => new(facts.Resources.Select(resource => new JObject
     {

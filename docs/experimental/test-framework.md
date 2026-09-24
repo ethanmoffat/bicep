@@ -291,7 +291,10 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.resources` | Resources the file declares, including nested ones |
 | `target.modules` | Module declarations in the file |
 | `target.imports` | Compile-time `import` statements in the file |
-| `target.withModules` | The same three collections for the file **plus every module it transitively reaches** |
+| `target.parameters` | Parameters the file declares, in source order |
+| `target.outputs` | Outputs the file declares, in source order |
+| `target.targetScope` | The scope the file deploys to |
+| `target.withModules` | Resources, modules, imports, parameters and outputs for the file **plus every module it transitively reaches** |
 | `target.evaluated` | What the file would actually produce for this input case, computed offline — see [Evaluated values](#evaluated-values) |
 
 Each resource carries `symbolicName`, `type` (without the API version), `existing`, `file` and `line`.
@@ -317,6 +320,58 @@ asked is what the file declares, not what a particular deployment would create.
 
 `target` has no additional properties, so a misspelling such as `target.resourcez` is a compile
 error rather than a silently empty result.
+
+#### The file's declared contract
+
+`parameters`, `outputs` and `targetScope` describe what a file promises its caller: what the caller
+must supply, what it may read back and where it may be deployed. Like every source fact they need no
+parameter values, so a test that selects its target with `match` can police a file with required
+parameters without a `params` block.
+
+Each parameter carries `name`, `type`, `required`, `hasDefault`, `file` and `line`. Each output
+carries `name`, `type`, `file` and `line`.
+
+- `required` is the compiler's own definition, the one a parameters file is checked against: there
+  is no default **and** the type does not accept `null`. A nullable parameter with no default, such
+  as `param dataProtection DataProtection?`, is neither required nor defaulted, so the caller may
+  leave it out and the file must cope with `null`.
+- `type` is the declared type **as written**, so `param probe HealthProbe` reports `'HealthProbe'`,
+  `param protection DataProtection?` reports `'DataProtection?'` and `param kinds ('a'|'b')[]`
+  reports `"('a'|'b')[]"`. Whitespace, line breaks and comments between tokens each collapse to a
+  single space, so a multi-line object type reads `'{ region: string zones: int[] }'`. The
+  compiler's own type names are not used, because they are not predictable here: an alias survives
+  inside an array type but is expanded to its structure when referenced directly.
+- `targetScope` is the **effective** scope, spelled as the keyword: a file that declares none reports
+  `'resourceGroup'`. It is typed as the five values `targetScope` accepts. Bicep does not warn when
+  a comparison can never be true, so `target.targetScope == 'subscripton'` compiles, and the mistake
+  only shows up as a failed assertion when the test runs.
+- `line` is where the declaration starts, which for a decorated parameter is its first decorator.
+
+There is deliberately no default-value fact. A default is usually worth asserting only for its
+effect, and that is better stated as a case that omits the parameter and asserts what gets deployed
+(see [Evaluated values](#evaluated-values)): it keeps holding when the default is reworded, moved
+into a variable or computed. `@secure()` is not reported either.
+
+```bicep
+test compositionPolicy = {
+  match: {
+    include: ['app.bicep']
+  }
+  assertions: {
+    deploysToAResourceGroup: {
+      passWhen: target.targetScope == 'resourceGroup'
+      message: 'app.bicep must deploy to a resource group.'
+    }
+    callersOnlyChooseTheNamePrefix: {
+      passWhen: map(filter(target.parameters, p => p.required), p => p.name) == ['namePrefix']
+      message: 'Only namePrefix may be required of a caller; everything else needs a default.'
+    }
+  }
+}
+```
+
+These assertions are in [`source-policy.biceptest`](examples/test-framework/source-policy.biceptest),
+alongside a module policy requiring each storage module to output the name it chose.
 
 Assertion expressions are ordinary Bicep, so the usual functions (`filter`, `map`, `contains`,
 `length`, `startsWith`, `union`, …) all apply, and they may reference variables declared in the test
@@ -1701,7 +1756,7 @@ The complete example lives in [`docs/experimental/examples/test-framework`](./ex
 | `modules/_naming.bicep` | A helper that is not a deployable module, excluded by the selector |
 | `naming.biceptest` | One test applied to every module via `match` |
 | `app.bicep` | A composition entrypoint that declares no resources of its own |
-| `source-policy.biceptest` | Test-owned source policies, including a `withModules` query |
+| `source-policy.biceptest` | Test-owned source policies, including a `withModules` query and the declared parameters, outputs and scope |
 | `source-policy-failing.biceptest` | A source policy that is violated on purpose |
 | `storage-cases.biceptest` | A test that declares typed inputs and maps them into the target |
 | `storage-cases.biceptestparam` | Two passing input cases for that test |

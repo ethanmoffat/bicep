@@ -424,6 +424,42 @@ test foo = {
         }
 
         [TestMethod]
+        public void Declared_contract_facts_are_typed()
+        {
+            // Misspelt fields are reported, and the scope is one of the values targetScope accepts
+            // rather than an open string, so negating it names exactly those values.
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+test foo = {
+  match: {
+    include: ['*.bicep']
+  }
+  assertions: {
+    parameterTypo: {
+      failOn: filter(target.parameters, p => p.requird)
+      message: 'oops'
+    }
+    outputTypo: {
+      failOn: filter(target.withModules.outputs, o => o.nam == 'x')
+      message: 'oops'
+    }
+    scopeIsNotABool: {
+      passWhen: !target.targetScope
+      message: 'oops'
+    }
+  }
+}
+");
+
+            result.Should().HaveDiagnostics(new[] {
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"parameterFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP083", DiagnosticLevel.Error, "The type \"parameterFact\" does not contain property \"requird\". Did you mean \"required\"?"),
+                ("BCP070", DiagnosticLevel.Error, "Argument of type \"outputFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
+                ("BCP083", DiagnosticLevel.Error, "The type \"outputFact\" does not contain property \"nam\". Did you mean \"name\"?"),
+                ("BCP044", DiagnosticLevel.Error, "Cannot apply operator \"!\" to operand of type \"'local' | 'managementGroup' | 'resourceGroup' | 'subscription' | 'tenant'\"."),
+            });
+        }
+
+        [TestMethod]
         public void A_source_fact_names_its_declaration_symbolically()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"

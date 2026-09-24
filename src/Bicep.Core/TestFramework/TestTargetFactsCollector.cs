@@ -3,9 +3,11 @@
 
 using System.Collections.Immutable;
 using Bicep.Core.Navigation;
+using Bicep.Core.Parsing;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
 using Bicep.Core.Text;
+using Bicep.Core.TypeSystem;
 using Bicep.IO.Abstraction;
 
 namespace Bicep.Core.TestFramework;
@@ -32,14 +34,30 @@ public static class TestTargetFactsCollector
         var resources = ImmutableArray.CreateBuilder<TestResourceFact>();
         var modules = ImmutableArray.CreateBuilder<TestModuleFact>();
         var imports = ImmutableArray.CreateBuilder<TestImportFact>();
+        var parameters = ImmutableArray.CreateBuilder<TestParameterFact>();
+        var outputs = ImmutableArray.CreateBuilder<TestOutputFact>();
         var visited = new HashSet<IOUri>();
 
-        CollectTransitively(targetModel, factRoot, visited, resources, modules, imports);
+        CollectTransitively(targetModel, factRoot, visited, resources, modules, imports, parameters, outputs);
 
         return new TestTargetFacts(
             local,
-            new TestFactSet(resources.ToImmutable(), modules.ToImmutable(), imports.ToImmutable()));
+            new TestFactSet(resources.ToImmutable(), modules.ToImmutable(), imports.ToImmutable(), parameters.ToImmutable(), outputs.ToImmutable()),
+            FormatTargetScope(targetModel.TargetScope));
     }
+
+    /// <summary>
+    /// Spells a scope the way the <c>targetScope</c> keyword does, so an assertion compares against the
+    /// value an author would write.
+    /// </summary>
+    private static string FormatTargetScope(ResourceScope scope) => scope switch
+    {
+        ResourceScope.Tenant => LanguageConstants.TargetScopeTypeTenant,
+        ResourceScope.ManagementGroup => LanguageConstants.TargetScopeTypeManagementGroup,
+        ResourceScope.Subscription => LanguageConstants.TargetScopeTypeSubscription,
+        ResourceScope.Local => LanguageConstants.TargetScopeTypeLocal,
+        _ => LanguageConstants.TargetScopeTypeResourceGroup,
+    };
 
     /// <summary>
     /// Visits each reachable file once. A file reached through two different callers contributes its
@@ -51,7 +69,9 @@ public static class TestTargetFactsCollector
         HashSet<IOUri> visited,
         ImmutableArray<TestResourceFact>.Builder resources,
         ImmutableArray<TestModuleFact>.Builder modules,
-        ImmutableArray<TestImportFact>.Builder imports)
+        ImmutableArray<TestImportFact>.Builder imports,
+        ImmutableArray<TestParameterFact>.Builder parameters,
+        ImmutableArray<TestOutputFact>.Builder outputs)
     {
         if (!visited.Add(model.SourceFile.FileHandle.Uri))
         {
@@ -63,12 +83,14 @@ public static class TestTargetFactsCollector
         resources.AddRange(facts.Resources);
         modules.AddRange(facts.Modules);
         imports.AddRange(facts.Imports);
+        parameters.AddRange(facts.Parameters);
+        outputs.AddRange(facts.Outputs);
 
         foreach (var moduleSymbol in model.Root.ModuleDeclarations)
         {
             if (TryGetReferencedModel(moduleSymbol) is { } referenced)
             {
-                CollectTransitively(referenced, factRoot, visited, resources, modules, imports);
+                CollectTransitively(referenced, factRoot, visited, resources, modules, imports, parameters, outputs);
             }
         }
     }
@@ -101,7 +123,27 @@ public static class TestTargetFactsCollector
             .Select(import => CollectImport(model, import, file, lineStarts, factRoot))
             .ToImmutableArray();
 
-        return new TestFactSet(resources, modules, imports);
+        // Required-ness is the compiler's own answer, the same one a parameters file is checked against,
+        // rather than a second definition that could disagree with it.
+        var parameters = model.Root.ParameterDeclarations
+            .Select(parameter => new TestParameterFact(
+                parameter.Name,
+                DeclaredTypeText(parameter.DeclaringParameter.Type),
+                model.Parameters.TryGetValue(parameter.Name, out var metadata) && metadata.IsRequired,
+                SyntaxHelper.TryGetDefaultValue(parameter.DeclaringParameter) is not null,
+                file,
+                GetLine(lineStarts, parameter.DeclaringSyntax)))
+            .ToImmutableArray();
+
+        var outputs = model.Root.OutputDeclarations
+            .Select(output => new TestOutputFact(
+                output.Name,
+                DeclaredTypeText(output.DeclaringOutput.Type),
+                file,
+                GetLine(lineStarts, output.DeclaringSyntax)))
+            .ToImmutableArray();
+
+        return new TestFactSet(resources, modules, imports, parameters, outputs);
     }
 
     private static TestImportFact CollectImport(
@@ -130,6 +172,49 @@ public static class TestTargetFactsCollector
 
     private static SemanticModel? TryGetReferencedModel(ModuleSymbol module)
         => module.TryGetSemanticModel().IsSuccess(out var model) ? model as SemanticModel : null;
+
+    /// <summary>
+    /// The declared type as its author wrote it, so a named type keeps its name. The compiler's own
+    /// type name is not used because it is inconsistent for this purpose: an array of a named type keeps
+    /// the name while a direct reference is shown by its structure. Whitespace, line breaks and comments
+    /// between tokens collapse to a single space, so layout never changes the fact.
+    /// </summary>
+    private static string DeclaredTypeText(SyntaxBase typeSyntax)
+    {
+        var collector = new TokenTextCollector();
+        collector.Visit(typeSyntax);
+        return collector.ToString();
+    }
+
+    private sealed class TokenTextCollector : CstVisitor
+    {
+        private readonly System.Text.StringBuilder text = new();
+        private bool pendingSpace;
+
+        public override void VisitToken(Token token)
+        {
+            if (token.Type is TokenType.NewLine)
+            {
+                pendingSpace = true;
+                return;
+            }
+
+            if (token.LeadingTrivia.Length > 0)
+            {
+                pendingSpace = true;
+            }
+
+            if (pendingSpace && text.Length > 0)
+            {
+                text.Append(' ');
+            }
+
+            text.Append(token.Text);
+            pendingSpace = token.TrailingTrivia.Length > 0;
+        }
+
+        public override string ToString() => text.ToString();
+    }
 
     private static string RelativePath(IOUri uri, IOUri factRoot)
         => uri.GetPathRelativeTo(factRoot);

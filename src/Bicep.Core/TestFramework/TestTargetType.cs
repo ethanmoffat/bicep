@@ -34,6 +34,10 @@ public static class TestTargetType
     public const string WildcardPropertyName = "wildcard";
     public const string FilePropertyName = "file";
     public const string LinePropertyName = "line";
+    public const string ParametersPropertyName = "parameters";
+    public const string RequiredPropertyName = "required";
+    public const string HasDefaultPropertyName = "hasDefault";
+    public const string TargetScopePropertyName = "targetScope";
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -85,6 +89,38 @@ public static class TestTargetType
         ],
         null);
 
+    private static readonly ObjectType ParameterFact = new(
+        "parameterFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The parameter name, which is also the name a caller assigns."),
+            new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declared type as written, for example 'string', 'HealthProbe', 'DataProtection?' or 'serviceSubdomain[]'. Whitespace, line breaks and comments between tokens collapse to single spaces."),
+            new NamedTypeProperty(RequiredPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether a caller must supply a value: the declaration has no default and its type does not accept null."),
+            new NamedTypeProperty(HasDefaultPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration supplies a default value. A nullable parameter can be neither required nor defaulted."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+        ],
+        null);
+
+    private static readonly ObjectType OutputFact = new(
+        "outputFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The output name, which is also the name a caller reads."),
+            new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declared type as written. Whitespace, line breaks and comments between tokens collapse to single spaces."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+        ],
+        null);
+
+    private static readonly TypeSymbol TargetScope = TypeHelper.CreateTypeUnion(
+        TypeFactory.CreateStringLiteralType(LanguageConstants.TargetScopeTypeTenant),
+        TypeFactory.CreateStringLiteralType(LanguageConstants.TargetScopeTypeManagementGroup),
+        TypeFactory.CreateStringLiteralType(LanguageConstants.TargetScopeTypeSubscription),
+        TypeFactory.CreateStringLiteralType(LanguageConstants.TargetScopeTypeResourceGroup),
+        TypeFactory.CreateStringLiteralType(LanguageConstants.TargetScopeTypeLocal));
+
+    // Declared after every fact type it is built from: static fields initialize in textual order.
     private static readonly ObjectType FactSet = CreateFactSet(WithModulesPropertyName);
 
     /// <summary>
@@ -158,6 +194,11 @@ public static class TestTargetType
         [
             .. CreateFactProperties(),
             new NamedTypeProperty(
+                TargetScopePropertyName,
+                TargetScope,
+                TypePropertyFlags.ReadOnly,
+                "The scope the selected file deploys to, spelled as its targetScope keyword. A file that declares none deploys to a resource group."),
+            new NamedTypeProperty(
                 WithModulesPropertyName,
                 FactSet,
                 TypePropertyFlags.ReadOnly,
@@ -195,5 +236,15 @@ public static class TestTargetType
             new TypedArrayType(ImportFact, TypeSymbolValidationFlags.Default),
             TypePropertyFlags.ReadOnly,
             "Compile-time import statements. One fact per statement, however many symbols it names."),
+        new NamedTypeProperty(
+            ParametersPropertyName,
+            new TypedArrayType(ParameterFact, TypeSymbolValidationFlags.Default),
+            TypePropertyFlags.ReadOnly,
+            "Parameter declarations in source order: the inputs a file requires or accepts."),
+        new NamedTypeProperty(
+            OutputsPropertyName,
+            new TypedArrayType(OutputFact, TypeSymbolValidationFlags.Default),
+            TypePropertyFlags.ReadOnly,
+            "Output declarations in source order. Their values for a case are under evaluated.outputs."),
     ];
 }

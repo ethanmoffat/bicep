@@ -338,4 +338,112 @@ resource sql 'Microsoft.Sql/servers@2021-11-01' = {
 
         facts.WithModules.Resources.Should().HaveCount(2);
     }
+
+    [TestMethod]
+    public void Collect_ReportsDeclaredParametersInSourceOrderWithWhetherTheCallerMustSupplyThem()
+    {
+        // Required means what the compiler means: no default and not nullable. A nullable parameter
+        // with no default is neither required nor defaulted, which is the case a policy about
+        // "the caller must decide" has to tell apart.
+        var facts = Collect(("main.bicep", """
+type DataProtection = { days: int }
+
+param location string
+param enabled bool = false
+param data_protection DataProtection?
+@secure()
+param secret string
+param legacy string?
+"""));
+
+        facts.Local.Parameters.Select(x => (x.Name, x.Required, x.HasDefault)).Should().Equal(
+            ("location", true, false),
+            ("enabled", false, true),
+            ("data_protection", false, false),
+            ("secret", true, false),
+            ("legacy", false, false));
+
+        facts.Local.Parameters.Select(x => x.Line).Should().Equal(3, 4, 5, 6, 8);
+        facts.Local.Parameters.Should().OnlyContain(x => x.File == "main.bicep");
+    }
+
+    [TestMethod]
+    public void Collect_ReportsParameterAndOutputTypesAsWritten()
+    {
+        // The compiler's own type names are not predictable: an alias survives in an array type
+        // but is expanded when referenced directly. The declared text is what an author reads.
+        var facts = Collect(("main.bicep", """
+type HealthProbe = { path: string }
+type serviceSubdomain = string
+
+param probe HealthProbe
+param subdomains serviceSubdomain[]
+param maybe HealthProbe?
+param kinds ('a'|'b')[] = []
+param shape {
+  // the region
+  region:   string
+  zones: int[]
+}?
+
+output endpoint string = 'x'
+output probeOut HealthProbe = probe
+"""));
+
+        facts.Local.Parameters.Select(x => (x.Name, x.Type)).Should().Equal(
+            ("probe", "HealthProbe"),
+            ("subdomains", "serviceSubdomain[]"),
+            ("maybe", "HealthProbe?"),
+            ("kinds", "('a'|'b')[]"),
+            ("shape", "{ region: string zones: int[] }?"));
+
+        facts.Local.Outputs.Select(x => (x.Name, x.Type, x.Line)).Should().Equal(
+            ("endpoint", "string", 14),
+            ("probeOut", "HealthProbe", 15));
+    }
+
+    [TestMethod]
+    public void Collect_IncludesModuleParametersAndOutputsOnlyWithModules()
+    {
+        var facts = Collect(
+            ("main.bicep", """
+param location string
+
+module child 'modules/child.bicep' = {
+  name: 'child'
+  params: { probe: location }
+}
+
+output top string = child.outputs.value
+"""),
+            ("modules/child.bicep", """
+param probe string
+output value string = probe
+"""));
+
+        facts.Local.Parameters.Select(x => x.Name).Should().Equal("location");
+        facts.Local.Outputs.Select(x => x.Name).Should().Equal("top");
+
+        facts.WithModules.Parameters.Select(x => (x.Name, x.File)).Should().Equal(
+            ("location", "main.bicep"),
+            ("probe", "modules/child.bicep"));
+        facts.WithModules.Outputs.Select(x => (x.Name, x.File)).Should().Equal(
+            ("top", "main.bicep"),
+            ("value", "modules/child.bicep"));
+    }
+
+    [TestMethod]
+    [DataRow("", "resourceGroup")]
+    [DataRow("targetScope = 'resourceGroup'", "resourceGroup")]
+    [DataRow("targetScope = 'subscription'", "subscription")]
+    [DataRow("targetScope = 'managementGroup'", "managementGroup")]
+    [DataRow("targetScope = 'tenant'", "tenant")]
+    public void Collect_ReportsTheEffectiveTargetScope(string declaration, string expected)
+    {
+        // A file that declares nothing deploys to a resource group, and a policy asking about the
+        // scope should not need to know that default.
+        var facts = Collect(("main.bicep", declaration));
+
+        facts.TargetScope.Should().Be(expected);
+    }
 }

@@ -34,6 +34,11 @@ test moduleSourcePolicy = {
       passWhen: length(filter(target.resources, r => r.symbolicName == 'storageAccount')) == 1
       message: 'Each module must declare exactly one storage account, named storageAccount.'
     }
+    reportsTheNameItChose: {
+      // Declared outputs are part of a module's contract with its caller.
+      passWhen: length(filter(target.outputs, o => o.name == 'storageAccountName' && o.type == 'string')) == 1
+      message: 'Each module must output the storage account name it chose, as a string.'
+    }
   }
 }
 
@@ -50,6 +55,16 @@ test compositionPolicy = {
       // `withModules` widens the query to the entrypoint plus every module it can reach.
       failOn: filter(target.withModules.resources, r => !contains(allowedResourceTypes, r.type))
       message: 'The composed deployment may only create storage accounts.'
+    }
+    deploysToAResourceGroup: {
+      // The effective scope: app.bicep declares no targetScope, so it deploys to a resource group.
+      passWhen: target.targetScope == 'resourceGroup'
+      message: 'app.bicep must deploy to a resource group.'
+    }
+    callersOnlyChooseTheNamePrefix: {
+      // `required` means no default and not nullable: the caller has to decide.
+      passWhen: map(filter(target.parameters, p => p.required), p => p.name) == ['namePrefix']
+      message: 'Only namePrefix may be required of a caller; everything else needs a default.'
     }
   }
 }

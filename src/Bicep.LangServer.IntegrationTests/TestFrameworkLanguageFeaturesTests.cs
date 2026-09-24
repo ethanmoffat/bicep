@@ -131,7 +131,7 @@ test sourcePolicy = {
         var completions = await file.RequestAndResolveCompletions(cursor);
 
         completions.Select(c => c.Label).Should().Contain(
-            ["resources", "modules", "imports", "withModules", "evaluated"],
+            ["resources", "modules", "imports", "parameters", "outputs", "targetScope", "withModules", "evaluated"],
             "because the compiler-provided 'target' symbol is in scope inside an assertion body");
     }
 

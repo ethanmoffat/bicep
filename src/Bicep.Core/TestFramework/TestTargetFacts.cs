@@ -39,14 +39,36 @@ public record TestModuleFact(string Name, string Path, string ResolvedFile, stri
 public record TestImportFact(string Path, string ResolvedFile, ImmutableArray<string> Symbols, bool Wildcard, string File, int Line);
 
 /// <summary>
+/// A parameter declaration: part of the contract a file offers whoever deploys or calls it.
+/// </summary>
+/// <param name="Name">The parameter name, which is also the name a caller assigns.</param>
+/// <param name="Type">The declared type as written, for example 'string', 'HealthProbe' or 'serviceSubdomain[]'. Layout between tokens collapses to single spaces.</param>
+/// <param name="Required">Whether a caller must supply a value: there is no default and the type does not accept null.</param>
+/// <param name="HasDefault">Whether the declaration supplies a default value.</param>
+/// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
+/// <param name="Line">The 1-based line the declaration starts on.</param>
+public record TestParameterFact(string Name, string Type, bool Required, bool HasDefault, string File, int Line);
+
+/// <summary>
+/// An output declaration: what a file offers whoever deploys or calls it once it has run.
+/// </summary>
+/// <param name="Name">The output name, which is also the name a caller reads.</param>
+/// <param name="Type">The declared type as written. Layout between tokens collapses to single spaces.</param>
+/// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
+/// <param name="Line">The 1-based line the declaration starts on.</param>
+public record TestOutputFact(string Name, string Type, string File, int Line);
+
+/// <summary>
 /// The declarations visible at one query scope.
 /// </summary>
 public record TestFactSet(
     ImmutableArray<TestResourceFact> Resources,
     ImmutableArray<TestModuleFact> Modules,
-    ImmutableArray<TestImportFact> Imports)
+    ImmutableArray<TestImportFact> Imports,
+    ImmutableArray<TestParameterFact> Parameters,
+    ImmutableArray<TestOutputFact> Outputs)
 {
-    public static readonly TestFactSet Empty = new([], [], []);
+    public static readonly TestFactSet Empty = new([], [], [], [], []);
 }
 
 /// <summary>
@@ -55,7 +77,11 @@ public record TestFactSet(
 /// describes every local module reachable from it, so a file-scoped policy can never accidentally
 /// attribute a child's declarations to its caller.
 /// </summary>
-public record TestTargetFacts(TestFactSet Local, TestFactSet WithModules)
+/// <param name="TargetScope">
+/// The scope the selected file deploys to, as its <c>targetScope</c> keyword spells it. A file that
+/// declares none deploys to a resource group, and reports that.
+/// </param>
+public record TestTargetFacts(TestFactSet Local, TestFactSet WithModules, string TargetScope)
 {
-    public static readonly TestTargetFacts Empty = new(TestFactSet.Empty, TestFactSet.Empty);
+    public static readonly TestTargetFacts Empty = new(TestFactSet.Empty, TestFactSet.Empty, LanguageConstants.TargetScopeTypeResourceGroup);
 }
