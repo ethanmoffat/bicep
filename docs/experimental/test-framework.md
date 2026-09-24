@@ -831,6 +831,11 @@ that never mentions `target.evaluated` is therefore never held up by a target it
 and `target.evaluated.withModules` is only computed when an assertion actually reads it — a policy
 about the selected file alone is not failed by a module it did not ask about.
 
+`target.evaluated.outputs` is likewise only computed when an assertion reads it. An output often
+reports something Azure assigns when the resource is created, such as a public IP address, and offline
+that value does not exist. A policy about which instances are deployed does not read outputs, so it is
+not failed by one it never asked about, and needs no mock to stand in for it.
+
 An unevaluatable condition is an error rather than a silent exclusion. Reporting "not deployed" for a
 condition that could not be computed would let a policy pass by describing a smaller deployment than
 the case actually produces.
@@ -987,8 +992,8 @@ Neither case falls back to a guessed value, and neither reaches Azure. A test th
 it needs fails; it does not quietly describe a deployment that was never computed.
 
 Because `target.evaluated.outputs` is computed as a set, a target whose outputs read an unanswered
-value cannot report any of them for that case. Other tests and other cases still run, and the failure
-is attributed to the one that hit it.
+value cannot report any of them for that case. An assertion that does not read outputs is unaffected.
+Other tests and other cases still run, and the failure is attributed to the one that hit it.
 
 Absence only matters where a value is actually read, so the same three rules follow:
 
@@ -1744,7 +1749,7 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - Evaluated values cover resource instances and outputs. Individual resource properties are not yet exposed.
 - Module-to-module argument flow is resolved by repeated evaluation, up to a bounded number of rounds. A longer chain than that is left unresolved.
 - Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
-- `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case.
+- `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

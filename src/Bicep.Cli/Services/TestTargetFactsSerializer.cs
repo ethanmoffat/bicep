@@ -55,17 +55,22 @@ public static class TestTargetFactsSerializer
     }).ToArray<object>());
 
     /// <summary>
-    /// Renders the evaluated branch. The module-inclusive collection is only computed when the assertion
-    /// asked for it, so a policy about the selected file alone is never failed by a module it never
+    /// Renders the evaluated branch. Outputs and the module-inclusive collection are only computed when
+    /// the assertion asked for them, so a policy about deployed instances is never failed by an output it
+    /// never read, and a policy about the selected file alone is never failed by a module it never
     /// mentioned.
     /// </summary>
-    public static JObject SerializeEvaluated(TestEvaluatedFactsProvider evaluated, bool includeWithModules)
+    public static JObject SerializeEvaluated(TestEvaluatedFactsProvider evaluated, bool includeOutputs, bool includeWithModules)
     {
         var result = new JObject
         {
             [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local),
-            [TestTargetType.OutputsPropertyName] = evaluated.Outputs,
         };
+
+        if (includeOutputs)
+        {
+            result[TestTargetType.OutputsPropertyName] = evaluated.Outputs;
+        }
 
         if (includeWithModules)
         {

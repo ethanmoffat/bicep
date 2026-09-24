@@ -144,7 +144,8 @@ public class TestAssertionEvaluator
 
             target[TestTargetType.EvaluatedPropertyName] = TestTargetFactsSerializer.SerializeEvaluated(
                 evaluated,
-                References(syntax, TestTargetType.WithModulesPropertyName));
+                includeOutputs: References(syntax, TestTargetType.OutputsPropertyName),
+                includeWithModules: References(syntax, TestTargetType.WithModulesPropertyName));
         }
 
         var seed = new JObject

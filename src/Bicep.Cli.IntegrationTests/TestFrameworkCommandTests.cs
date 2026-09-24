@@ -3069,6 +3069,67 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_OutputsAreOnlyComputedWhenAnAssertionReadsThem()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-lazy-outputs");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The address is assigned by Azure when the resource is created, so offline it is never known.
+            FileHelper.SaveResultFile(TestContext, "address.bicep", """
+                resource address 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+                  name: 'ingress'
+                  location: 'eastus'
+                  properties: {}
+                }
+
+                output ipAddress string = address.properties.ipAddress
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "caller.bicep", """
+                module address 'address.bicep' = {
+                  name: 'address'
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test instances = {
+                  match: {
+                    include: ['address.bicep', 'caller.bicep']
+                  }
+                  params: {}
+                  assertions: {
+                    deploysOneAddress: {
+                      passWhen: length(filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Network/publicIPAddresses')) == 1
+                      message: 'Counting instances does not read any output.'
+                    }
+                  }
+                }
+
+                test outputs 'address.bicep' = {
+                  params: {}
+                  assertions: {
+                    readsTheAddress: {
+                      passWhen: target.evaluated.outputs.ipAddress != ''
+                      message: 'Reading the output needs the address.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation instances (address.bicep) Passed!");
+                output.Should().Contain("Evaluation instances (caller.bicep) Passed!");
+                error.Should().Contain("Evaluation outputs (address.bicep)");
+                error.Should().Contain("'ipAddress' doesn't exist");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Evaluated_IsComputedPerInputCase()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
