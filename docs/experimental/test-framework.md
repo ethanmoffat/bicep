@@ -356,9 +356,20 @@ carries `name`, `type`, `file` and `line`.
   compiler's own type names are not used, because they are not predictable here: an alias survives
   inside an array type but is expanded to its structure when referenced directly.
 - `targetScope` is the **effective** scope, spelled as the keyword: a file that declares none reports
-  `'resourceGroup'`. It is typed as the five values `targetScope` accepts. Bicep does not warn when
-  a comparison can never be true, so `target.targetScope == 'subscripton'` compiles, and the mistake
-  only shows up as a failed assertion when the test runs.
+  `'resourceGroup'`. It is typed as the five values `targetScope` accepts, so the
+  `no-impossible-comparisons` linter rule catches a misspelling before anything runs:
+
+  ```
+  policy.biceptest(4,17) : Warning no-impossible-comparisons: This comparison is always false, because no value of type 'local' | 'managementGroup' | 'resourceGroup' | 'subscription' | 'tenant' equals a value of type 'subscripton'. Did you mean 'subscription'? [https://aka.ms/bicep/linter-diagnostics#no-impossible-comparisons]
+  ```
+
+  The rule applies to every Bicep file, not only tests. It reports `==`, `!=`, `=~` and `!~` when
+  one side is a closed set of alternatives (a literal union, `@allowed` values, a conditional
+  choosing between literals) and the other side shares no value with it. It stays silent on a
+  constant compared with a constant, on open types such as `string`, and on enumerations from
+  resource type definitions, which are known to be incomplete. It is a warning, so a run still
+  goes ahead and reports the assertion that never holds. Most facts, such as a resource's `type`,
+  are typed as plain `string`, and a misspelling there cannot be caught this way.
 - `line` is where the declaration starts, which for a decorated parameter is its first decorator.
 
 There is deliberately no default-value fact. A default is usually worth asserting only for its
@@ -2062,6 +2073,6 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
-- Comparing a fact with a value it can never take, such as `target.targetScope == 'subscripton'`, is not diagnosed; the assertion simply never holds.
+- A fact typed as plain `string`, such as a resource's `type`, can be compared with a misspelled value without any diagnostic; the assertion simply never holds. Only facts typed as a closed set, such as `targetScope`, are checked by `no-impossible-comparisons`.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

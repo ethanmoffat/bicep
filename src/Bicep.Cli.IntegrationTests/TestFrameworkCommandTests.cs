@@ -1028,6 +1028,44 @@ assert isEqual = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Lint_AFactComparedWithAValueItCanNeverTake_IsReportedWithTheValueItResembles()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "impossible-comparison");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "targetScope = 'subscription'\n", outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test policy 'target.bicep' = {
+                  assertions: {
+                    deploysToASubscription: {
+                      passWhen: target.targetScope == 'subscripton'
+                      message: 'The target should deploy to a subscription.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, lintError, lintResult) = await Bicep(settings, "lint", testPath);
+            var (_, testError, testResult) = await Bicep(settings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                const string warning = "policy.biceptest(4,17) : Warning no-impossible-comparisons: This comparison is always false, because no value of type 'local' | 'managementGroup' | 'resourceGroup' | 'subscription' | 'tenant' equals a value of type 'subscripton'. Did you mean 'subscription'?";
+
+                // The misspelling is caught before anything runs.
+                lintResult.Should().Be(0);
+                lintError.Should().Contain(warning);
+
+                // A warning does not stop the test from running, so the run reports it and then the
+                // failure it causes.
+                testResult.Should().Be(1);
+                testError.Should().Contain(warning);
+                testError.Should().Contain("Assertion deploysToASubscription failed");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_MatchSelector_PicksUpNewFilesWithoutEditingTheTest()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

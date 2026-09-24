@@ -524,6 +524,16 @@
                     }
                   ]
                 },
+                "no-impossible-comparisons": {
+                  "allOf": [
+                    {
+                      "description": "Values compared for equality should have a value in common. Defaults to 'Warning'. See https://aka.ms/bicep/linter-diagnostics#no-impossible-comparisons"
+                    },
+                    {
+                      "$ref": "#/definitions/rule-def-level-warning"
+                    }
+                  ]
+                },
                 "no-loc-expr-outside-params": {
                   "allOf": [
                     {

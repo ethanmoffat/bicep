@@ -547,6 +547,42 @@ namespace Bicep.Core {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Change to {0}.
+        /// </summary>
+        internal static string NoImpossibleComparisonsRuleCodeFix {
+            get {
+                return ResourceManager.GetString("NoImpossibleComparisonsRuleCodeFix", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Values compared for equality should have a value in common..
+        /// </summary>
+        internal static string NoImpossibleComparisonsRuleDescription {
+            get {
+                return ResourceManager.GetString("NoImpossibleComparisonsRuleDescription", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to This comparison is always {0}, because no value of type {1} equals a value of type {2}..
+        /// </summary>
+        internal static string NoImpossibleComparisonsRuleMessageFormat {
+            get {
+                return ResourceManager.GetString("NoImpossibleComparisonsRuleMessageFormat", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Did you mean {0}?.
+        /// </summary>
+        internal static string NoImpossibleComparisonsRuleSuggestionFormat {
+            get {
+                return ResourceManager.GetString("NoImpossibleComparisonsRuleSuggestionFormat", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Functions resourceGroup().location and deployment().location should only be used as the default value of a parameter..
         /// </summary>
         internal static string NoLocExprOutsideParamsRuleDescription {

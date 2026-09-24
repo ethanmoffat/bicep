@@ -206,6 +206,21 @@
     <value>Output '{0}' uses a hard-coded value. Use an exported variable for constants that need to be imported by other files.</value>
     <comment>{0} is a programmatic output name</comment>
   </data>
+  <data name="NoImpossibleComparisonsRuleDescription" xml:space="preserve">
+    <value>Values compared for equality should have a value in common.</value>
+  </data>
+  <data name="NoImpossibleComparisonsRuleMessageFormat" xml:space="preserve">
+    <value>This comparison is always {0}, because no value of type {1} equals a value of type {2}.</value>
+    <comment>{0} is 'true' or 'false', {1} and {2} are programmatic type names</comment>
+  </data>
+  <data name="NoImpossibleComparisonsRuleSuggestionFormat" xml:space="preserve">
+    <value>Did you mean {0}?</value>
+    <comment>{0} is a programmatic literal value</comment>
+  </data>
+  <data name="NoImpossibleComparisonsRuleCodeFix" xml:space="preserve">
+    <value>Change to {0}</value>
+    <comment>{0} is a programmatic literal value</comment>
+  </data>
   <data name="NoLocExprOutsideParamsRuleError" xml:space="preserve">
     <value>Use a parameter here instead of '{0}'. 'resourceGroup().location' and 'deployment().location' should only be used as a default value for parameters.</value>
     <comment>{0} = programmatic expression, e.g. 'resourceGroup().location'</comment>
