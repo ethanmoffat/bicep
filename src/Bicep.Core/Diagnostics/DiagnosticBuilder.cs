@@ -2145,6 +2145,10 @@ namespace Bicep.Core.Diagnostics
             public Diagnostic MockCannotBeDeclaredMoreThanOnce() => CoreError(
                 "BCP470",
                 $"A file can declare \"{LanguageConstants.MocksKeyword}\" only once.");
+
+            public Diagnostic CannotUseFunctionAsTestDecorator(string functionName) => CoreError(
+                "BCP471",
+                $"Function \"{functionName}\" cannot be used as a test decorator.");
         }
 
         public static DiagnosticBuilderInternal ForPosition(TextSpan span)

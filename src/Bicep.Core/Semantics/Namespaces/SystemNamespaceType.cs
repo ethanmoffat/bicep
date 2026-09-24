@@ -2260,7 +2260,10 @@ namespace Bicep.Core.Semantics.Namespaces
 
             foreach (var decorator in GetBicepTemplateDecorators(featureProvider))
             {
-                yield return new(decorator, (_, sfk) => sfk == BicepSourceFileKind.BicepFile);
+                // A test file declares parameters and types too, so the decorators that only constrain a
+                // declared type apply there as well. Those that shape a deployment or an export do not.
+                var constrainsADeclaredTypeOnly = (decorator.Overload.Flags & FunctionFlags.AnyDecorator & ~FunctionFlags.ParameterOutputOrTypeDecorator) == 0;
+                yield return new(decorator, (_, sfk) => sfk == BicepSourceFileKind.BicepFile || (constrainsADeclaredTypeOnly && sfk == BicepSourceFileKind.TestFile));
             }
 
             foreach (var decorator in GetTestCaseDecorators())

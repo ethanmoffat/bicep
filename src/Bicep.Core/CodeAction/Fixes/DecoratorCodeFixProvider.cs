@@ -62,6 +62,7 @@ public class DecoratorCodeFixProvider : ICodeFixProvider
         ExtensionDeclarationSyntax => FunctionFlags.ExtensionDecorator,
         MetadataDeclarationSyntax => FunctionFlags.MetadataDecorator,
         TestCaseDeclarationSyntax => FunctionFlags.TestCaseDecorator,
+        TestDeclarationSyntax => FunctionFlags.TestDecorator,
         TypeDeclarationSyntax or ObjectTypePropertySyntax or ObjectTypeAdditionalPropertiesSyntax or TupleTypeItemSyntax => FunctionFlags.TypeDecorator,
         _ => FunctionFlags.AnyDecorator,
     };

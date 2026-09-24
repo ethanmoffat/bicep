@@ -764,6 +764,83 @@ test foo = {
         }
 
         [TestMethod]
+        public void Test_file_parameters_accept_the_decorators_that_constrain_a_type()
+        {
+            var result = CompileTestFile("""
+                        @secure()
+                        param password string
+
+                        @minLength(2)
+                        @maxLength(5)
+                        @allowed(['us', 'eu'])
+                        @metadata({ owner: 'platform' })
+                        param name string
+
+                        @minValue(1)
+                        @maxValue(30)
+                        param days int = 7
+
+                        @sealed()
+                        type settings = { name: string }
+
+                        test policy 'target.bicep' = {
+                          params: {
+                            name: '${name}${password}${days}'
+                          }
+                        }
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().NotHaveAnyDiagnostics();
+        }
+
+        [TestMethod]
+        public void Test_file_parameters_do_not_accept_the_decorators_that_shape_a_deployment()
+        {
+            // Nothing in a test file is deployed or imported, so these stay template-only.
+            var result = CompileTestFile("""
+                        @batchSize(1)
+                        param name string
+
+                        @export()
+                        type settings = { name: string }
+
+                        test policy 'target.bicep' = {
+                          params: {
+                            name: name
+                          }
+                        }
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP057", DiagnosticLevel.Error, "The name \"batchSize\" does not exist in the current context."),
+                ("BCP057", DiagnosticLevel.Error, "The name \"export\" does not exist in the current context."),
+            });
+        }
+
+        [TestMethod]
+        public void A_test_can_be_described_but_not_constrained()
+        {
+            var result = CompileTestFile("""
+                        @description('Every account is named by its caller.')
+                        test described 'target.bicep' = {}
+
+                        @sys.description('The same, qualified.')
+                        test qualified 'target.bicep' = {}
+
+                        @sys.secure()
+                        test secured 'target.bicep' = {}
+
+                        @sys.minLength(1)
+                        test constrained 'target.bicep' = {}
+                        """);
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP471", DiagnosticLevel.Error, "Function \"secure\" cannot be used as a test decorator."),
+                ("BCP471", DiagnosticLevel.Error, "Function \"minLength\" cannot be used as a test decorator."),
+            });
+        }
+
+        [TestMethod]
         public void Mocks_are_declared_in_a_test_file()
         {
             var result = CompileTestFile("""

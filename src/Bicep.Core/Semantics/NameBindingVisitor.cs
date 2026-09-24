@@ -157,6 +157,7 @@ namespace Bicep.Core.Semantics
         }
         public override void VisitTestDeclarationSyntax(TestDeclarationSyntax syntax)
         {
+            allowedFlags = FunctionFlags.TestDecorator;
             this.VisitNodes(syntax.LeadingNodes);
             this.Visit(syntax.Keyword);
             this.Visit(syntax.Name);

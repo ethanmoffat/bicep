@@ -70,6 +70,14 @@ test validPrefix 'storage.bicep' = {
 
 The target path is a literal path relative to the test file.
 
+A test can carry a `@description`, which the editor shows when you hover its name. It is the only
+decorator a test accepts; anything else, such as `@sys.secure()`, is an error:
+
+```console
+$ bicep test policy.biceptest
+policy.biceptest(1,6) : Error BCP471: Function "secure" cannot be used as a test decorator.
+```
+
 Values for a test's own parameters live in a separate `.biceptestparam` file, described under
 [Input cases](#input-cases).
 
@@ -187,8 +195,8 @@ Inside a test, completion follows the shape of the declaration:
 `target` is offered only inside an assertion. It describes the file under test, and no file has been
 selected anywhere else in the declaration.
 
-Hovering `target` describes what it is and where it is available. Hovering a `case` name shows its
-`@description`, if it has one. Property keys such as `match` and `assertions` hover with their type
+Hovering `target` describes what it is and where it is available. Hovering a `test` or `case` name
+shows its `@description`, if it has one. Property keys such as `match` and `assertions` hover with their type
 and description, the same description shown when they are offered as a completion.
 
 Assertion names are highlighted as declarations rather than as property keys, so the name you chose
@@ -486,6 +494,21 @@ case prefixAtLengthLimit = {
 The test file's parameters are a real, checked contract. A case that sets a property the test does
 not declare, omits one it requires, or supplies the wrong type is a compile error in the input file,
 reported against the case that caused it — not a silently ignored value.
+
+The decorators that constrain a declared type work on a test file's parameters and types exactly as
+they do in a template: `@secure`, `@allowed`, `@minLength`/`@maxLength`, `@minValue`/`@maxValue`,
+`@metadata` and `@sealed`. A case is checked against them, so a value outside the range is a compile
+error in the input file rather than a surprise inside the target:
+
+```console
+$ bicep test sizes.biceptest --inputs sizes.biceptestparam
+sizes.biceptestparam(4,13) : Error BCP333: The provided value (whose length will always be less than or equal to 1) is too short to assign to a target for which the minimum allowable length is 2.
+sizes.biceptestparam(9,9) : Error BCP036: The property "slot" expected a value of type "'blue' | 'green'" but the provided value is of type "'red'".
+sizes.biceptestparam: The input file has compilation errors and cannot supply any cases.
+```
+
+Decorators that shape a deployment or an export — `@batchSize`, `@export` and the resource
+decorators — are not available in a test file, because nothing in it is deployed or imported.
 
 A test file's inputs are its own. It decides which of them reach a target's production `params`, and
 which only shape its own policy. There is no implicit forwarding: a value a target never receives

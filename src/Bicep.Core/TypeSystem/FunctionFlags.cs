@@ -103,6 +103,11 @@ namespace Bicep.Core.TypeSystem
         TestCaseDecorator = 1 << 18,
 
         /// <summary>
+        /// The function can be used as a test declaration decorator.
+        /// </summary>
+        TestDecorator = 1 << 19,
+
+        /// <summary>
         /// The function can be used as a resource or module decorator.
         /// </summary>
         ResourceOrModuleDecorator = ResourceDecorator | ModuleDecorator,
@@ -125,6 +130,6 @@ namespace Bicep.Core.TypeSystem
         /// <summary>
         /// The function can be used as a decorator anywhere.
         /// </summary>
-        AnyDecorator = ParameterDecorator | VariableDecorator | FunctionDecorator | ResourceDecorator | ModuleDecorator | OutputDecorator | ExtensionDecorator | MetadataDecorator | TypeDecorator | TestCaseDecorator,
+        AnyDecorator = ParameterDecorator | VariableDecorator | FunctionDecorator | ResourceDecorator | ModuleDecorator | OutputDecorator | ExtensionDecorator | MetadataDecorator | TypeDecorator | TestCaseDecorator | TestDecorator,
     }
 }

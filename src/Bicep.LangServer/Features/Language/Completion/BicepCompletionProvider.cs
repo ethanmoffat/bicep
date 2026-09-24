@@ -1211,6 +1211,7 @@ namespace Bicep.LanguageServer.Features.Language.Completion
                 ModuleSymbol moduleSymbol => GetAccessible(knownDecoratorFunctions, moduleSymbol.Type, FunctionFlags.ModuleDecorator),
                 ExtensionNamespaceSymbol extensionSymbol => GetAccessible(knownDecoratorFunctions, extensionSymbol.DeclaredType, FunctionFlags.ExtensionDecorator),
                 OutputSymbol outputSymbol => GetAccessible(knownDecoratorFunctions, outputSymbol.Type, FunctionFlags.OutputDecorator),
+                TestSymbol testSymbol => GetAccessible(knownDecoratorFunctions, TestType.TryUnwrap(testSymbol.Type)?.Body.Type ?? testSymbol.Type, FunctionFlags.TestDecorator),
                 PropertySymbol propertySymbol => GetAccessible(knownDecoratorFunctions, propertySymbol.Type, FunctionFlags.TypeDecorator),
                 null when unwrappedTargetType is not null => GetAccessible(knownDecoratorFunctions, unwrappedTargetType, FunctionFlags.TypeDecorator),
                 /*

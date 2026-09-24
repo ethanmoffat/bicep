@@ -369,7 +369,8 @@ namespace Bicep.Core.TypeSystem
 
                 var singleDeclaredType = declaredType.UnwrapArrayType();
 
-                this.ValidateDecorators(syntax.Decorators, declaredType, diagnostics);
+                // A test cannot be assigned anywhere, so decorators attach to what it declares: its body.
+                this.ValidateDecorators(syntax.Decorators, TestType.TryUnwrap(declaredType)?.Body.Type ?? declaredType, diagnostics);
 
                 if (singleDeclaredType is ErrorType)
                 {
@@ -2488,6 +2489,7 @@ namespace Bicep.Core.TypeSystem
                 VariableDeclarationSyntax _ => FunctionFlags.VariableDecorator,
                 OutputDeclarationSyntax _ => FunctionFlags.OutputDecorator,
                 TestCaseDeclarationSyntax _ => FunctionFlags.TestCaseDecorator,
+                TestDeclarationSyntax _ => FunctionFlags.TestDecorator,
                 _ => FunctionFlags.AnyDecorator,
             };
 

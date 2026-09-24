@@ -107,6 +107,43 @@ namespace Bicep.Core.IntegrationTests
         }
 
         [TestMethod]
+        public void A_case_value_is_checked_against_the_constraints_the_test_declares()
+        {
+            var result = CompileTestParams(
+                ("cases.biceptestparam", """
+                    using 'sample.biceptest'
+
+                    case tooShort = {
+                      location: 'w'
+                    }
+
+                    case notAllowed = {
+                      location: 'westus'
+                      slot: 'red'
+                    }
+                    """),
+                TestFile("""
+                    @minLength(2)
+                    param location string
+
+                    @allowed(['blue', 'green'])
+                    param slot string = 'blue'
+
+                    test policy 'app.bicep' = {
+                      params: {
+                        location: '${location}-${slot}'
+                      }
+                    }
+                    """),
+                ("app.bicep", DefaultTargetFile));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP333", DiagnosticLevel.Error, "The provided value (whose length will always be less than or equal to 1) is too short to assign to a target for which the minimum allowable length is 2."),
+                ("BCP036", DiagnosticLevel.Error, "The property \"slot\" expected a value of type \"'blue' | 'green'\" but the provided value is of type \"'red'\"."),
+            });
+        }
+
+        [TestMethod]
         public void A_case_value_must_match_the_declared_input_type()
         {
             var result = CompileTestParams(

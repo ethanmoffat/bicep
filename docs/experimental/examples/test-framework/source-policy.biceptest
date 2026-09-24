@@ -9,6 +9,7 @@ var allowedResourceTypes = [
   'Microsoft.Storage/storageAccounts'
 ]
 
+@description('Every module under modules/ is a leaf that creates exactly one storage account.')
 test moduleSourcePolicy = {
   match: {
     root: 'modules'
@@ -42,6 +43,7 @@ test moduleSourcePolicy = {
   }
 }
 
+@description('The entrypoint composes those modules and asks its caller for as little as possible.')
 test compositionPolicy = {
   match: {
     include: ['app.bicep']

@@ -298,6 +298,68 @@ case shor|tPrefix = {
     }
 
     [TestMethod]
+    public async Task Hovering_a_described_test_shows_its_description()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursor) = ParserHelper.GetFileWithSingleCursor(@"
+@description('Every target creates the resources it owns.')
+test source|Policy = {
+  match: {
+    include: ['main.bicep']
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var hover = await file.RequestHover(cursor);
+
+        hover.Should().NotBeNull();
+        hover!.Contents.MarkupContent!.Value.Should().Contain("Every target creates the resources it owns.");
+    }
+
+    [TestMethod]
+    public async Task Decorator_completions_offer_what_each_test_file_declaration_accepts()
+    {
+        var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
+        var (testText, cursors) = ParserHelper.GetFileWithCursors(@"
+@|
+param password string
+
+@|
+test sourcePolicy = {
+  match: {
+    include: ['main.bicep']
+  }
+}
+", '|');
+
+        using var helper = await StartServerWithFiles(
+            new Dictionary<DocumentUri, string>
+            {
+                [InMemoryFileResolver.GetFileUri("/path/to/main.bicep")] = TargetBicep,
+                [testUri] = testText,
+            },
+            testUri);
+
+        var file = new FileRequestHelper(helper.Client, new LanguageClientFile(testUri, testText));
+        var onParameter = (await file.RequestAndResolveCompletions(cursors[0])).Select(c => c.Label).ToArray();
+        var onTest = (await file.RequestAndResolveCompletions(cursors[1])).Select(c => c.Label).ToArray();
+
+        onParameter.Should().Contain(["description", "secure", "minLength", "allowed"]);
+        onParameter.Should().NotContain(["batchSize", "export"]);
+        onTest.Should().Contain("description");
+        onTest.Should().NotContain(["secure", "minLength", "allowed", "metadata"]);
+    }
+
+    [TestMethod]
     public async Task Completions_in_a_test_body_carry_property_descriptions()
     {
         var testUri = InMemoryFileResolver.GetFileUri("/path/to/policy.biceptest");
