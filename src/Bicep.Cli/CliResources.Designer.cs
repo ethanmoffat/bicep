@@ -160,7 +160,7 @@ namespace Bicep.Cli {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to The specified input &quot;{0}&quot; was not recognized as a Bicep source file. Valid files must use the .bicep, .bicepparam or .biceptest extension..
+        ///   Looks up a localized string similar to The specified input &quot;{0}&quot; was not recognized as a Bicep source file. Valid files must use the .bicep, .bicepparam, .biceptest or .biceptestparam extension..
         /// </summary>
         internal static string UnrecognizedBicepSourceFileExtensionMessage {
             get {

@@ -50,7 +50,7 @@ public class LintCommandTests : TestBase
             output.Should().BeEmpty();
 
             error.Should().NotBeEmpty();
-            error.Should().Contain($@"The specified input ""{Path.GetFullPath("/dev/zero")}"" was not recognized as a Bicep source file. Valid files must use the .bicep, .bicepparam or .biceptest extension");
+            error.Should().Contain($@"The specified input ""{Path.GetFullPath("/dev/zero")}"" was not recognized as a Bicep source file. Valid files must use the .bicep, .bicepparam, .biceptest or .biceptestparam extension");
         }
     }
 

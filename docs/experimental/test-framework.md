@@ -227,8 +227,10 @@ top-level completions are scoped to what an input file can declare:
 its ambient context, because both are file-level singletons. `param` is not offered: an input file
 supplies values for the test file's parameters through its cases, and declares none of its own.
 
-`bicep lint` and `bicep format` also accept `.biceptest` files. Both analyse or rewrite the source
-only; neither evaluates the tests, and formatting preserves the `.biceptest` extension.
+`bicep lint` and `bicep format` also accept `.biceptest` and `.biceptestparam` files. Both analyse or
+rewrite the source only; neither evaluates the tests, and formatting preserves the extension. Linting
+an input file also reports the diagnostics of the test file it binds to, as linting a `.bicepparam`
+file does for its template.
 
 ## Assertions
 
@@ -2060,7 +2062,6 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
-- `bicep lint` accepts `.biceptest` but not `.biceptestparam`; an input file's diagnostics are reported by `bicep test --inputs` and in the editor.
 - Comparing a fact with a value it can never take, such as `target.targetScope == 'subscripton'`, is not diagnosed; the assertion simply never holds.
 
 For background and ongoing discussion, see [Bicep Experimental Test Framework](https://github.com/Azure/bicep/issues/11967).

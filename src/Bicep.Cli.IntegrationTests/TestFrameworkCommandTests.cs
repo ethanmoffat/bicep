@@ -966,6 +966,68 @@ assert isEqual = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Lint_BicepTestParamFile_ReportsTheInputFilesDiagnostics()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "lint-inputs");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "param name string\noutput n string = name\n", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param prefix string
+
+                test policy 'target.bicep' = {
+                  params: { name: prefix }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", """
+                using 'policy.biceptest'
+
+                var unused = 1
+
+                case wrongType = {
+                  prefix: 1
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "lint", inputPath);
+
+            using (new AssertionScope())
+            {
+                // An input file is ordinary source: its type errors and linter warnings are reported,
+                // and nothing is evaluated.
+                result.Should().Be(1);
+                error.Should().Contain("cases.biceptestparam(6,11) : Error BCP036");
+                error.Should().Contain("cases.biceptestparam(3,5) : Warning no-unused-vars");
+                output.Should().NotContain("Evaluation");
+                error.Should().NotContain("Evaluation");
+            }
+        }
+
+        [TestMethod]
+        public async Task Format_BicepTestParamFile_FormatsInPlace()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "format-inputs");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "target.bicep", "param name string\n", outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "policy.biceptest", "param prefix string\n\ntest policy 'target.bicep' = {\n  params: { name: prefix }\n}\n", outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "cases.biceptestparam", "using    'policy.biceptest'\n@deploymentName(  'x' )\ncase    short   =   {  prefix:   'ab'  }\n", outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "format", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(0);
+                error.Should().BeEmpty();
+
+                // Formatting keeps the .biceptestparam extension and every declaration in it.
+                File.ReadAllText(inputPath).ReplaceLineEndings("\n").Should().Be("using 'policy.biceptest'\n@deploymentName('x')\ncase short = { prefix: 'ab' }\n");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_MatchSelector_PicksUpNewFilesWithoutEditingTheTest()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true, AssertsEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
