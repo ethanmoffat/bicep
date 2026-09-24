@@ -181,10 +181,42 @@ public sealed class TestEvaluatedFactsProvider(
 
         var moduleOutputs = modules.ToDictionary(
             module => module.Key,
-            module => (JToken)new JObject { [TestTargetType.OutputsPropertyName] = module.Value.Template[TestTargetType.OutputsPropertyName] ?? new JObject() },
+            module => (JToken)new JObject { [TestTargetType.OutputsPropertyName] = ComputedOutputs(module.Value) },
             StringComparer.OrdinalIgnoreCase);
 
         return (reference, _, _) => moduleOutputs.TryGetValue(reference, out var resolved) ? resolved : null;
+    }
+
+    /// <summary>
+    /// The outputs of a module that were actually computed. An output that reads something only Azure
+    /// knows is left as its own expression text, which a caller would otherwise take for the value - a
+    /// string where an array belongs, say. Leaving it out makes the caller's read fail instead, so the
+    /// module that needed it is recorded as unresolved rather than evaluated with a placeholder.
+    /// </summary>
+    private static JObject ComputedOutputs(EvaluatedDeployment module)
+    {
+        var computed = new JObject();
+
+        if (module.Template[TestTargetType.OutputsPropertyName] is not JObject outputs)
+        {
+            return computed;
+        }
+
+        var declared = module.Source[TestTargetType.OutputsPropertyName] as JObject;
+
+        foreach (var output in outputs.Properties())
+        {
+            if (output.Value is JObject { } value &&
+                value["value"] is { } evaluated &&
+                HoldsUnevaluatedExpression(evaluated, (declared?[output.Name] as JObject)?["value"]))
+            {
+                continue;
+            }
+
+            computed[output.Name] = output.Value;
+        }
+
+        return computed;
     }
 
     private static JObject EvaluateTemplate(

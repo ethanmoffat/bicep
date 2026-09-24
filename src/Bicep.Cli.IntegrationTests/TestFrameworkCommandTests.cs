@@ -4249,6 +4249,105 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_WithholdsAModuleOutputOnlyAzureKnowsUntilItIsMocked()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "withheld-module-output");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "zone.bicep", """
+                resource zone 'Microsoft.Network/dnsZones@2018-05-01' = {
+                  name: 'child.contoso.com'
+                  location: 'global'
+                }
+
+                output nameServers array = zone.properties.nameServers
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "delegation.bicep", """
+                param nameServers array
+
+                resource parent 'Microsoft.Network/dnsZones@2018-05-01' existing = {
+                  name: 'contoso.com'
+                }
+
+                resource delegation 'Microsoft.Network/dnsZones/NS@2018-05-01' = {
+                  parent: parent
+                  name: 'child'
+                  properties: {
+                    TTL: 3600
+                    NSRecords: [for server in nameServers: {
+                      nsdname: server
+                    }]
+                  }
+                }
+                """, Path.Combine(outputFileDir, "parts"));
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module zone 'parts/zone.bicep' = {
+                  name: 'zone'
+                }
+
+                module delegation 'parts/delegation.bicep' = {
+                  name: 'delegation'
+                  params: {
+                    nameServers: zone.outputs.nameServers
+                  }
+                }
+                """, outputFileDir);
+
+            const string assertions = """
+                  assertions: {
+                    delegatesToTheChildZonesServers: {
+                      passWhen: map(filter(target.evaluated.withModules.resources, r => r.symbolicName == 'delegation')[0].properties.NSRecords, r => r.nsdname) == ['ns1.example.net', 'ns2.example.net']
+                      message: 'The delegation should name the servers Azure assigned to the child zone.'
+                    }
+                  }
+                """;
+
+            var unmockedPath = FileHelper.SaveResultFile(TestContext, "unmocked.biceptest", $$"""
+                test unmocked 'main.bicep' = {
+                {{assertions}}
+                }
+                """, outputFileDir);
+
+            var mockedPath = FileHelper.SaveResultFile(TestContext, "mocked.biceptest", $$"""
+                // Azure assigns a zone's name servers when it creates the zone.
+                mocks = {
+                  childZone: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.Network/dnsZones/child.contoso.com'
+                    apiVersion: '2018-05-01'
+                    response: {
+                      properties: {
+                        nameServers: ['ns1.example.net', 'ns2.example.net']
+                      }
+                    }
+                  }
+                }
+
+                test mocked 'main.bicep' = {
+                {{assertions}}
+                }
+                """, outputFileDir);
+
+            var (unmockedOutput, unmockedError, unmockedResult) = await Bicep(settings, "test", "--output-detail", "all", unmockedPath);
+            var (mockedOutput, mockedError, mockedResult) = await Bicep(settings, "test", "--output-detail", "all", mockedPath);
+
+            using (new AssertionScope())
+            {
+                // Handed over as text, the output would read as a string where an array belongs.
+                unmockedResult.Should().Be(1);
+                (unmockedOutput + unmockedError).Should().NotContain("Expected a value of type 'Array'");
+                (unmockedOutput + unmockedError).Should().Contain("The arguments of module 'delegation' could not be evaluated for this case");
+
+                mockedResult.Should().Be(0);
+                mockedOutput.Should().Contain("Evaluation mocked (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Evaluated_ReportsTheBodyOfADeploymentResourceTheAuthorDeclared()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
