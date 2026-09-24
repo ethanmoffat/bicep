@@ -165,7 +165,10 @@ public sealed class TestEvaluatedFactsProvider(
             mocks,
             ModuleOutputResolver(modules),
             strictOutputs: true,
-            tolerant: false);
+            tolerant: false,
+            // An output fails only if it reads what could not be computed, not because some resource it
+            // never mentions has a value only Azure knows.
+            onUnresolvedProperties: static (_, _) => { });
     }
 
     private static TemplateEvaluator.OnUnresolvedReferenceDelegate? ModuleOutputResolver(ImmutableDictionary<string, EvaluatedDeployment>? modules)
@@ -340,13 +343,25 @@ public sealed class TestEvaluatedFactsProvider(
 
             var (declaringFile, line) = ResolveDeclaration(deployment.File, symbolicName);
 
+            // A module this evaluator could not follow is still a deployment, and its properties are the
+            // compiler's generated wrapper rather than anything the author wrote.
+            var isDeployment = string.Equals(type, DeploymentResourceType, StringComparison.OrdinalIgnoreCase);
+            var body = new JObject();
+
+            foreach (var key in TestTargetType.EvaluatedBodyPropertyNames)
+            {
+                body[key] = isDeployment && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
+            }
+
             collected.Add(new TestEvaluatedResource(
                 resource[TestTargetType.NamePropertyName]?.Value<string>() ?? string.Empty,
                 type,
                 symbolicName,
                 instanceId,
                 declaringFile,
-                line));
+                line,
+                body,
+                deployment.Unresolved.TryGetValue(property.Name, out var unresolvedReason) ? unresolvedReason : null));
         }
 
         return collected.ToImmutable();

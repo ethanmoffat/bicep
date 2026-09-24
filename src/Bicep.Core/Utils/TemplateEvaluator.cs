@@ -41,20 +41,31 @@ namespace Bicep.Core.Utils
             }
         }
 
+        /// <summary>
+        /// Which resources' properties are still unknown while resources are evaluated one at a time, and
+        /// why the last attempt at each failed. A resource that is not here has been computed.
+        /// </summary>
+        private sealed class PendingResourceBodies
+        {
+            public Dictionary<TemplateResource, Exception?> Pending { get; } = new(ReferenceEqualityComparer.Instance);
+        }
+
         private class TemplateEvaluationContext : IEvaluationContext
         {
             private readonly IEvaluationContext context;
             private readonly OrdinalInsensitiveDictionary<TemplateResource> resourceLookup;
             private readonly OrdinalInsensitiveDictionary<string> symbolicResourceIds;
             private readonly EvaluationConfiguration config;
+            private readonly PendingResourceBodies? bodies;
 
-            private TemplateEvaluationContext(IEvaluationContext context, ExpressionScope scope, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config)
+            private TemplateEvaluationContext(IEvaluationContext context, ExpressionScope scope, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config, PendingResourceBodies? bodies)
             {
                 this.context = context;
                 this.Scope = scope;
                 this.resourceLookup = resourceLookup;
                 this.symbolicResourceIds = symbolicResourceIds;
                 this.config = config;
+                this.bodies = bodies;
             }
 
             /// <summary>
@@ -62,7 +73,7 @@ namespace Bicep.Core.Utils
             /// about to be evaluated. It is what copyIndex() reads, so an expression belonging to a
             /// copy-expanded resource must be evaluated in a context built for that resource.
             /// </summary>
-            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config, TemplateCopyContext? copyContext = null)
+            public static TemplateEvaluationContext Create(Template template, OrdinalInsensitiveDictionary<TemplateResource> resourceLookup, OrdinalInsensitiveDictionary<string> symbolicResourceIds, EvaluationConfiguration config, TemplateCopyContext? copyContext = null, PendingResourceBodies? bodies = null)
             {
                 var context = TemplateEngine.GetExpressionEvaluationContext(
                     config.ManagementGroup,
@@ -73,7 +84,7 @@ namespace Bicep.Core.Utils
                     copyContext: copyContext,
                     onGetExtension: static (_, _) => null);
 
-                return new TemplateEvaluationContext(context, context.Scope, resourceLookup, symbolicResourceIds, config);
+                return new TemplateEvaluationContext(context, context.Scope, resourceLookup, symbolicResourceIds, config, bodies);
             }
 
             public bool IsShortCircuitAllowed => this.context.IsShortCircuitAllowed;
@@ -143,6 +154,25 @@ namespace Bicep.Core.Utils
                         return this.config.OnReferenceFunc(resourceId, apiVersion, fullBody);
                     }
 
+                    // Evaluating resources one at a time, a resource this template deploys answers with
+                    // the properties it declares, once they are computed. One that is not computed cannot
+                    // answer, and saying so fails only the read rather than handing over a placeholder.
+                    // Existing resources and module deployments answer as they always have.
+                    if (this.bodies is not null &&
+                        ResolveRequestTarget(resourceId).Resource is { } deployed &&
+                        deployed.Existing?.Value != true &&
+                        !deployed.Type.Value.EqualsOrdinalInsensitively(DeploymentResourceType))
+                    {
+                        if (this.bodies.Pending.TryGetValue(deployed, out var failure))
+                        {
+                            throw new Azure.Deployments.Core.Exceptions.ExpressionException(failure is null
+                                ? $"The properties of '{deployed.SymbolicName}' have not been computed yet."
+                                : $"The properties of '{deployed.SymbolicName}' could not be computed offline: {failure.Message}");
+                        }
+
+                        return fullBody ? deployed.ToJToken() : deployed.Properties?.Value ?? new JObject();
+                    }
+
                     if (this.resourceLookup.TryGetValue(resourceId, out var foundResource) &&
                         (apiVersion is null || StringComparer.OrdinalIgnoreCase.Equals(apiVersion, foundResource.ApiVersion.Value)))
                     {
@@ -179,7 +209,7 @@ namespace Bicep.Core.Utils
                     : (reference, null, null);
             }
 
-            public IEvaluationContext WithNewScope(ExpressionScope scope) => new TemplateEvaluationContext(this.context, scope, this.resourceLookup, this.symbolicResourceIds, this.config);
+            public IEvaluationContext WithNewScope(ExpressionScope scope) => new TemplateEvaluationContext(this.context, scope, this.resourceLookup, this.symbolicResourceIds, this.config, this.bodies);
         }
 
         private static readonly string DummyTenantId = Guid.Empty.ToString();
@@ -328,66 +358,43 @@ namespace Bicep.Core.Utils
                 }
             }
 
-            var evaluationContext = TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config);
+            // Resources evaluated one at a time track which are still unknown, so that reading one of those
+            // fails the reader instead of handing it a placeholder.
+            var bodies = config.OnUnresolvedResourcePropertiesFunc is not null && !config.TolerateUnresolvedValues ? new PendingResourceBodies() : null;
+            var evaluationContext = TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config, bodies: bodies);
 
-            for (int i = 0; i < template.Resources.Length; i++)
+            // The copy has already been expanded into one resource per iteration, but the expressions
+            // inside each one still say copyIndex(). Only a context built for this resource knows which
+            // iteration it is, so a looped resource is evaluated in its own.
+            IEvaluationContext ContextFor(TemplateResource resource) => resource.CopyContext is null
+                ? evaluationContext
+                : TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config, resource.CopyContext, bodies);
+
+            if (bodies is not null && config.OnUnresolvedResourcePropertiesFunc is { } onUnresolved)
             {
-                var resource = template.Resources[i];
-
-                if (resource.Properties is not null)
+                EvaluateResourcesIndividually(template, bodies, ContextFor, onUnresolved);
+            }
+            else
+            {
+                foreach (var resource in template.Resources)
                 {
-                    var skipEvaluationPaths = new InsensitiveHashSet();
-                    if (resource.Type.Value.EqualsOrdinalInsensitively("Microsoft.Resources/deployments"))
+                    if (resource.Properties is null)
                     {
-                        skipEvaluationPaths.Add("template");
+                        continue;
                     }
-                    ;
-
-                    // The copy has already been expanded into one resource per iteration, but the
-                    // expressions inside each one still say copyIndex(). Only a context built for this
-                    // resource knows which iteration it is, so a looped resource is evaluated in its own.
-                    var resourceContext = resource.CopyContext is null
-                        ? evaluationContext
-                        : TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config, resource.CopyContext);
 
                     // A value a resource needs may come from a deployment this pass has not evaluated yet.
                     // A caller resolving that chain asks for tolerance and repeats; a caller that expects
-                    // every value to be available gets the failure, either for the whole template or,
-                    // when it asks to be told, for this resource alone.
-                    if (config.TolerateUnresolvedValues)
-                    {
-                        resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                    // every value to be available gets the failure.
+                    resource.Properties.Value = config.TolerateUnresolvedValues
+                        ? ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
                             root: resource.Properties.Value,
-                            evaluationContext: resourceContext,
-                            skipEvaluationPaths: skipEvaluationPaths);
-                    }
-                    else if (config.OnUnresolvedResourcePropertiesFunc is { } onUnresolved && resource.SymbolicName is { } symbolicName)
-                    {
-                        var unevaluated = resource.Properties.Value.DeepClone();
-
-                        try
-                        {
-                            resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
-                                root: resource.Properties.Value,
-                                evaluationContext: resourceContext,
-                                skipEvaluationPaths: skipEvaluationPaths);
-                        }
-                        catch (Exception exception)
-                        {
-                            onUnresolved(symbolicName, exception);
-                            resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
-                                root: unevaluated,
-                                evaluationContext: resourceContext,
-                                skipEvaluationPaths: skipEvaluationPaths);
-                        }
-                    }
-                    else
-                    {
-                        resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                            evaluationContext: ContextFor(resource),
+                            skipEvaluationPaths: SkipEvaluationPaths(resource))
+                        : ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
                             root: resource.Properties.Value,
-                            evaluationContext: resourceContext,
-                            skipEvaluationPaths: skipEvaluationPaths);
-                    }
+                            evaluationContext: ContextFor(resource),
+                            skipEvaluationPaths: SkipEvaluationPaths(resource));
                 }
             }
 
@@ -406,6 +413,95 @@ namespace Bicep.Core.Utils
                             root: template.Outputs[outputKey].Value.Value,
                             evaluationContext: evaluationContext);
                 }
+            }
+        }
+
+        private const string DeploymentResourceType = "Microsoft.Resources/deployments";
+
+        /// <summary>
+        /// A module's nested template is evaluated as its own deployment, not as part of the caller.
+        /// </summary>
+        private static InsensitiveHashSet SkipEvaluationPaths(TemplateResource resource)
+        {
+            var skipEvaluationPaths = new InsensitiveHashSet();
+
+            if (resource.Type.Value.EqualsOrdinalInsensitively(DeploymentResourceType))
+            {
+                skipEvaluationPaths.Add("template");
+            }
+
+            return skipEvaluationPaths;
+        }
+
+        /// <summary>
+        /// Evaluates each resource's properties on their own, so that one value only Azure knows fails
+        /// that resource rather than the template. A resource may read another declared after it, so
+        /// resources are retried from their original declarations until a round resolves nothing more.
+        /// Whatever is left is reported and keeps its unevaluated declaration, which nothing can read.
+        /// </summary>
+        private static void EvaluateResourcesIndividually(
+            Template template,
+            PendingResourceBodies bodies,
+            Func<TemplateResource, IEvaluationContext> contextFor,
+            OnUnresolvedResourcePropertiesDelegate onUnresolved)
+        {
+            var declared = new Dictionary<TemplateResource, JToken>(ReferenceEqualityComparer.Instance);
+
+            foreach (var resource in template.Resources)
+            {
+                if (resource.Properties is not null)
+                {
+                    declared[resource] = resource.Properties.Value.DeepClone();
+                    bodies.Pending[resource] = null;
+                }
+            }
+
+            for (var round = 0; bodies.Pending.Count > 0; round++)
+            {
+                var resolvedAny = false;
+
+                foreach (var resource in template.Resources)
+                {
+                    if (!bodies.Pending.ContainsKey(resource))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                            root: declared[resource].DeepClone(),
+                            evaluationContext: contextFor(resource),
+                            skipEvaluationPaths: SkipEvaluationPaths(resource));
+
+                        bodies.Pending.Remove(resource);
+                        resolvedAny = true;
+                    }
+                    catch (Exception exception)
+                    {
+                        bodies.Pending[resource] = exception;
+                    }
+                }
+
+                // The first round can fail a resource only because what it reads comes later, so the
+                // second always runs: it either resolves it or records the reason that is real.
+                if (!resolvedAny && round > 0)
+                {
+                    break;
+                }
+            }
+
+            foreach (var (resource, failure) in bodies.Pending)
+            {
+                var exception = failure ?? throw new UnreachableException();
+
+                if (resource.SymbolicName is not { } symbolicName)
+                {
+                    throw exception;
+                }
+
+                onUnresolved(symbolicName, exception);
+                resource.Properties.Value = declared[resource];
             }
         }
 

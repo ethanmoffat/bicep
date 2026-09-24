@@ -56,5 +56,17 @@ test fleetShape 'fleet.bicep' = {
       passWhen: endsWith(target.evaluated.outputs.primarySiteName, '-primary-site')
       message: 'The primary stamp must expose the primary site name.'
     }
+
+    // What each instance declares is computed too: here, where each iteration deploys.
+    eachAccountDeploysToItsRegion: {
+      passWhen: map(filter(target.evaluated.resources, r => r.symbolicName == 'dataAccounts'), r => r.location) == regions
+      message: 'Each data account must be deployed to the region it was created for.'
+    }
+
+    // Including inside a module, and including a value computed from another declaration.
+    eachSiteRunsOnItsOwnPlan: {
+      failOn: filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Web/sites' && !endsWith(r.properties.serverFarmId, '/${replace(r.name, '-site', '-plan')}'))
+      message: 'Each site must run on the plan of its own stamp.'
+    }
   }
 }

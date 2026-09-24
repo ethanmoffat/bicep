@@ -60,11 +60,11 @@ public static class TestTargetFactsSerializer
     /// never read, and a policy about the selected file alone is never failed by a module it never
     /// mentioned.
     /// </summary>
-    public static JObject SerializeEvaluated(TestEvaluatedFactsProvider evaluated, bool includeOutputs, bool includeWithModules)
+    public static JObject SerializeEvaluated(TestEvaluatedFactsProvider evaluated, bool includeOutputs, bool includeWithModules, bool includeBodies)
     {
         var result = new JObject
         {
-            [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local),
+            [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local, includeBodies),
         };
 
         if (includeOutputs)
@@ -76,20 +76,44 @@ public static class TestTargetFactsSerializer
         {
             result[TestTargetType.WithModulesPropertyName] = new JObject
             {
-                [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.WithModules),
+                [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.WithModules, includeBodies),
             };
         }
 
         return result;
     }
 
-    private static JArray SerializeEvaluatedResources(IEnumerable<TestEvaluatedResource> resources) => new(resources.Select(resource => new JObject
+    /// <summary>
+    /// Bodies are rendered only for an assertion that reads one. The facts reach ARM as a single value,
+    /// so a body that could not be computed cannot be left for the assertion to trip over only if it
+    /// happens to look: it fails the read here, naming the instance, rather than letting an assertion
+    /// compare against a value no deployment would produce.
+    /// </summary>
+    private static JArray SerializeEvaluatedResources(IEnumerable<TestEvaluatedResource> resources, bool includeBodies) => new(resources.Select(resource =>
     {
-        [TestTargetType.NamePropertyName] = resource.Name,
-        [TestTargetType.TypePropertyName] = resource.Type,
-        [TestTargetType.SymbolicNamePropertyName] = resource.SymbolicName,
-        [TestTargetType.InstanceIdPropertyName] = resource.InstanceId,
-        [TestTargetType.FilePropertyName] = resource.File,
-        [TestTargetType.LinePropertyName] = resource.Line,
+        var fact = new JObject
+        {
+            [TestTargetType.NamePropertyName] = resource.Name,
+            [TestTargetType.TypePropertyName] = resource.Type,
+            [TestTargetType.SymbolicNamePropertyName] = resource.SymbolicName,
+            [TestTargetType.InstanceIdPropertyName] = resource.InstanceId,
+            [TestTargetType.FilePropertyName] = resource.File,
+            [TestTargetType.LinePropertyName] = resource.Line,
+        };
+
+        if (includeBodies)
+        {
+            if (resource.UnresolvedReason is { } reason)
+            {
+                throw new InvalidOperationException($"The properties of '{resource.InstanceId}' ({resource.File}({resource.Line})) could not be evaluated for this case: {reason}");
+            }
+
+            foreach (var body in resource.Body.Properties())
+            {
+                fact[body.Name] = body.Value.DeepClone();
+            }
+        }
+
+        return fact;
     }).ToArray<object>());
 }

@@ -8,6 +8,8 @@ using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
 using Bicep.Core.Syntax.Visitors;
 using Bicep.Core.TestFramework;
+using Bicep.Core.TypeSystem;
+using Bicep.Core.TypeSystem.Types;
 using Bicep.Core.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -145,7 +147,8 @@ public class TestAssertionEvaluator
             target[TestTargetType.EvaluatedPropertyName] = TestTargetFactsSerializer.SerializeEvaluated(
                 evaluated,
                 includeOutputs: References(syntax, TestTargetType.OutputsPropertyName),
-                includeWithModules: References(syntax, TestTargetType.WithModulesPropertyName));
+                includeWithModules: References(syntax, TestTargetType.WithModulesPropertyName),
+                includeBodies: ReadsEvaluatedBody(context, syntax));
         }
 
         var seed = new JObject
@@ -165,6 +168,29 @@ public class TestAssertionEvaluator
         function: (found, node) => found || (node is PropertyAccessSyntax access && access.PropertyName.IdentifierName == propertyName),
         resultSelector: result => result,
         continuationFunction: (found, _) => !found);
+
+    /// <summary>
+    /// Whether the expression reads a body key of an evaluated instance. The type decides, not the key
+    /// alone, so an output that happens to be called <c>location</c> does not count; a value whose type
+    /// is not known is assumed to be one, since rendering a body that is not read costs nothing but
+    /// omitting one that is would fail the read.
+    /// </summary>
+    private static bool ReadsEvaluatedBody(EmitterContext context, SyntaxBase syntax) => SyntaxAggregator.Aggregate(
+        syntax,
+        seed: false,
+        function: (found, node) => found || node switch
+        {
+            PropertyAccessSyntax access => TestTargetType.EvaluatedBodyPropertyNames.Contains(access.PropertyName.IdentifierName) &&
+                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)),
+            ArrayAccessSyntax { IndexExpression: StringSyntax index } access => index.TryGetLiteralValue() is { } key &&
+                TestTargetType.EvaluatedBodyPropertyNames.Contains(key) &&
+                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)),
+            _ => false,
+        },
+        resultSelector: result => result,
+        continuationFunction: (found, _) => !found);
+
+    private static bool IsEvaluatedResourceOrUnknown(TypeSymbol type) => type is AnyType || TestTargetType.IsEvaluatedResourceFact(type);
 
     /// <summary>
     /// Renders one offending fact as a source location. Facts carry their declaring file and line, so a

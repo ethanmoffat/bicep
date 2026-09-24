@@ -3130,6 +3130,210 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_ExposesWhatEachResourceDeclaresForTheCase()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-bodies");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "modules/diagnostics.bicep", """
+                param retentionDays int
+
+                resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+                  name: 'logs'
+                  location: 'eastus'
+                  properties: {
+                    retentionInDays: retentionDays
+                  }
+                }
+                """, outputFileDir);
+
+            // The first account reads the second, which is declared after it.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param env string
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+                  name: 'id-${env}'
+                  location: toLower('EastUS')
+                  tags: {
+                    env: env
+                  }
+                }
+
+                resource primary 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'primary${env}'
+                  location: 'eastus'
+                  tags: {
+                    costCenter: 'cc-${env}-4821'
+                  }
+                  kind: 'StorageV2'
+                  sku: {
+                    name: env == 'prod' ? 'Standard_GZRS' : 'Standard_LRS'
+                  }
+                  identity: {
+                    type: 'UserAssigned'
+                    userAssignedIdentities: {
+                      '${identity.id}': {}
+                    }
+                  }
+                  properties: {
+                    allowBlobPublicAccess: env != 'prod'
+                    minimumTlsVersion: secondary.properties.minimumTlsVersion
+                  }
+                }
+
+                resource secondary 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'secondary${env}'
+                  location: 'eastus'
+                  kind: 'StorageV2'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  properties: {
+                    minimumTlsVersion: toUpper('tls1_2')
+                  }
+                }
+
+                module diagnostics 'modules/diagnostics.bicep' = {
+                  name: 'diagnostics'
+                  params: {
+                    retentionDays: env == 'prod' ? 90 : 30
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test prod 'main.bicep' = {
+                  params: {
+                    env: 'prod'
+                  }
+                  assertions: {
+                    zoneRedundant: {
+                      passWhen: filter(target.evaluated.resources, r => r.symbolicName == 'primary')[0].sku.name == 'Standard_GZRS'
+                      message: 'Production storage must be zone redundant.'
+                    }
+                    everyPartIsEvaluated: {
+                      passWhen: length(filter(target.evaluated.resources, r => r.symbolicName == 'identity' && r.location == 'eastus' && r.tags.env == 'prod' && r.properties == null)) == 1
+                      message: 'The body is what the case computes.'
+                    }
+                    readsItsNeighbourDeclaredLater: {
+                      passWhen: filter(target.evaluated.resources, r => r.symbolicName == 'primary')[0].properties.minimumTlsVersion == 'TLS1_2'
+                      message: 'A value read from another declared resource is that resource value.'
+                    }
+                    grantsItsOwnIdentity: {
+                      passWhen: objectKeys(filter(target.evaluated.resources, r => r.symbolicName == 'primary')[0].identity.userAssignedIdentities)[0] == '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prod'
+                      message: 'The identity key is the evaluated resource ID.'
+                    }
+                    keepsLogsLonger: {
+                      passWhen: filter(target.evaluated.withModules.resources, r => r.symbolicName == 'workspace')[0].properties.retentionInDays == 90
+                      message: 'A module resource is evaluated with the arguments this case passes.'
+                    }
+                  }
+                }
+
+                test dev 'main.bicep' = {
+                  params: {
+                    env: 'dev'
+                  }
+                  assertions: {
+                    noPublicBlobs: {
+                      failOn: filter(target.evaluated.resources, r => r.type == 'Microsoft.Storage/storageAccounts' && (r.properties.?allowBlobPublicAccess ?? false))
+                      message: 'Blob containers must not be public.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation prod (main.bicep) Passed!");
+                error.Should().Contain("Assertion noPublicBlobs failed!");
+                error.Should().Contain("main.bicep(11): primarydev");
+                error.Should().NotContain("cc-dev-4821");
+            }
+
+            var resultsPath = Path.Combine(outputFileDir, "results.json");
+            (_, _, result) = await Bicep(settings, "test", "--output-format", "json", "--results-file", resultsPath, testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                var document = File.ReadAllText(resultsPath);
+                document.Should().Contain("main.bicep(11): primarydev");
+                document.Should().NotContain("cc-dev-4821");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_ReadingABodyOnlyAzureCanComputeFailsNamingIt()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-unresolved-bodies");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The first assignment copies what the second one grants, so it cannot be known either. It is
+            // declared first, so it is evaluated before what it reads.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+                  name: 'workload'
+                  location: 'eastus'
+                }
+
+                resource mirrored 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('mirrored')
+                  properties: {
+                    principalId: assignment.properties.principalId
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                resource assignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('workload')
+                  properties: {
+                    principalId: identity.properties.principalId
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                output location string = 'westus'
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test bodies 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    readsABody: {
+                      passWhen: length(filter(target.evaluated.resources, r => r.location == 'eastus')) == 1
+                      message: 'Reading bodies needs every body in scope.'
+                    }
+                    readsAnOutputCalledLocation: {
+                      passWhen: target.evaluated.outputs.location == 'westus' && length(target.evaluated.resources) == 3
+                      message: 'An output that shares a body key name is not a body.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (_, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            // The copy is named with the reason that is real: what it copies could not be computed, not
+            // merely that it had not been computed yet when the copy was first attempted.
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("Assertion readsABody failed!");
+                error.Should().Contain("The properties of 'mirrored' (main.bicep(6)) could not be evaluated for this case:");
+                error.Should().Contain("The properties of 'assignment' could not be computed offline:");
+                error.Should().Contain("The language expression property 'principalId' doesn't exist");
+                error.Should().NotContain("have not been computed yet");
+                error.Should().NotContain("Assertion readsAnOutputCalledLocation failed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Evaluated_InstancesAreNotFailedByValuesOnlyAzureAssigns()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
