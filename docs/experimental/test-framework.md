@@ -285,7 +285,11 @@ The two forms answer different questions. `passWhen` states a property the targe
 failure actionable rather than merely true.
 
 A test declaring a non-empty `assertions` object runs **those** assertions only; the target's own
-`assert` statements are not evaluated and its parameters are not required. Omitting `assertions`
+`assert` statements are not evaluated. Its parameters are not required either, unless an assertion
+reads `target.evaluated`: source facts describe what the file declares, which needs no values, so a
+literal target may omit `params` or supply only some of them, exactly as a `match` selector may. A
+test that reads `target.evaluated`, or that has no assertions of its own, still has to supply every
+parameter the target requires. Omitting `assertions`
 preserves the target-owned behaviour above. An `assertions` object that is present but empty is an
 error, because it neither asserts anything nor falls back to anything.
 

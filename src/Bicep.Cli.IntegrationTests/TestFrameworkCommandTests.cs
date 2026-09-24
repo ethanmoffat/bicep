@@ -2959,6 +2959,57 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_LiteralTarget_RunsSourceOnlyAssertionsWithoutParameterValues()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "literal-source-only");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string
+                param location string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: name
+                  location: location
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test noValues 'main.bicep' = {
+                  assertions: {
+                    declaresOneAccount: {
+                      passWhen: length(target.resources) == 1
+                      message: 'main.bicep declares one storage account.'
+                    }
+                  }
+                }
+
+                test someValues 'main.bicep' = {
+                  params: { name: 'contoso' }
+                  assertions: {
+                    asksForBoth: {
+                      passWhen: map(filter(target.parameters, p => p.required), p => p.name) == ['name', 'location']
+                      message: 'main.bicep asks its caller for a name and a location.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("BCP035");
+                error.Should().NotContain("Failed");
+                result.Should().Be(0);
+                output.Should().Contain("Evaluation noValues (main.bicep) Passed!");
+                output.Should().Contain("Evaluation someValues (main.bicep) Passed!");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_WaitsFor_ReportsDeploymentOrderWithoutEvaluating()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

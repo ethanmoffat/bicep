@@ -2298,18 +2298,44 @@ namespace Bicep.Core.TypeSystem
             }
 
             var parameters = new List<NamedTypeProperty>();
+            var valuesAreNeeded = MayEvaluateTheTarget(test);
 
             foreach (var parameter in testSemanticModel.Parameters.Values)
             {
                 var type = parameter.TypeReference.Type;
 
-                var flags = parameter.IsRequired ? TypePropertyFlags.Required | TypePropertyFlags.WriteOnly : TypePropertyFlags.WriteOnly;
+                var flags = parameter.IsRequired && valuesAreNeeded ? TypePropertyFlags.Required | TypePropertyFlags.WriteOnly : TypePropertyFlags.WriteOnly;
                 parameters.Add(new NamedTypeProperty(parameter.Name, type, flags, parameter.Description));
             }
 
             return CreateTestType(
                 parameters,
                 LanguageConstants.TypeNameTest);
+        }
+
+        /// <summary>
+        /// Whether running the test may evaluate the target, and so need a value for every parameter it
+        /// requires. A test without its own assertions runs the target's <c>assert</c> statements, which
+        /// always evaluates. A test with its own assertions evaluates only if one reads
+        /// <c>target.evaluated</c>; otherwise it reads what the source declares, which needs no values,
+        /// the same as a test that selects its targets with <c>match</c>. Any access that might reach
+        /// <c>evaluated</c>, such as an index computed at run time, counts as reading it.
+        /// </summary>
+        private static bool MayEvaluateTheTarget(TestDeclarationSyntax test)
+        {
+            if (test.TryGetAssertionsSyntax() is not { } assertions || !assertions.Properties.Any())
+            {
+                return true;
+            }
+
+            return SyntaxAggregator.Aggregate(assertions, node => node switch
+            {
+                PropertyAccessSyntax access => string.Equals(access.PropertyName.IdentifierName, TestTargetType.EvaluatedPropertyName, StringComparison.OrdinalIgnoreCase),
+                ArrayAccessSyntax { IndexExpression: IntegerLiteralSyntax } => false,
+                ArrayAccessSyntax { IndexExpression: StringSyntax key } => key.TryGetLiteralValue() is not { } name || string.Equals(name, TestTargetType.EvaluatedPropertyName, StringComparison.OrdinalIgnoreCase),
+                ArrayAccessSyntax => true,
+                _ => false,
+            }).Any();
         }
 
         /// <summary>

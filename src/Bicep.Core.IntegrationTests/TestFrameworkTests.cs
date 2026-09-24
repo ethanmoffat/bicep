@@ -1016,6 +1016,70 @@ param name string = 'us'
                 ("BCP461", DiagnosticLevel.Error, "A \".biceptest\" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead."),
             });
         }
+
+        [TestMethod]
+        public void A_literal_target_needs_parameter_values_only_when_the_test_evaluates_it()
+        {
+            // Source facts need no values, so a test that only reads them may omit params, or supply
+            // some of them, just as a match selector may. Anything that evaluates still needs them all.
+            var fileSet = new MockFileSystemTestFileSet();
+            fileSet.AddFile("sample.biceptest", @"
+test sourceOnly 'target.bicep' = {
+  assertions: {
+    one: { passWhen: length(target.resources) == 1, message: 'one' }
+  }
+}
+
+test someValues 'target.bicep' = {
+  params: { name: 'abc' }
+  assertions: {
+    storage: { passWhen: target.resources[0].type == 'Microsoft.Storage/storageAccounts', message: 'one' }
+  }
+}
+
+test readsEvaluated 'target.bicep' = {
+  assertions: {
+    one: { passWhen: length(target.evaluated.resources) == 1, message: 'one' }
+  }
+}
+
+test readsEvaluatedWithSomeValues 'target.bicep' = {
+  params: { name: 'abc' }
+  assertions: {
+    one: { passWhen: length(target.evaluated.resources) == 1, message: 'one' }
+  }
+}
+
+test mightReadEvaluated 'target.bicep' = {
+  assertions: {
+    one: { passWhen: length(target[toLower('EVALUATED')].resources) == 1, message: 'one' }
+  }
+}
+
+test runsTheTargetsAssertions 'target.bicep' = {}
+");
+            fileSet.AddFile("target.bicep", @"
+param name string
+param location string
+param tier string = 'Standard_LRS'
+
+resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+  name: name
+  location: location
+  sku: { name: tier }
+  kind: 'StorageV2'
+}
+");
+
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, fileSet, fileSet.GetUri("sample.biceptest"));
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP035", DiagnosticLevel.Error, "The specified \"test\" declaration is missing the following required properties: \"params\"."),
+                ("BCP035", DiagnosticLevel.Error, "The specified \"object\" declaration is missing the following required properties: \"location\"."),
+                ("BCP035", DiagnosticLevel.Error, "The specified \"test\" declaration is missing the following required properties: \"params\"."),
+                ("BCP035", DiagnosticLevel.Error, "The specified \"test\" declaration is missing the following required properties: \"params\"."),
+            });
+        }
     }
 
 }
