@@ -954,6 +954,8 @@ Each instance carries:
 | `symbolicName` | The symbolic name of the declaration this instance came from |
 | `instanceId` | Distinguishes instances of the same declaration, including module call and loop indices |
 | `file`, `line` | The declaration that produced the instance |
+| `id` | The resource ID Azure would address the instance by (see "Where each instance deploys" below) |
+| `subscriptionId`, `resourceGroup` | The subscription and resource group the instance deploys into. Empty where there is none |
 | `properties`, `location`, `sku`, `kind`, `identity`, `tags`, `zones` | What the declaration sets, computed for this case. Null where the declaration sets nothing |
 
 ### What each instance declares
@@ -995,6 +997,64 @@ Could not be evaluated: The properties of 'assignment' (main.bicep(6)) could not
 Every instance is in one value handed to the assertion, so there is no way to leave just the one body
 out and still be sure no assertion read it. Mock the runtime read to supply the value. Instances,
 names and outputs that do not read that body are unaffected.
+
+### Where each instance deploys
+
+`id`, `subscriptionId` and `resourceGroup` say where an instance lands, worked out the way Azure
+would:
+
+- the case's `deploymentContext` for the selected file;
+- a module's own `scope`, which every resource inside it, and inside modules it calls, inherits;
+- a declaration's own `scope: resourceGroup(...)`;
+- for an extension resource such as a role assignment, the resource it is scoped to. Its `id` sits
+  beneath that resource's, and it deploys into that resource's subscription and resource group.
+
+A resource group's `id` is `/subscriptions/<id>/resourceGroups/<name>`, as Azure addresses it, and
+its own `resourceGroup` is empty: it deploys into a subscription, not into itself. At tenant or
+management group scope `subscriptionId` is empty too. A context value the input file does not state
+is the evaluator's placeholder (`00000000-0000-0000-0000-000000000000`, `DummyResourceGroup`), the
+same one `subscription()` and `resourceGroup()` return, so state it if an assertion compares it.
+
+These are the evaluated counterpart of a module's `scope:` argument: rather than asserting what a
+module call was handed, an assertion checks where its resources actually end up.
+`deployment-location.biceptest` checks that everything its cross-subscription module deploys lands
+in the audit subscription:
+
+[`deployment-location/reader.bicep`](./examples/test-framework/deployment-location/reader.bicep)
+
+```bicep
+targetScope = 'subscription'
+
+param tag string
+
+resource auditGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: 'rg-${tag}'
+  location: 'westus2'
+}
+
+output stamp string = tag
+```
+
+```bicep
+auditResourcesLandInTheAuditSubscription: {
+  failOn: filter(target.evaluated.withModules.resources, r => r.subscriptionId != '00000000-0000-0000-0000-000000000002')
+  message: 'Everything the audit reader deploys must land in the audit subscription.'
+}
+```
+
+Scoping the module to the caller's subscription instead (`scope: subscription()`) fails it, naming
+the instance:
+
+```console
+	[✗] Assertion auditResourcesLandInTheAuditSubscription failed!
+		Everything the audit reader deploys must land in the audit subscription.
+		deployment-location/reader.bicep(5): rg-audit
+```
+
+Unlike bodies, these are always available: they need nothing beyond the name and the scope, which
+Bicep requires to be computable before anything deploys. Like every evaluated value they are never
+written to a report. An `existing` resource is not reported at all, because nothing deploys it; a
+mock keyed by its real resource ID is what checks where it is read from.
 
 ### Source facts and evaluated instances are different questions
 
@@ -1982,9 +2042,12 @@ need an `--inputs` file are not given one here, so they error — which is what 
 $ bicep test "*.biceptest" --output-detail all
 [✗] Evaluation context.biceptest: regionPolicy (context.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion locationIsApproved failed!
-[✗] Evaluation deployment-location.biceptest: crossSubscription (deployment-location.bicep) Failed at 1 / 1 assertions!
+[✗] Evaluation deployment-location.biceptest: crossSubscription (deployment-location.bicep) Failed at 2 / 2 assertions!
 	[✗] Assertion moduleInAnotherSubscriptionRuns failed!
 		A module deployed to another subscription should be evaluated.
+		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
+	[✗] Assertion auditResourcesLandInTheAuditSubscription failed!
+		Everything the audit reader deploys must land in the audit subscription.
 		Could not be evaluated: deployment() was evaluated but no deployment name was supplied. Set 'deploymentName' in the input file's deploymentContext, or override it for this case with @deploymentName().
 [✗] Evaluation deployment-name.biceptest: deploymentNames (deployment-name.bicep) Failed at 2 / 2 assertions!
 	[✗] Assertion rootUsesTheSuppliedName failed!
@@ -2054,7 +2117,7 @@ Reason: The input "namePrefix" has no value. Supply it from a test case or give 
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
-Failed! - Failed: 9, Errored: 5, Passed: 8, Total: 22, Duration: 718ms
+Failed! - Failed: 9, Errored: 5, Passed: 8, Total: 22, Duration: 830ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest

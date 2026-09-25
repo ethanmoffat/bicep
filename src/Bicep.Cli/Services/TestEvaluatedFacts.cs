@@ -23,6 +23,13 @@ namespace Bicep.Cli.Services;
 /// Why this instance's properties could not be computed offline, or null if they were. The instance
 /// itself still exists; only reading its body fails.
 /// </param>
+/// <param name="Id">
+/// The resource ID Azure would address the instance by, built from the scope it deploys to: the case's
+/// deployment context, a module's own scope, a declaration's own subscription or resource group, or
+/// the resource an extension resource is scoped to.
+/// </param>
+/// <param name="SubscriptionId">The subscription the instance lives in, or empty at tenant or management group scope.</param>
+/// <param name="ResourceGroup">The resource group the instance lives in, or empty if it is not deployed into one.</param>
 public record TestEvaluatedResource(
     string Name,
     string Type,
@@ -31,4 +38,7 @@ public record TestEvaluatedResource(
     string File,
     int Line,
     JObject Body,
-    string? UnresolvedReason);
+    string? UnresolvedReason,
+    string Id,
+    string SubscriptionId,
+    string ResourceGroup);

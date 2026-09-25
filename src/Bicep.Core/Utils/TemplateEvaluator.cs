@@ -336,16 +336,65 @@ namespace Bicep.Core.Utils
                 : deploymentScopeString;
         }
 
+        private static string GetDeploymentScopeString(TemplateDeploymentScope deploymentScope, EvaluationConfiguration config) => deploymentScope switch
+        {
+            TemplateDeploymentScope.Tenant => "/",
+            TemplateDeploymentScope.ManagementGroup => $"/providers/Microsoft.Management/managementGroups/{config.ManagementGroup}/",
+            TemplateDeploymentScope.Subscription => $"/subscriptions/{config.SubscriptionId}/",
+            TemplateDeploymentScope.ResourceGroup => $"/subscriptions/{config.SubscriptionId}/resourceGroups/{config.ResourceGroup}/",
+            _ => throw new InvalidOperationException(),
+        };
+
+        /// <summary>
+        /// The ARM resource ID of one resource from an evaluated template, as Azure would address it once
+        /// deployed. Unlike the lookup used to answer <c>reference()</c>, this honours an extension
+        /// resource's <c>scope</c>, so a role assignment is addressed beneath what it is assigned on, and
+        /// addresses a resource group the way Azure does rather than as a provider resource.
+        /// </summary>
+        public static string GetEvaluatedResourceId(JToken template, JObject resource, EvaluationConfiguration config)
+        {
+            var deploymentScope = GetDeploymentScope(template["$schema"]?.Value<string>() ?? string.Empty);
+            var deploymentScopeString = GetDeploymentScopeString(deploymentScope, config);
+            var declaredSubscriptionId = resource["subscriptionId"]?.Value<string>();
+            var declaredResourceGroup = resource["resourceGroup"]?.Value<string>();
+            var type = resource["type"]?.Value<string>() ?? string.Empty;
+            var name = resource["name"]?.Value<string>() ?? string.Empty;
+
+            string scopeString;
+
+            if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
+            {
+                // A relative scope names a resource in the deployment's own scope.
+                scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
+                scopeString = scopeString.EndsWith('/') ? scopeString : scopeString + "/";
+            }
+            else if (declaredResourceGroup is { Length: > 0 })
+            {
+                scopeString = $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : config.SubscriptionId)}/resourceGroups/{declaredResourceGroup}/";
+            }
+            else
+            {
+                scopeString = declaredSubscriptionId is { Length: > 0 } ? $"/subscriptions/{declaredSubscriptionId}/" : deploymentScopeString;
+            }
+
+            if (string.Equals(type, "Microsoft.Resources/resourceGroups", StringComparison.OrdinalIgnoreCase) &&
+                scopeString.StartsWith("/subscriptions/", StringComparison.OrdinalIgnoreCase) &&
+                scopeString.Count(c => c == '/') == 3)
+            {
+                return $"{scopeString}resourceGroups/{name}";
+            }
+
+            var typeSegments = type.Split('/');
+            var nameSegments = name.Split('/');
+            var types = new[] { typeSegments.First() }
+                .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
+
+            return $"{scopeString}providers/{string.Join('/', types)}";
+        }
+
         private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope)
         {
-            var scopeString = deploymentScope switch
-            {
-                TemplateDeploymentScope.Tenant => "/",
-                TemplateDeploymentScope.ManagementGroup => $"/providers/Microsoft.Management/managementGroups/{config.ManagementGroup}/",
-                TemplateDeploymentScope.Subscription => $"/subscriptions/{config.SubscriptionId}/",
-                TemplateDeploymentScope.ResourceGroup => $"/subscriptions/{config.SubscriptionId}/resourceGroups/{config.ResourceGroup}/",
-                _ => throw new InvalidOperationException(),
-            };
+            var scopeString = GetDeploymentScopeString(deploymentScope, config);
 
             var resourceLookup = template.Resources.ToOrdinalInsensitiveDictionary(x => GetResourceId(scopeString, config.SubscriptionId, x));
             var symbolicResourceIds = new OrdinalInsensitiveDictionary<string>();

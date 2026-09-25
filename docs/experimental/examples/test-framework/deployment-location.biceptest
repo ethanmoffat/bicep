@@ -7,5 +7,9 @@ test crossSubscription 'deployment-location.bicep' = {
       passWhen: target.evaluated.outputs.stamp == 'audit'
       message: 'A module deployed to another subscription should be evaluated.'
     }
+    auditResourcesLandInTheAuditSubscription: {
+      failOn: filter(target.evaluated.withModules.resources, r => r.subscriptionId != '00000000-0000-0000-0000-000000000002')
+      message: 'Everything the audit reader deploys must land in the audit subscription.'
+    }
   }
 }

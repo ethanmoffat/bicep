@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using Azure.Deployments.Expression.Engines;
 using Bicep.Core.Semantics;
 using Bicep.Core.TestFramework;
@@ -18,7 +19,7 @@ namespace Bicep.Cli.Services;
 /// causes an evaluation, and a policy that asks only about the selected file is never held up - or
 /// failed - by a module it did not ask about.
 /// </summary>
-public sealed class TestEvaluatedFactsProvider(
+public sealed partial class TestEvaluatedFactsProvider(
     SemanticModel targetModel,
     Func<JObject?> parameters,
     TestDeploymentContext? deploymentContext,
@@ -27,7 +28,14 @@ public sealed class TestEvaluatedFactsProvider(
     TestMockRegistry? mocks = null)
 {
     private const string DeploymentResourceType = "Microsoft.Resources/deployments";
+    private const string ResourceGroupResourceType = "Microsoft.Resources/resourceGroups";
     private const string DeploymentParametersSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#";
+
+    [GeneratedRegex(@"^/subscriptions/(?<subscription>[^/]+)(?:/resourceGroups/(?<resourceGroup>[^/]+))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ResourceLocationPattern();
+
+    [GeneratedRegex(@"^(?:/providers/)?Microsoft\.Management/managementGroups/(?<managementGroup>[^/]+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ManagementGroupScopePattern();
 
     /// <summary>
     /// Each round resolves one more module-to-module link, so a chain longer than this is not resolved
@@ -416,6 +424,10 @@ public sealed class TestEvaluatedFactsProvider(
                 body[key] = isModuleWrapper && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
             }
 
+            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default));
+            var location = ResourceLocationPattern().Match(id);
+            var isResourceGroup = string.Equals(type, ResourceGroupResourceType, StringComparison.OrdinalIgnoreCase);
+
             collected.Add(new TestEvaluatedResource(
                 resource[TestTargetType.NamePropertyName]?.Value<string>() ?? string.Empty,
                 type,
@@ -424,7 +436,10 @@ public sealed class TestEvaluatedFactsProvider(
                 declaringFile,
                 line,
                 body,
-                deployment.Unresolved.TryGetValue(property.Name, out var unresolvedReason) ? unresolvedReason : null));
+                deployment.Unresolved.TryGetValue(property.Name, out var unresolvedReason) ? unresolvedReason : null,
+                id,
+                location.Groups["subscription"] is { Success: true } subscription ? subscription.Value : string.Empty,
+                !isResourceGroup && location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty));
         }
 
         return collected.ToImmutable();
@@ -474,6 +489,12 @@ public sealed class TestEvaluatedFactsProvider(
         if (deployment["resourceGroup"]?.Value<string>() is { } resourceGroup)
         {
             scoped = scoped with { ResourceGroup = resourceGroup };
+        }
+
+        if (deployment["scope"] is { Type: JTokenType.String } scopeToken &&
+            ManagementGroupScopePattern().Match(scopeToken.Value<string>() ?? string.Empty) is { Success: true } managementGroup)
+        {
+            scoped = scoped with { ManagementGroup = managementGroup.Groups["managementGroup"].Value };
         }
 
         // A module's own deployment name is the name its declaration computed, never the root's.

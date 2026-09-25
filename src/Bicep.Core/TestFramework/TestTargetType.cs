@@ -39,6 +39,9 @@ public static class TestTargetType
     public const string HasDefaultPropertyName = "hasDefault";
     public const string TargetScopePropertyName = "targetScope";
     public const string WaitsForPropertyName = "waitsFor";
+    public const string IdPropertyName = "id";
+    public const string SubscriptionIdPropertyName = "subscriptionId";
+    public const string ResourceGroupPropertyName = "resourceGroup";
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -141,6 +144,9 @@ public static class TestTargetType
             new NamedTypeProperty(InstanceIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "Identifies this instance among the others the same declaration produced, including module call and loop indices."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(IdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource ID Azure would address this instance by, built from where it deploys: the case's deployment context, a module's scope, the declaration's own subscription or resource group, or the resource an extension resource is scoped to. A context value the input file does not state is the evaluator's placeholder."),
+            new NamedTypeProperty(SubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The subscription this instance deploys into. Empty at tenant or management group scope."),
+            new NamedTypeProperty(ResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource group this instance deploys into. Empty if it is not deployed into one, including a resource group itself. An extension resource deploys into the resource group of what it is scoped to."),
             new NamedTypeProperty("properties", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's properties as this case computes them. Null if the declaration sets none."),
             new NamedTypeProperty("location", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's location as this case computes it. Null if the declaration sets none."),
             new NamedTypeProperty("sku", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's SKU as this case computes it. Null if the declaration sets none."),

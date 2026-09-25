@@ -4413,6 +4413,243 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_SaysWhereEachInstanceDeploys()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-scope");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                param otherSubscription string
+
+                resource home 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+                  name: 'rg-home'
+                  location: 'westus'
+                }
+
+                resource subscriptionGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: '00000000-0000-0000-0000-00000000000a'
+                  properties: {
+                    principalId: 'p'
+                    roleDefinitionId: 'r'
+                  }
+                }
+
+                module local 'workload.bicep' = {
+                  name: 'local'
+                  scope: home
+                }
+
+                module remote 'workload.bicep' = {
+                  name: 'remote'
+                  scope: resourceGroup(otherSubscription, 'rg-remote')
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "workload.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'account'
+                  location: 'westus'
+                  kind: 'StorageV2'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                }
+
+                resource accountGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: '00000000-0000-0000-0000-00000000000b'
+                  scope: account
+                  properties: {
+                    principalId: 'p'
+                    roleDefinitionId: 'r'
+                  }
+                }
+
+                module hub 'hub.bicep' = {
+                  name: 'hub'
+                  scope: resourceGroup('rg-hub')
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "hub.bicep", """
+                resource namespace 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
+                  name: 'namespace'
+                }
+
+                resource namespaceGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: '00000000-0000-0000-0000-00000000000c'
+                  scope: namespace
+                  properties: {
+                    principalId: 'p'
+                    roleDefinitionId: 'r'
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param otherSubscription string
+
+                test placement 'main.bicep' = {
+                  params: {
+                    otherSubscription: otherSubscription
+                  }
+                  assertions: {
+                    everyInstanceDeploysWhereItsScopeSays: {
+                      passWhen: map(target.evaluated.withModules.resources, r => {
+                        instance: r.instanceId
+                        id: r.id
+                        subscription: r.subscriptionId
+                        group: r.resourceGroup
+                      }) == [
+                        {
+                          instance: 'home'
+                          id: '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-home'
+                          subscription: '11111111-1111-1111-1111-111111111111'
+                          group: ''
+                        }
+                        {
+                          instance: 'subscriptionGrant'
+                          id: '/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-00000000000a'
+                          subscription: '11111111-1111-1111-1111-111111111111'
+                          group: ''
+                        }
+                        {
+                          instance: 'local/account'
+                          id: '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-home/providers/Microsoft.Storage/storageAccounts/account'
+                          subscription: '11111111-1111-1111-1111-111111111111'
+                          group: 'rg-home'
+                        }
+                        {
+                          instance: 'local/accountGrant'
+                          id: '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-home/providers/Microsoft.Storage/storageAccounts/account/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-00000000000b'
+                          subscription: '11111111-1111-1111-1111-111111111111'
+                          group: 'rg-home'
+                        }
+                        {
+                          instance: 'local/hub/namespaceGrant'
+                          id: '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-hub/providers/Microsoft.EventHub/namespaces/namespace/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-00000000000c'
+                          subscription: '11111111-1111-1111-1111-111111111111'
+                          group: 'rg-hub'
+                        }
+                        {
+                          instance: 'remote/account'
+                          id: '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-remote/providers/Microsoft.Storage/storageAccounts/account'
+                          subscription: '22222222-2222-2222-2222-222222222222'
+                          group: 'rg-remote'
+                        }
+                        {
+                          instance: 'remote/accountGrant'
+                          id: '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-remote/providers/Microsoft.Storage/storageAccounts/account/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-00000000000b'
+                          subscription: '22222222-2222-2222-2222-222222222222'
+                          group: 'rg-remote'
+                        }
+                        {
+                          instance: 'remote/hub/namespaceGrant'
+                          id: '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub/providers/Microsoft.EventHub/namespaces/namespace/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-00000000000c'
+                          subscription: '22222222-2222-2222-2222-222222222222'
+                          group: 'rg-hub'
+                        }
+                      ]
+                      message: 'Each instance should report the scope it deploys to.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  subscriptionId: '11111111-1111-1111-1111-111111111111'
+                  deploymentName: 'placement'
+                  deploymentLocation: 'westus'
+                }
+
+                case crossSubscription = {
+                  otherSubscription: '22222222-2222-2222-2222-222222222222'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                error.Should().NotContain("Warning");
+                output.Should().Contain("Evaluation placement (main.bicep) [policy.biceptestparam: crossSubscription] Passed!");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_AModuleDeployedToAnotherManagementGroupIsAddressedThere()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-management-group");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'managementGroup'
+
+                module here 'policy.bicep' = {
+                  name: 'here'
+                }
+
+                module elsewhere 'policy.bicep' = {
+                  name: 'elsewhere'
+                  scope: managementGroup('mg-other')
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "policy.bicep", """
+                targetScope = 'managementGroup'
+
+                resource definition 'Microsoft.Authorization/policyDefinitions@2023-04-01' = {
+                  name: 'definition'
+                  properties: {}
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "placement.biceptest", """
+                test placement 'main.bicep' = {
+                  assertions: {
+                    eachDefinitionLandsInItsOwnGroup: {
+                      passWhen: map(target.evaluated.withModules.resources, r => [r.id, r.subscriptionId, r.resourceGroup]) == [
+                        ['/providers/Microsoft.Management/managementGroups/mg-root/providers/Microsoft.Authorization/policyDefinitions/definition', '', '']
+                        ['/providers/Microsoft.Management/managementGroups/mg-other/providers/Microsoft.Authorization/policyDefinitions/definition', '', '']
+                      ]
+                      message: 'A module deployed to another management group should be addressed there.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "placement.biceptestparam", """
+                using 'placement.biceptest'
+
+                deploymentContext = {
+                  managementGroup: 'mg-root'
+                  deploymentName: 'placement'
+                  deploymentLocation: 'westus'
+                }
+
+                case only = {}
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                error.Should().NotContain("Warning");
+                output.Should().Contain("Evaluation placement (main.bicep) [placement.biceptestparam: only] Passed!");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_AnswerReferenceAndListRequests()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

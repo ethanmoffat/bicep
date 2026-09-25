@@ -646,7 +646,7 @@ test foo = {
 
             result.Should().HaveDiagnostics(new[] {
                 ("BCP070", DiagnosticLevel.Error, "Argument of type \"evaluatedResourceFact => error\" is not assignable to parameter of type \"(any[, int]) => bool\"."),
-                ("BCP053", DiagnosticLevel.Error, "The type \"evaluatedResourceFact\" does not contain property \"existing\". Available properties include \"file\", \"identity\", \"instanceId\", \"kind\", \"line\", \"location\", \"name\", \"properties\", \"sku\", \"symbolicName\", \"tags\", \"type\", \"zones\"."),
+                ("BCP053", DiagnosticLevel.Error, "The type \"evaluatedResourceFact\" does not contain property \"existing\". Available properties include \"file\", \"id\", \"identity\", \"instanceId\", \"kind\", \"line\", \"location\", \"name\", \"properties\", \"resourceGroup\", \"sku\", \"subscriptionId\", \"symbolicName\", \"tags\", \"type\", \"zones\"."),
             });
         }
 
