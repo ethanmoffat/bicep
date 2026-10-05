@@ -392,7 +392,7 @@ namespace Bicep.Core.Utils
             return $"{scopeString}providers/{string.Join('/', types)}";
         }
 
-        private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope)
+        private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope, bool outerScopeByDefault)
         {
             var scopeString = GetDeploymentScopeString(deploymentScope, config);
 
@@ -419,9 +419,11 @@ namespace Bicep.Core.Utils
                 ? evaluationContext
                 : TemplateEvaluationContext.Create(template, resourceLookup, symbolicResourceIds, config, resource.CopyContext, bodies);
 
+            InsensitiveHashSet SkipFor(TemplateResource resource) => SkipEvaluationPaths(resource, outerScopeByDefault);
+
             if (bodies is not null && config.OnUnresolvedResourcePropertiesFunc is { } onUnresolved)
             {
-                EvaluateResourcesIndividually(template, bodies, ContextFor, onUnresolved);
+                EvaluateResourcesIndividually(template, bodies, ContextFor, SkipFor, onUnresolved);
             }
             else
             {
@@ -439,11 +441,11 @@ namespace Bicep.Core.Utils
                         ? ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
                             root: resource.Properties.Value,
                             evaluationContext: ContextFor(resource),
-                            skipEvaluationPaths: SkipEvaluationPaths(resource))
+                            skipEvaluationPaths: SkipFor(resource))
                         : ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
                             root: resource.Properties.Value,
                             evaluationContext: ContextFor(resource),
-                            skipEvaluationPaths: SkipEvaluationPaths(resource));
+                            skipEvaluationPaths: SkipFor(resource));
                 }
             }
 
@@ -466,20 +468,110 @@ namespace Bicep.Core.Utils
         }
 
         private const string DeploymentResourceType = "Microsoft.Resources/deployments";
+        private const string ExpressionEvaluationOptionsPropertyName = "expressionEvaluationOptions";
 
         /// <summary>
-        /// A module's nested template is evaluated as its own deployment, not as part of the caller.
+        /// Where an outer-scoped deployment keeps its evaluation options while ARM validates a template
+        /// whose symbolic names were only forced. Nothing reads it but this evaluator.
         /// </summary>
-        private static InsensitiveHashSet SkipEvaluationPaths(TemplateResource resource)
+        private const string SetAsideEvaluationOptionsPropertyName = "__bicep_set_aside_evaluation_options!";
+
+        /// <summary>
+        /// A module's nested template is evaluated as its own deployment, not as part of the caller. An
+        /// outer-scoped nested template is the exception: ARM evaluates it in the caller's context, which
+        /// is where its expressions find their parameters, variables and loop iteration.
+        /// </summary>
+        private static InsensitiveHashSet SkipEvaluationPaths(TemplateResource resource, bool outerScopeByDefault)
         {
             var skipEvaluationPaths = new InsensitiveHashSet();
 
-            if (resource.Type.Value.EqualsOrdinalInsensitively(DeploymentResourceType))
+            if (resource.Type.Value.EqualsOrdinalInsensitively(DeploymentResourceType) &&
+                !IsOuterScoped(resource.Properties?.Value, outerScopeByDefault))
             {
                 skipEvaluationPaths.Add("template");
             }
 
             return skipEvaluationPaths;
+        }
+
+        /// <summary>
+        /// Whether a deployment's inline template is evaluated in the outer scope. A deployment that does
+        /// not say takes ARM's default for its template's language version: outer in 1.0, inner in 2.0.
+        /// </summary>
+        private static bool IsOuterScoped(JToken? properties, bool outerScopeByDefault)
+        {
+            if (properties is not JObject body)
+            {
+                return false;
+            }
+
+            return (body[ExpressionEvaluationOptionsPropertyName] ?? body[SetAsideEvaluationOptionsPropertyName])?["scope"] is { Type: JTokenType.String } scope
+                ? string.Equals(scope.Value<string>(), "outer", StringComparison.OrdinalIgnoreCase)
+                : outerScopeByDefault;
+        }
+
+        /// <summary>
+        /// Whether ARM deploys this template as 1.0, whose nested deployments are outer-scoped unless they
+        /// say otherwise. A template whose symbolic names the caller forced is 1.0 when deployed.
+        /// </summary>
+        private static bool IsOuterScopedByDefault(JToken template)
+            => template["languageVersion"] is null || IsSymbolicNamesForced(template);
+
+        private static bool IsSymbolicNamesForced(JToken template)
+            => template["metadata"]?[LanguageConstants.TemplateMetadataSymbolicNamesForcedName] is { Type: JTokenType.Boolean } forced &&
+                forced.Value<bool>();
+
+        /// <summary>
+        /// A template whose symbolic names the caller forced is ARM 1.0 when deployed, but ARM rejects an
+        /// outer-scoped deployment in the 2.0 template it is emitted as. Such a deployment's options are set
+        /// aside while ARM validates the template and restored once it has been evaluated, so the
+        /// deployment is evaluated as the 1.0 template would be. A template that is 2.0 in its own right
+        /// is left alone, and ARM still rejects it as it would on deployment.
+        /// </summary>
+        private static JToken SetAsideOuterScopeOfForcedTemplate(JToken template)
+        {
+            if (!IsSymbolicNamesForced(template))
+            {
+                return template;
+            }
+
+            var copy = template.DeepClone();
+            var resources = copy["resources"] switch
+            {
+                JObject symbolic => symbolic.Properties().Select(property => property.Value),
+                JArray array => array,
+                _ => [],
+            };
+
+            var setAside = false;
+
+            foreach (var resource in resources.OfType<JObject>())
+            {
+                if (string.Equals(resource["type"]?.Value<string>(), DeploymentResourceType, StringComparison.OrdinalIgnoreCase) &&
+                    resource["properties"] is JObject properties &&
+                    IsOuterScoped(properties, outerScopeByDefault: false) &&
+                    properties.Property(ExpressionEvaluationOptionsPropertyName, StringComparison.OrdinalIgnoreCase) is { } options)
+                {
+                    options.Remove();
+                    properties[SetAsideEvaluationOptionsPropertyName] = options.Value;
+                    setAside = true;
+                }
+            }
+
+            return setAside ? copy : template;
+        }
+
+        private static void RestoreSetAsideEvaluationOptions(Template template)
+        {
+            foreach (var resource in template.Resources)
+            {
+                if (resource.Properties?.Value is JObject properties &&
+                    properties.Property(SetAsideEvaluationOptionsPropertyName, StringComparison.Ordinal) is { } setAside)
+                {
+                    setAside.Remove();
+                    properties[ExpressionEvaluationOptionsPropertyName] = setAside.Value;
+                }
+            }
         }
 
         /// <summary>
@@ -492,6 +584,7 @@ namespace Bicep.Core.Utils
             Template template,
             PendingResourceBodies bodies,
             Func<TemplateResource, IEvaluationContext> contextFor,
+            Func<TemplateResource, InsensitiveHashSet> skipFor,
             OnUnresolvedResourcePropertiesDelegate onUnresolved)
         {
             var declared = new Dictionary<TemplateResource, JToken>(ReferenceEqualityComparer.Instance);
@@ -521,7 +614,7 @@ namespace Bicep.Core.Utils
                         resource.Properties.Value = ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
                             root: declared[resource].DeepClone(),
                             evaluationContext: contextFor(resource),
-                            skipEvaluationPaths: SkipEvaluationPaths(resource));
+                            skipEvaluationPaths: skipFor(resource));
 
                         bodies.Pending.Remove(resource);
                         resolvedAny = true;
@@ -610,7 +703,7 @@ namespace Bicep.Core.Utils
 
             try
             {
-                var template = TemplateEngine.ParseTemplate(templateJtoken.ToString());
+                var template = TemplateEngine.ParseTemplate(SetAsideOuterScopeOfForcedTemplate(templateJtoken).ToString());
                 var parameters = ConvertParameters(parametersJToken);
                 var extensionConfigs = ConvertExtensionConfigs(parametersJToken);
 
@@ -632,9 +725,11 @@ namespace Bicep.Core.Utils
                         new DeploymentParametersDefinition()),
                     metricsRecorder: new TemplateMetricsRecorder());
 
-                ProcessTemplateLanguageExpressions(template, config, deploymentScope);
+                ProcessTemplateLanguageExpressions(template, config, deploymentScope, IsOuterScopedByDefault(templateJtoken));
 
                 TemplateEngine.ValidateProcessedTemplate(template, expectedApiVersion, deploymentScope);
+
+                RestoreSetAsideEvaluationOptions(template);
 
                 return template;
             }

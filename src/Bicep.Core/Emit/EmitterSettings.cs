@@ -25,12 +25,18 @@ namespace Bicep.Core.Emit
             ForceSymbolicNames = forceSymbolicNames;
             UseExperimentalTemplateLanguageVersion = model.Features.EnabledFeatureMetadata.Any(feature => feature.usesExperimentalArmEngineFeature);
 
+            var requiredByModel = RequiresSymbolicNames(model, UseExperimentalTemplateLanguageVersion);
+
+            EnableSymbolicNames = forceSymbolicNames || requiredByModel;
+            SymbolicNamesForcedByCaller = forceSymbolicNames && !requiredByModel;
+        }
+
+        private static bool RequiresSymbolicNames(SemanticModel model, bool useExperimentalTemplateLanguageVersion)
+        {
             // Symbolic names are used if (evaluated in increasing order of computational cost):
-            EnableSymbolicNames =
-                // the caller requires them
-                forceSymbolicNames ||
+            return
                 // we're targeting an experimental language version
-                UseExperimentalTemplateLanguageVersion ||
+                useExperimentalTemplateLanguageVersion ||
                 // symbolic name codegen has been explicitly enabled
                 model.Features.SymbolicNameCodegenEnabled ||
                 // use of extensions or extensible resources
@@ -95,6 +101,13 @@ namespace Bicep.Core.Emit
         /// and would lose the attribution the caller asked for.
         /// </summary>
         public bool ForceSymbolicNames { get; }
+
+        /// <summary>
+        /// Whether symbolic names are emitted only because the caller forced them. Such a template is
+        /// ARM 1.0 when deployed, so it may use what only 1.0 allows - an outer-scoped nested deployment,
+        /// say - and is marked so an evaluator can treat it as the 1.0 template it really is.
+        /// </summary>
+        public bool SymbolicNamesForcedByCaller { get; }
 
         /// <summary>
         /// Use an experimental version of the ARM JSON template syntax. Only used if an experimental Bicep feature has been explicitly enabled.

@@ -4650,6 +4650,238 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
         }
 
         [TestMethod]
+        public async Task Test_Evaluated_EvaluatesAnOuterScopedDeploymentInTheContextThatDeclaresIt()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outer-scoped-deployment");
+            Directory.CreateDirectory(outputFileDir);
+            Directory.CreateDirectory(Path.Combine(outputFileDir, "parts"));
+
+            // Nothing here needs symbolic names, so this module is ARM 1.0 when deployed - the only
+            // version in which an outer-scoped inline template is allowed.
+            FileHelper.SaveResultFile(TestContext, "grants.bicep", """
+                targetScope = 'subscription'
+
+                param principalId string
+                param subscriptionIds array
+
+                #disable-next-line no-deployments-resources
+                resource grants 'Microsoft.Resources/deployments@2022-09-01' = [for id in subscriptionIds: {
+                  name: 'grant-${id}'
+                  subscriptionId: id
+                  location: 'westus'
+                  properties: {
+                    mode: 'Incremental'
+                    expressionEvaluationOptions: {
+                      scope: 'outer'
+                    }
+                    template: {
+                      '$schema': 'https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#'
+                      contentVersion: '1.0.0.0'
+                      resources: [
+                        {
+                          type: 'Microsoft.Authorization/roleAssignments'
+                          apiVersion: '2022-04-01'
+                          name: guid(principalId, id)
+                          properties: {
+                            principalId: principalId
+                            roleDefinitionId: subscriptionResourceId(id, 'Microsoft.Authorization/roleDefinitions', 'reader')
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }]
+                """, Path.Combine(outputFileDir, "parts"));
+
+            // A user-defined type makes the caller ARM 2.0 in its own right; the module stays 1.0.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'subscription'
+
+                type subscriptionList = string[]
+
+                param subscriptionIds subscriptionList
+
+                module grants 'parts/grants.bicep' = {
+                  name: 'grants'
+                  params: {
+                    principalId: 'principal-1'
+                    subscriptionIds: subscriptionIds
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param subscriptionIds string[]
+
+                test outer 'main.bicep' = {
+                  params: {
+                    subscriptionIds: subscriptionIds
+                  }
+                  assertions: {
+                    // The deployment is evaluated where Azure would send it.
+                    eachSubscriptionGetsOneDeployment: {
+                      passWhen: map(target.evaluated.withModules.resources, r => '${r.name}@${r.subscriptionId}') == ['grant-22222222-2222-2222-2222-222222222222@22222222-2222-2222-2222-222222222222', 'grant-33333333-3333-3333-3333-333333333333@33333333-3333-3333-3333-333333333333']
+                      message: 'Each subscription should get its own deployment.'
+                    }
+                    // The inline template reads the module's parameter and the loop's item, as it does
+                    // when ARM evaluates it in the outer scope.
+                    inlineTemplateIsEvaluatedInTheOuterScope: {
+                      passWhen: map(target.evaluated.withModules.resources, r => r.properties.template.resources[0]) == map(subscriptionIds, id => {
+                        type: 'Microsoft.Authorization/roleAssignments'
+                        apiVersion: '2022-04-01'
+                        name: guid('principal-1', id)
+                        properties: {
+                          principalId: 'principal-1'
+                          roleDefinitionId: '/subscriptions/${id}/providers/Microsoft.Authorization/roleDefinitions/reader'
+                        }
+                      })
+                      message: 'An outer-scoped inline template should be evaluated in the context that declares it.'
+                    }
+                    // The scope is reported as the author wrote it.
+                    scopeIsReportedAsWritten: {
+                      passWhen: map(target.evaluated.withModules.resources, r => r.properties.expressionEvaluationOptions.scope) == ['outer', 'outer']
+                      message: 'The deployment should report the evaluation scope its author chose.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  subscriptionId: '11111111-1111-1111-1111-111111111111'
+                  deploymentName: 'outer'
+                  deploymentLocation: 'westus'
+                }
+
+                case twoSubscriptions = {
+                  subscriptionIds: ['22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333']
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                error.Should().NotContain("Warning");
+                output.Should().Contain("Evaluation outer (main.bicep) [policy.biceptestparam: twoSubscriptions] Passed!");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_ADeploymentThatStatesNoScopeIsOuterScopedInAnArm10Template()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "default-scoped-deployment");
+            Directory.CreateDirectory(outputFileDir);
+
+            // ARM evaluates a 1.0 inline template in the outer scope unless it says otherwise.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param tag string
+
+                #disable-next-line no-deployments-resources
+                resource remote 'Microsoft.Resources/deployments@2022-09-01' = {
+                  name: 'remote'
+                  properties: {
+                    mode: 'Incremental'
+                    template: {
+                      '$schema': 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+                      contentVersion: '1.0.0.0'
+                      resources: []
+                      outputs: {
+                        tag: {
+                          type: 'string'
+                          value: tag
+                        }
+                      }
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test defaulted 'main.bicep' = {
+                  params: {
+                    tag: 'from-outer'
+                  }
+                  assertions: {
+                    inlineTemplateReadsTheOuterParameter: {
+                      passWhen: map(target.evaluated.resources, r => r.properties.template.outputs.tag.value) == ['from-outer']
+                      message: 'A 1.0 inline template that states no scope should be evaluated in the outer scope.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                output.Should().Contain("Evaluation defaulted (main.bicep) Passed!");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_RejectsAnOuterScopedDeploymentInATemplateThatIsArm20()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outer-scoped-deployment-arm20");
+            Directory.CreateDirectory(outputFileDir);
+
+            // The user-defined type makes this template ARM 2.0 when deployed, and ARM rejects an
+            // outer-scoped inline template there. Evaluation says the same rather than hiding it.
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                type name = string
+
+                param deploymentName name
+
+                #disable-next-line no-deployments-resources
+                resource remote 'Microsoft.Resources/deployments@2022-09-01' = {
+                  name: deploymentName
+                  properties: {
+                    mode: 'Incremental'
+                    expressionEvaluationOptions: {
+                      scope: 'outer'
+                    }
+                    template: {
+                      '$schema': 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+                      contentVersion: '1.0.0.0'
+                      resources: []
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test arm20 'main.bicep' = {
+                  params: {
+                    deploymentName: 'remote'
+                  }
+                  assertions: {
+                    deploymentIsEvaluated: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'The deployment should be evaluated.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().NotBe(0);
+                error.Should().Contain("does not support 'Outer' expression evaluation");
+            }
+        }
+
+        [TestMethod]
         public async Task Test_Mocks_AnswerReferenceAndListRequests()
         {
             var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);

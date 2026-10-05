@@ -186,6 +186,7 @@ namespace Bicep.Core
         public const string MetadataExportedPropertyName = "__bicep_export!";
         public const string MetadataImportedFromPropertyName = "__bicep_imported_from!";
         public const string TemplateMetadataExportedVariablesName = "__bicep_exported_variables!";
+        public const string TemplateMetadataSymbolicNamesForcedName = "__bicep_symbolic_names_forced!";
         public const string ImportMetadataSourceTemplatePropertyName = "sourceTemplate";
         public const string ImportMetadataOriginalIdentifierPropertyName = "originalIdentifier";
         public const string BatchSizePropertyName = "batchSize";

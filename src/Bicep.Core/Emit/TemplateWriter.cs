@@ -1780,6 +1780,11 @@ namespace Bicep.Core.Emit
                     emitter.EmitProperty("version", this.Context.SemanticModel.Features.AssemblyVersion);
                 });
 
+                if (Context.Settings.SymbolicNamesForcedByCaller)
+                {
+                    emitter.EmitProperty(LanguageConstants.TemplateMetadataSymbolicNamesForcedName, ExpressionFactory.CreateBooleanLiteral(true));
+                }
+
                 var exportedVariables = Context.SemanticModel.Exports.Values.OfType<ExportedVariableMetadata>().ToImmutableArray();
 
                 if (exportedVariables.Length > 0)
