@@ -4,6 +4,7 @@
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using Azure.Deployments.Expression.Engines;
+using Azure.Deployments.Expression.Expressions;
 using Bicep.Core.Semantics;
 using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
@@ -63,7 +64,14 @@ public sealed partial class TestEvaluatedFactsProvider(
     private ImmutableArray<TestEvaluatedResource>? withModules;
     private ImmutableArray<TestEvaluatedModule>? localModules;
     private ImmutableArray<TestEvaluatedModule>? withModulesModules;
+    private StrictDeployment? strict;
     private JObject? outputs;
+
+    /// <summary>
+    /// One deployment evaluated with strict outputs: the template, and why each output that could not be
+    /// computed for this case was left out of it.
+    /// </summary>
+    private sealed record StrictDeployment(JObject Template, ImmutableDictionary<string, string> UnresolvedOutputs);
 
     public ImmutableArray<TestEvaluatedResource> Local => local ??= Collect(Root(), string.Empty, recurse: false);
 
@@ -76,9 +84,19 @@ public sealed partial class TestEvaluatedFactsProvider(
     /// <summary>
     /// Outputs are computed strictly, and only when something asks for them. An output is a consumption:
     /// a value it needs and cannot get is an error about that value, not a silently unevaluated string
-    /// that a later comparison would report as an ordinary mismatch.
+    /// that a later comparison would report as an ordinary mismatch. Each output is computed on its own,
+    /// so one that could not be computed is left out of these and listed in <see cref="UnresolvedOutputs"/>
+    /// instead of failing the others.
     /// </summary>
-    public JObject Outputs => outputs ??= CollectOutputs(EvaluateStrictly(Root()));
+    public JObject Outputs => outputs ??= CollectOutputs(Strict().Template);
+
+    /// <summary>
+    /// Why each output of the selected file that could not be computed for this case was left out of
+    /// <see cref="Outputs"/>, by output name.
+    /// </summary>
+    public ImmutableDictionary<string, string> UnresolvedOutputs => Strict().UnresolvedOutputs;
+
+    private StrictDeployment Strict() => strict ??= EvaluateStrictly(Root());
 
     private EvaluatedDeployment Root() => root ??= Evaluate(
         TestTemplateEmitter.Emit(targetModel, forceSymbolicNames: true),
@@ -164,16 +182,25 @@ public sealed partial class TestEvaluatedFactsProvider(
 
     /// <summary>
     /// Re-evaluates a deployment with strict outputs, resolving module outputs from strict module
-    /// evaluations so a failure is reported where it happens rather than propagated as text.
+    /// evaluations so a failure is reported where it happens rather than propagated as text. A module
+    /// output that could not be computed is left out, so a caller output that reads it cannot be computed
+    /// either, while one that does not read it still is.
     /// </summary>
-    private JObject EvaluateStrictly(EvaluatedDeployment deployment)
+    private StrictDeployment EvaluateStrictly(EvaluatedDeployment deployment)
     {
-        var modules = deployment.Modules.ToImmutableDictionary(
+        var strictModules = deployment.Modules.ToImmutableDictionary(
             module => module.Key,
-            module => module.Value with { Template = EvaluateStrictly(module.Value) },
+            module => EvaluateStrictly(module.Value),
             StringComparer.OrdinalIgnoreCase);
 
-        return EvaluateTemplate(
+        var modules = deployment.Modules.ToImmutableDictionary(
+            module => module.Key,
+            module => module.Value with { Template = strictModules[module.Key].Template },
+            StringComparer.OrdinalIgnoreCase);
+
+        var unresolved = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var template = EvaluateTemplate(
             deployment.Source,
             deployment.Inputs,
             deployment.Context,
@@ -183,7 +210,56 @@ public sealed partial class TestEvaluatedFactsProvider(
             tolerant: false,
             // An output fails only if it reads what could not be computed, not because some resource it
             // never mentions has a value only Azure knows.
-            onUnresolvedProperties: static (_, _) => { });
+            onUnresolvedProperties: static (_, _) => { },
+            onUnresolvedOutput: (name, exception) => unresolved[name] =
+                UnresolvedModuleOutputRead((deployment.Source[TestTargetType.OutputsPropertyName]?[name] as JObject)?["value"], strictModules) ??
+                exception.Message);
+
+        return new StrictDeployment(template, unresolved.ToImmutable());
+    }
+
+    /// <summary>
+    /// Why an output that reads a module output which could not be computed could not be computed itself.
+    /// That module output is left out, so the read fails only as a missing property; naming the module
+    /// output and its own reason says what to mock.
+    /// </summary>
+    private static string? UnresolvedModuleOutputRead(JToken? declared, ImmutableDictionary<string, StrictDeployment> modules)
+    {
+        if (declared is null || modules.Values.All(module => module.UnresolvedOutputs.IsEmpty))
+        {
+            return null;
+        }
+
+        var values = declared is JContainer container ? container.DescendantsAndSelf() : [declared];
+
+        return values
+            .Select(value => value is JValue { Value: string text } && ExpressionsEngine.IsLanguageExpression(text)
+                ? UnresolvedModuleOutputRead(ExpressionsEngine.ParseLanguageExpression(text), modules)
+                : null)
+            .FirstOrDefault(reason => reason is not null);
+    }
+
+    private static string? UnresolvedModuleOutputRead(LanguageExpression expression, ImmutableDictionary<string, StrictDeployment> modules)
+    {
+        if (expression is not FunctionExpression function)
+        {
+            return null;
+        }
+
+        // A module's outputs are read as reference('<module>').outputs.<name>.value.
+        if (function.Function.Equals("reference", StringComparison.OrdinalIgnoreCase) &&
+            function.Parameters is [JTokenExpression { Value: JValue { Value: string module } }, ..] &&
+            function.Properties is [JTokenExpression { Value: JValue { Value: string outputs } }, JTokenExpression { Value: JValue { Value: string output } }, ..] &&
+            outputs.Equals(TestTargetType.OutputsPropertyName, StringComparison.OrdinalIgnoreCase) &&
+            modules.TryGetValue(module, out var called) &&
+            called.UnresolvedOutputs.TryGetValue(output, out var reason))
+        {
+            return $"It reads the output '{output}' of module '{module}', which could not be evaluated: {reason}";
+        }
+
+        return (function.Parameters ?? []).Concat(function.Properties ?? [])
+            .Select(inner => UnresolvedModuleOutputRead(inner, modules))
+            .FirstOrDefault(reason => reason is not null);
     }
 
     private static TemplateEvaluator.OnUnresolvedReferenceDelegate? ModuleOutputResolver(ImmutableDictionary<string, EvaluatedDeployment>? modules)
@@ -241,7 +317,8 @@ public sealed partial class TestEvaluatedFactsProvider(
         TemplateEvaluator.OnUnresolvedReferenceDelegate? onUnresolvedReference,
         bool strictOutputs,
         bool tolerant,
-        TemplateEvaluator.OnUnresolvedResourcePropertiesDelegate? onUnresolvedProperties = null)
+        TemplateEvaluator.OnUnresolvedResourcePropertiesDelegate? onUnresolvedProperties = null,
+        TemplateEvaluator.OnUnresolvedOutputDelegate? onUnresolvedOutput = null)
         => (JObject)TemplateEvaluator.Evaluate(
             template,
             inputs,
@@ -251,6 +328,9 @@ public sealed partial class TestEvaluatedFactsProvider(
                 StrictOutputs = strictOutputs,
                 TolerateUnresolvedValues = tolerant,
                 OnUnresolvedResourcePropertiesFunc = onUnresolvedProperties,
+                // An output that cannot be computed is left out rather than failing the template: the
+                // instances it deploys do not depend on it, and a caller that reads it fails on the read.
+                OnUnresolvedOutputFunc = onUnresolvedOutput ?? (static (_, _) => { }),
             }).ToJToken();
 
     /// <summary>
@@ -313,14 +393,56 @@ public sealed partial class TestEvaluatedFactsProvider(
     /// </summary>
     private static bool HoldsUnevaluatedExpression(JToken evaluated, JToken? declared) => (evaluated, declared) switch
     {
-        (JObject evaluatedObject, JObject declaredObject) => evaluatedObject.Properties().Any(property => HoldsUnevaluatedExpression(property.Value, declaredObject[property.Name])),
+        (JObject evaluatedObject, JObject declaredObject) => evaluatedObject.Properties().Any(property =>
+            PropertyLoopInput(declaredObject, property.Name) is { } input
+                ? property.Value is JArray items && items.Any(item => HoldsUnevaluatedExpression(item, input))
+                : HoldsUnevaluatedExpression(property.Value, declaredObject[property.Name])),
         (JArray evaluatedArray, JArray declaredArray) => evaluatedArray.Select((item, index) => index < declaredArray.Count && HoldsUnevaluatedExpression(item, declaredArray[index])).Any(holds => holds),
         (JValue { Type: JTokenType.String } evaluatedValue, JValue { Type: JTokenType.String } declaredValue) =>
             evaluatedValue.Value<string>() is { } text &&
-            text == declaredValue.Value<string>() &&
-            ExpressionsEngine.IsLanguageExpression(text),
+            declaredValue.Value<string>() is { } declaredText &&
+            ExpressionsEngine.IsLanguageExpression(text) &&
+            (text == declaredText || IsLoopIteration(text, declaredText)),
         _ => false,
     };
+
+    /// <summary>
+    /// Whether an expression is still a loop's declared expression, unevaluated, for one iteration.
+    /// Expanding a loop replaces each <c>copyIndex()</c> with the iteration's number and writes the
+    /// expression out again, so its text no longer matches the declaration even though nothing in it was
+    /// computed.
+    /// </summary>
+    private static bool IsLoopIteration(string evaluated, string declared)
+        => declared.Contains("copyIndex", StringComparison.OrdinalIgnoreCase) &&
+            ExpressionsEngine.IsLanguageExpression(declared) &&
+            IsLoopIteration(ExpressionsEngine.ParseLanguageExpression(evaluated), ExpressionsEngine.ParseLanguageExpression(declared));
+
+    private static bool IsLoopIteration(LanguageExpression evaluated, LanguageExpression declared) => (evaluated, declared) switch
+    {
+        (JTokenExpression { Value.Type: JTokenType.Integer }, FunctionExpression declaredFunction) =>
+            declaredFunction.Function.Equals("copyIndex", StringComparison.OrdinalIgnoreCase),
+        (FunctionExpression evaluatedFunction, FunctionExpression declaredFunction) =>
+            evaluatedFunction.Function.Equals(declaredFunction.Function, StringComparison.OrdinalIgnoreCase) &&
+            AreLoopIterations(evaluatedFunction.Parameters, declaredFunction.Parameters) &&
+            AreLoopIterations(evaluatedFunction.Properties, declaredFunction.Properties),
+        (JTokenExpression evaluatedToken, JTokenExpression declaredToken) => JToken.DeepEquals(evaluatedToken.Value, declaredToken.Value),
+        _ => false,
+    };
+
+    private static bool AreLoopIterations(LanguageExpression[]? evaluated, LanguageExpression[]? declared)
+        => (evaluated ?? []).Length == (declared ?? []).Length &&
+            (evaluated ?? []).Zip(declared ?? []).All(pair => IsLoopIteration(pair.First, pair.Second));
+
+    /// <summary>
+    /// A property built by a loop - a <c>for</c> expression in a module argument, say - is declared as
+    /// <c>"copy": [{ "name": ..., "count": ..., "input": ... }]</c> rather than under its own name. Each
+    /// element it evaluates to is declared by the loop's input, so that is what an element is compared
+    /// with.
+    /// </summary>
+    private static JToken? PropertyLoopInput(JObject declared, string name)
+        => declared[name] is null && declared["copy"] is JArray loops
+            ? loops.OfType<JObject>().FirstOrDefault(loop => loop["name"] is JValue { Value: string loopName } && StringComparer.OrdinalIgnoreCase.Equals(loopName, name))?["input"]
+            : null;
 
     private static JObject CollectOutputs(JObject template)
     {

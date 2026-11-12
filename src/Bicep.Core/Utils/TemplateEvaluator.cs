@@ -42,6 +42,13 @@ namespace Bicep.Core.Utils
         }
 
         /// <summary>
+        /// A runtime read that nothing answered, raised with the reason the caller's handler gave.
+        /// </summary>
+        private sealed class UnansweredRequestException(Exception reason) : Exception(reason.Message, reason)
+        {
+        }
+
+        /// <summary>
         /// Which resources' properties are still unknown while resources are evaluated one at a time, and
         /// why the last attempt at each failed. A resource that is not here has been computed.
         /// </summary>
@@ -116,7 +123,7 @@ namespace Bicep.Core.Utils
 
                     // A list operation is answered by the resource provider, never by the template, so an
                     // unanswered one has no offline result at all.
-                    this.config.OnUnansweredRequestFunc?.Invoke(functionExpression.Function, target.ResourceId, apiVersion);
+                    this.ReportUnanswered(functionExpression.Function, target.ResourceId, apiVersion);
                 }
 
                 if (functionExpression.Function.EqualsOrdinalInsensitively("reference"))
@@ -145,7 +152,7 @@ namespace Bicep.Core.Utils
                         // runtime state. Without an answer there is nothing to report but the declaration.
                         if (target.Resource?.Existing?.Value == true)
                         {
-                            this.config.OnUnansweredRequestFunc?.Invoke("reference", target.ResourceId, resolved ?? target.ApiVersion);
+                            this.ReportUnanswered("reference", target.ResourceId, resolved ?? target.ApiVersion);
                         }
                     }
 
@@ -189,7 +196,32 @@ namespace Bicep.Core.Utils
             }
 
             public bool ShouldIgnoreExceptionDuringEvaluation(Exception exception) =>
+                (this.config.TolerateUnresolvedValues && IsUnanswered(exception)) ||
                 this.context.ShouldIgnoreExceptionDuringEvaluation(exception);
+
+            /// <summary>
+            /// Reports a runtime read nothing answered. While values are tolerated, the read is left in
+            /// place like any other value that cannot be computed yet, so it fails only where a caller that
+            /// expects every value asks for it.
+            /// </summary>
+            private void ReportUnanswered(string operation, string resourceId, string? apiVersion)
+            {
+                try
+                {
+                    this.config.OnUnansweredRequestFunc?.Invoke(operation, resourceId, apiVersion);
+                }
+                catch (Exception exception) when (!exception.IsFatal())
+                {
+                    throw new UnansweredRequestException(exception);
+                }
+            }
+
+            private static bool IsUnanswered(Exception? exception) => exception switch
+            {
+                null => false,
+                UnansweredRequestException => true,
+                _ => IsUnanswered(exception.InnerException),
+            };
 
             /// <summary>
             /// States a runtime read in terms of what it addresses rather than how it was written. Symbolic
@@ -256,6 +288,11 @@ namespace Bicep.Core.Utils
         /// </summary>
         public delegate void OnUnresolvedResourcePropertiesDelegate(string symbolicName, Exception exception);
 
+        /// <summary>
+        /// Reports that one output could not be computed. <paramref name="name"/> is the output's name.
+        /// </summary>
+        public delegate void OnUnresolvedOutputDelegate(string name, Exception exception);
+
         public record EvaluationConfiguration(
             string TenantId,
             string ManagementGroup,
@@ -279,6 +316,12 @@ namespace Bicep.Core.Utils
             /// than left in place as its own unevaluated text.
             /// </summary>
             public bool StrictOutputs { get; init; }
+
+            /// <summary>
+            /// Reports an output that cannot be computed, instead of failing the whole template. The output
+            /// is left out and the others are still computed.
+            /// </summary>
+            public OnUnresolvedOutputDelegate? OnUnresolvedOutputFunc { get; init; }
 
             /// <summary>
             /// Leaves a resource value that cannot yet be computed in place instead of failing, so a
@@ -307,24 +350,37 @@ namespace Bicep.Core.Utils
 
         /// <summary>
         /// The resource ID a resource is addressed by. A declaration may state a subscription or
-        /// resource group of its own, which is where the resource actually lives; using the deployment's
-        /// scope for it would address something else entirely.
+        /// resource group of its own, or the resource an extension resource is applied to, which is where
+        /// the resource actually lives; using the deployment's scope for it would address something else
+        /// entirely, and two extension resources with one name on different resources would collide.
         /// </summary>
-        private static string GetResourceId(string scopeString, string subscriptionId, TemplateResource resource)
+        private static string GetResourceId(string scopeString, string subscriptionId, TemplateResource resource) =>
+            $"{GetScopeString(scopeString, subscriptionId, resource.Scope?.Value, resource.SubscriptionId?.Value, resource.ResourceGroup?.Value)}providers/{GetTypesAndNames(resource.Type.Value, resource.Name.Value)}";
+
+        private static string GetTypesAndNames(string type, string name)
         {
-            var typeSegments = resource.Type.Value.Split('/');
-            var nameSegments = resource.Name.Value.Split('/');
+            var typeSegments = type.Split('/');
+            var nameSegments = name.Split('/');
 
             var types = new[] { typeSegments.First() }
-                .Concat(typeSegments.Skip(1).Zip(nameSegments, (type, name) => $"{type}/{name}"));
+                .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
 
-            return $"{GetScopeString(scopeString, subscriptionId, resource)}providers/{string.Join('/', types)}";
+            return string.Join('/', types);
         }
 
-        private static string GetScopeString(string deploymentScopeString, string subscriptionId, TemplateResource resource)
+        private static string GetScopeString(string deploymentScopeString, string subscriptionId, string? scope, string? declaredSubscriptionId, string? declaredResourceGroup)
         {
-            var declaredSubscriptionId = resource.SubscriptionId?.Value;
-            var declaredResourceGroup = resource.ResourceGroup?.Value;
+            if (scope is { Length: > 0 })
+            {
+                // A relative scope names a resource in the deployment's own scope, except a management
+                // group, which is a tenant resource wherever it is named from.
+                var scopeString = scope.StartsWith('/')
+                    ? scope
+                    : scope.StartsWith("Microsoft.Management/managementGroups/", StringComparison.OrdinalIgnoreCase)
+                        ? $"/providers/{scope}"
+                        : $"{deploymentScopeString}providers/{scope}";
+                return scopeString.EndsWith('/') ? scopeString : scopeString + "/";
+            }
 
             if (declaredResourceGroup is { Length: > 0 })
             {
@@ -347,9 +403,9 @@ namespace Bicep.Core.Utils
 
         /// <summary>
         /// The ARM resource ID of one resource from an evaluated template, as Azure would address it once
-        /// deployed. Unlike the lookup used to answer <c>reference()</c>, this honours an extension
-        /// resource's <c>scope</c>, so a role assignment is addressed beneath what it is assigned on, and
-        /// addresses a resource group the way Azure does rather than as a provider resource.
+        /// deployed. Like the lookup used to answer <c>reference()</c>, this honours an extension
+        /// resource's <c>scope</c>, so a role assignment is addressed beneath what it is assigned on; it
+        /// also addresses a resource group the way Azure does rather than as a provider resource.
         /// </summary>
         public static string GetEvaluatedResourceId(JToken template, JObject resource, EvaluationConfiguration config)
         {
@@ -364,12 +420,7 @@ namespace Bicep.Core.Utils
                 return $"{scopeString}resourceGroups/{name}";
             }
 
-            var typeSegments = type.Split('/');
-            var nameSegments = name.Split('/');
-            var types = new[] { typeSegments.First() }
-                .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
-
-            return $"{scopeString}providers/{string.Join('/', types)}";
+            return $"{scopeString}providers/{GetTypesAndNames(type, name)}";
         }
 
         /// <summary>
@@ -384,28 +435,13 @@ namespace Bicep.Core.Utils
         private static string GetEvaluatedScopeString(JToken template, JObject resource, EvaluationConfiguration config)
         {
             var deploymentScope = GetDeploymentScope(template["$schema"]?.Value<string>() ?? string.Empty);
-            var deploymentScopeString = GetDeploymentScopeString(deploymentScope, config);
-            var declaredSubscriptionId = resource["subscriptionId"]?.Value<string>();
-            var declaredResourceGroup = resource["resourceGroup"]?.Value<string>();
 
-            if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
-            {
-                // A relative scope names a resource in the deployment's own scope, except a management
-                // group, which is a tenant resource wherever it is named from.
-                var scopeString = scope.StartsWith('/')
-                    ? scope
-                    : scope.StartsWith("Microsoft.Management/managementGroups/", StringComparison.OrdinalIgnoreCase)
-                        ? $"/providers/{scope}"
-                        : $"{deploymentScopeString}providers/{scope}";
-                return scopeString.EndsWith('/') ? scopeString : scopeString + "/";
-            }
-
-            if (declaredResourceGroup is { Length: > 0 })
-            {
-                return $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : config.SubscriptionId)}/resourceGroups/{declaredResourceGroup}/";
-            }
-
-            return declaredSubscriptionId is { Length: > 0 } ? $"/subscriptions/{declaredSubscriptionId}/" : deploymentScopeString;
+            return GetScopeString(
+                GetDeploymentScopeString(deploymentScope, config),
+                config.SubscriptionId,
+                resource["scope"] is { Type: JTokenType.String } scope ? scope.Value<string>() : null,
+                resource["subscriptionId"]?.Value<string>(),
+                resource["resourceGroup"]?.Value<string>());
         }
 
         private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope, bool outerScopeByDefault)
@@ -469,6 +505,27 @@ namespace Bicep.Core.Utils
             {
                 foreach (var outputKey in template.Outputs.Keys.ToList())
                 {
+                    if (config.OnUnresolvedOutputFunc is { } onUnresolvedOutput)
+                    {
+                        try
+                        {
+                            template.Outputs[outputKey].Value.Value = config.StrictOutputs
+                                ? ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                                    root: template.Outputs[outputKey].Value.Value,
+                                    evaluationContext: evaluationContext)
+                                : ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                                    root: template.Outputs[outputKey].Value.Value,
+                                    evaluationContext: evaluationContext);
+                        }
+                        catch (Exception exception)
+                        {
+                            template.Outputs.Remove(outputKey);
+                            onUnresolvedOutput(outputKey, exception);
+                        }
+
+                        continue;
+                    }
+
                     // Optimistic evaluation leaves an expression it cannot compute as raw text, which reads
                     // as a successfully produced value. A caller that needs an output to mean what it says
                     // asks for strict evaluation and gets the failure instead.

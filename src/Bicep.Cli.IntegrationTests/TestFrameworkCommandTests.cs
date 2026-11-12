@@ -2930,10 +2930,10 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
             using (new AssertionScope())
             {
                 // No environment was stated, so both reads name the missing context instead of
-                // assuming the public cloud; the body failure still says which resource it was.
+                // assuming the public cloud; each failure still says which output or resource it was.
                 result.Should().Be(1);
                 error.Should().Contain("Failed at 2 / 2 assertions!");
-                error.Should().Contain("Could not be evaluated: environment() was evaluated but no environment was supplied.");
+                error.Should().Contain("Could not be evaluated: The output 'cloud' could not be evaluated for this case: environment() was evaluated but no environment was supplied.");
                 error.Should().Contain("The properties of 'sa' (main.bicep(1)) could not be evaluated for this case: environment() was evaluated but no environment was supplied.");
                 error.Should().NotContain("'ENVIRONMENT' is not valid");
             }

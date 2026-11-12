@@ -736,6 +736,14 @@ A test file's inputs are its own. It decides which of them reach a target's prod
 which only shape its own policy. There is no implicit forwarding: a value a target never receives
 cannot influence what it computes.
 
+A value that reaches a target is checked the way ARM checks a deployment parameter, including each property of a user-defined type. ARM does not convert a string to a `bool` or an `int`, either for a top-level parameter or for a property nested inside an object or array, so a target that declares `flag: bool` rejects `'true'` with the error a deployment would report:
+
+```text
+Could not be evaluated: The provided value for the template parameter 'items[0].flag' is not valid. Expected a value of type 'Boolean', but received a value of type 'String'. ...
+```
+
+Some deployment tools convert such values on the client before they submit the deployment, for example `name=value` arguments given to `az deployment ... --parameters`, or a rollout system that renders its configuration into strings and converts them back. A case describes what ARM receives, so give the value its real type in the case, or convert it with `bool()` or `int()` in the test file when the source is a string.
+
 ### Variables and `for` expressions
 
 An input file and a test file can both declare variables, and a variable's value can be a `for` expression. A case can then build a list from a smaller one instead of spelling out every element:
@@ -1265,7 +1273,7 @@ Three rules differ from what you might expect:
   ```
 
   A failure while computing a resource's body keeps the name of the resource in front of that
-  message. A target that never reads `environment()` does not need one.
+  message, and a failure while computing an output keeps the name of the output. A target that never reads `environment()` does not need one.
 
 ## Evaluated values
 
@@ -1362,6 +1370,8 @@ would:
 - a declaration's own `scope: resourceGroup(...)`;
 - for an extension resource such as a role assignment, the resource it is scoped to. Its `id` sits
   beneath that resource's, and it deploys into that resource's subscription and resource group.
+  Two role assignments that share a name but are assigned on different resources are therefore two
+  instances with two `id`s, as Azure treats them, and a read of either one sees its own body.
 
 A resource group's `id` is `/subscriptions/<id>/resourceGroups/<name>`, as Azure addresses it, and
 its own `resourceGroup` is empty: it deploys into a subscription, not into itself. At tenant or
@@ -1574,7 +1584,10 @@ about the selected file alone is not failed by a module it did not ask about.
 `target.evaluated.outputs` is likewise only computed when an assertion reads it. An output often
 reports something Azure assigns when the resource is created, such as a public IP address, and offline
 that value does not exist. A policy about which instances are deployed does not read outputs, so it is
-not failed by one it never asked about, and needs no mock to stand in for it.
+not failed by one it never asked about, and needs no mock to stand in for it. Each output is computed
+on its own as well, so an assertion that reads one output is not failed by another it never mentions.
+
+An assertion reads a branch when it names it, with either a property access or an index: `target['evaluated']['outputs']` reads the same values as `target.evaluated.outputs`, and so does an index whose key is a variable holding `'outputs'`. A key that is only known when the case runs, such as one passed in as a parameter, could name any member of the object it indexes, so every branch it could name is computed.
 
 The same holds inside a resource. A role assignment granting a newly created identity reads the
 identity's principal ID, which Azure assigns, so offline it cannot be computed. That value does not
@@ -1595,6 +1608,15 @@ to evaluate the module.
 An unevaluatable condition is an error rather than a silent exclusion. Reporting "not deployed" for a
 condition that could not be computed would let a policy pass by describing a smaller deployment than
 the case actually produces.
+
+Variables are evaluated the way ARM evaluates them: every variable in a template is computed up front, before any resource, whether or not anything reads it. A variable that is only used in the branch of a conditional the case does not take is still computed, so a `for` expression or lambda inside it has to succeed for the case's values:
+
+```bicep
+var explicit = [for e in endpoints: { kind: e.kind }]
+var effective = empty(regions) ? explicit : regions
+```
+
+When `endpoints` holds objects without a `kind` property, `explicit` fails even when `regions` is not empty, and the deployment would fail the same way. Read the property with `e.?kind`, or write the expression inside the conditional, where only the branch that is taken is evaluated. A variable that reads a runtime value, such as a module output or a property of an existing resource, behaves differently: Bicep writes its expression into each place that uses it, so that read only happens when the branch around it is taken, and a branch the case does not take needs no mock for it.
 
 ## Mocks
 
@@ -1688,6 +1710,8 @@ is read as
 
 so that is what the mock states. Write the resource ID Azure would use, and it matches.
 
+An extension resource is read beneath the resource it is scoped to. An existing `Microsoft.Authorization/locks` named `lock` with `scope: account` is read as `.../providers/Microsoft.Storage/storageAccounts/<account>/providers/Microsoft.Authorization/locks/lock`, so two locks with that name on different accounts are two reads, each answered by the mock for its own ID.
+
 ### One response answers both views of a resource
 
 Reading `identity.properties.principalId` asks Azure for the resource's properties. Reading
@@ -1734,7 +1758,7 @@ $ bicep test mocks-failing.biceptest --inputs mocks-failing.biceptestparam --out
 [✗] Evaluation unconfiguredField (mocks.bicep) [mocks-failing.biceptestparam: eastus] Failed at 1 / 1 assertions!
 	[✗] Assertion clientIdIsResolved failed!
 		The deployment reads a client ID that no mock answers.
-		Could not be evaluated: The language expression property 'clientId' doesn't exist, available properties are 'principalId'.
+		Could not be evaluated: The output 'deployClientId' could not be evaluated for this case: The language expression property 'clientId' doesn't exist, available properties are 'principalId'.
 ```
 
 A request that no mock answers at all is reported the same way, naming the request so it can be
@@ -1747,8 +1771,12 @@ configured:
 Neither case falls back to a guessed value, and neither reaches Azure. A test that cannot get a value
 it needs fails; it does not quietly describe a deployment that was never computed.
 
-Because `target.evaluated.outputs` is computed as a set, a target whose outputs read an unanswered
-value cannot report any of them for that case. An assertion that does not read outputs is unaffected.
+Each output is computed on its own. An output that reads an unanswered value cannot be reported for that case, and an assertion that reads it fails with the output's name in front of the reason, as above. The target's other outputs are still reported, so an assertion that reads only those passes or fails on their values, and an assertion that does not read outputs at all is unaffected. An assertion that uses the outputs object as a whole, such as `items(target.evaluated.outputs)`, or indexes it with a key only known when the case runs, reads every output. An output that passes on a module's output names that module output when it is the one that could not be computed:
+
+```console
+Could not be evaluated: The output 'endpoint' could not be evaluated for this case: It reads the output 'endpoint' of module 'storage', which could not be evaluated: No mock answers reference on ...
+```
+
 Other tests and other cases still run, and the failure is attributed to the one that hit it.
 
 Absence only matters where a value is actually read, so the same three rules follow:
@@ -1835,14 +1863,7 @@ $ bicep test rbac.biceptest --inputs rbac.biceptestparam --output-detail all
 Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 259ms
 ```
 
-An argument taken from another module's output is only knowable once that module has been evaluated,
-and the module it is passed to cannot be evaluated until then. Evaluation therefore repeats until the
-module outputs stop changing, resolving one more link of the chain each round. A module whose arguments
-are not all known yet waits for a later round rather than being handed a placeholder, so the argument
-may be of any type - an object of tags built with `union()`, say, or an array. The same holds for a
-module output that reads a value only Azure knows, such as the name servers of a DNS zone the module
-creates: the modules consuming it are reported as unevaluated for the case, naming the missing value,
-until a mock supplies it.
+An argument taken from another module's output is only knowable once that module has been evaluated, and the module it is passed to cannot be evaluated until then. Evaluation therefore repeats until the module outputs stop changing, resolving one more link of the chain each round. A module whose arguments are not all known yet waits for a later round rather than being handed a placeholder, so the argument may be of any type - an object of tags built with `union()`, say, or an array. That includes an array built by a `for` expression whose elements read the other module's output, such as `[for n in names: { name: n, principals: [identity.outputs.principalId] }]`: each element waits for the output like any other argument does. The same holds for a module output that reads a value only Azure knows, such as the name servers of a DNS zone the module creates: the modules consuming it are reported as unevaluated for the case, naming the missing value, until a mock supplies it.
 
 That is what makes a miswiring visible. `rbac-miswired.bicep` passes the identity's resource ID where
 a principal ID belongs. Both are strings, so it compiles and deploys a role assignment either way —
@@ -2508,7 +2529,7 @@ $ bicep test "*.biceptest" --output-detail all
 		Could not be evaluated: The properties of 'origin' (environment.bicep(23)) could not be evaluated for this case: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
 	[✗] Assertion endpointIsTheAccountInThisCloud failed!
 		The published endpoint must be the account in the cloud being deployed to.
-		Could not be evaluated: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
+		Could not be evaluated: The output 'blobEndpoint' could not be evaluated for this case: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
 [✗] Evaluation fleet-failing.biceptest: storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion onlyStorageIsDeployed failed!
 		This fleet is only allowed to deploy storage accounts.
@@ -2568,7 +2589,6 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - Reading any evaluated body fails if one instance in scope has a body that cannot be computed offline, even if the assertion is about a different instance.
 - Module-to-module argument flow is resolved by repeated evaluation, up to a bounded number of rounds. A longer chain than that is left unresolved.
 - Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
-- `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 - A fact typed as plain `string`, such as a resource's `type`, can be compared with a misspelled value without any diagnostic; the assertion simply never holds. Only facts typed as a closed set, such as `targetScope`, are checked by `no-impossible-comparisons`.

@@ -145,17 +145,24 @@ public class TestAssertionEvaluator
     {
         var target = TestTargetFactsSerializer.Serialize(facts);
 
-        if (References(syntax, TestTargetType.EvaluatedPropertyName))
+        if (References(context, syntax, TestTargetType.EvaluatedPropertyName))
         {
             if (evaluated is null)
             {
                 throw new InvalidOperationException("Evaluated values are not available for this target.");
             }
 
+            var includeOutputs = References(context, syntax, TestTargetType.OutputsPropertyName);
+
+            if (includeOutputs)
+            {
+                EnsureOutputsReadAreComputed(context, syntax, evaluated);
+            }
+
             target[TestTargetType.EvaluatedPropertyName] = TestTargetFactsSerializer.SerializeEvaluated(
                 evaluated,
-                includeOutputs: References(syntax, TestTargetType.OutputsPropertyName),
-                includeWithModules: References(syntax, TestTargetType.WithModulesPropertyName),
+                includeOutputs: includeOutputs,
+                includeWithModules: References(context, syntax, TestTargetType.WithModulesPropertyName),
                 includeBodies: ReadsEvaluatedBody(context, syntax));
         }
 
@@ -169,13 +176,123 @@ public class TestAssertionEvaluator
 
     /// <summary>
     /// Whether the expression reads the named branch of the target anywhere, including inside lambdas.
+    /// An index reads it the same as a property access does: <c>target['evaluated']</c> is
+    /// <c>target.evaluated</c>. A key only known when the case runs may name it if the object it indexes
+    /// has such a member.
     /// </summary>
-    private static bool References(SyntaxBase syntax, string propertyName) => SyntaxAggregator.Aggregate(
+    private static bool References(EmitterContext context, SyntaxBase syntax, string propertyName) => SyntaxAggregator.Aggregate(
         syntax,
         seed: false,
-        function: (found, node) => found || (node is PropertyAccessSyntax access && access.PropertyName.IdentifierName == propertyName),
+        function: (found, node) => found || node switch
+        {
+            PropertyAccessSyntax access => string.Equals(access.PropertyName.IdentifierName, propertyName, StringComparison.OrdinalIgnoreCase),
+            ArrayAccessSyntax access => MayName(context.SemanticModel.GetTypeInfo(access.IndexExpression), propertyName) ??
+                (context.SemanticModel.GetTypeInfo(access.BaseExpression) is ObjectType indexed && indexed.Properties.ContainsKey(propertyName)),
+            _ => false,
+        },
         resultSelector: result => result,
         continuationFunction: (found, _) => !found);
+
+    /// <summary>
+    /// Whether an index of this type names the property: <c>true</c> or <c>false</c> when the key is
+    /// known from the source, <c>null</c> when it is only known when the case runs.
+    /// </summary>
+    private static bool? MayName(TypeSymbol indexType, string propertyName) => indexType switch
+    {
+        StringLiteralType literal => string.Equals(literal.RawStringValue, propertyName, StringComparison.OrdinalIgnoreCase),
+        UnionType union => union.Members.Select(member => MayName(member.Type, propertyName)).ToArray() switch
+        {
+            var named when named.Contains(true) => true,
+            var named when named.Contains(null) => null,
+            _ => false,
+        },
+        StringType or AnyType => null,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Checks that every output the expression reads could be computed for this case. An output that
+    /// could not be is left out of the outputs, so reading it would otherwise fail as a missing property;
+    /// the read fails here instead, naming the output and why it could not be computed. An output the
+    /// expression never reads does not matter, however it fared.
+    /// </summary>
+    private static void EnsureOutputsReadAreComputed(EmitterContext context, SyntaxBase syntax, TestEvaluatedFactsProvider evaluated)
+    {
+        var unresolved = evaluated.UnresolvedOutputs;
+
+        if (unresolved.IsEmpty)
+        {
+            return;
+        }
+
+        var read = OutputsRead(context, syntax);
+
+        foreach (var (name, reason) in unresolved.OrderBy(output => output.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (read is null || read.Contains(name))
+            {
+                throw new InvalidOperationException($"The output '{name}' could not be evaluated for this case: {reason}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The names of the outputs the expression reads, or <c>null</c> when it may read any of them: when it
+    /// uses the outputs object as a whole, or indexes it with a key only known when the case runs.
+    /// </summary>
+    private static IReadOnlySet<string>? OutputsRead(EmitterContext context, SyntaxBase syntax)
+    {
+        var outputs = new HashSet<SyntaxBase>(ReferenceEqualityComparer.Instance);
+        var accesses = new List<AccessExpressionSyntax>();
+
+        foreach (var node in SyntaxAggregator.Aggregate(syntax, node => node is ExpressionSyntax))
+        {
+            if (TestTargetType.IsEvaluatedOutputs(context.SemanticModel.GetTypeInfo(node)))
+            {
+                outputs.Add(node);
+            }
+
+            if (node is AccessExpressionSyntax access)
+            {
+                accesses.Add(access);
+            }
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var accessed = new HashSet<SyntaxBase>(ReferenceEqualityComparer.Instance);
+
+        foreach (var access in accesses.Where(access => outputs.Contains(access.BaseExpression)))
+        {
+            var keys = access switch
+            {
+                PropertyAccessSyntax property => [property.PropertyName.IdentifierName],
+                ArrayAccessSyntax index => KeysOf(context.SemanticModel.GetTypeInfo(index.IndexExpression)),
+                _ => null,
+            };
+
+            if (keys is null)
+            {
+                return null;
+            }
+
+            names.UnionWith(keys);
+            accessed.Add(access.BaseExpression);
+        }
+
+        return outputs.All(accessed.Contains) ? names : null;
+    }
+
+    /// <summary>
+    /// The keys an index of this type can be, or <c>null</c> when that is only known when the case runs.
+    /// </summary>
+    private static IEnumerable<string>? KeysOf(TypeSymbol indexType) => indexType switch
+    {
+        StringLiteralType literal => [literal.RawStringValue],
+        UnionType union => union.Members.Select(member => KeysOf(member.Type)).ToArray() is var keys && keys.All(key => key is not null)
+            ? keys.SelectMany(key => key ?? [])
+            : null,
+        _ => null,
+    };
 
     /// <summary>
     /// Whether the expression reads a body key of an evaluated instance. The type decides, not the key

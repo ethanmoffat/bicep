@@ -67,6 +67,16 @@ public static class TestTargetType
     /// </summary>
     public static bool IsEvaluatedResourceFact(TypeSymbol type) => ReferenceEquals(type, EvaluatedResourceFact);
 
+    /// <summary>
+    /// Whether a value is the evaluated outputs of the selected file, so a caller can tell which outputs
+    /// an expression reads.
+    /// </summary>
+    public static bool IsEvaluatedOutputs(TypeSymbol type) => ReferenceEquals(type, EvaluatedOutputs);
+
+    // The selected file is not known until a target is bound, and one test may cover many targets, so
+    // output names are resolved when the case runs rather than at compile time.
+    private static readonly ObjectType EvaluatedOutputs = new(OutputsPropertyName, TypeSymbolValidationFlags.Default, [], new TypeProperty(LanguageConstants.Any));
+
     private static readonly ObjectType ResourceFact = new(
         "resourceFact",
         TypeSymbolValidationFlags.Default,
@@ -242,9 +252,7 @@ public static class TestTargetType
                 "Module calls the selected file would make, one per deployment. Loops are expanded and false conditions are excluded."),
             new NamedTypeProperty(
                 OutputsPropertyName,
-                // The selected file is not known until a target is bound, and one test may cover many
-                // targets, so output names are resolved when the case runs rather than at compile time.
-                new ObjectType(OutputsPropertyName, TypeSymbolValidationFlags.Default, [], new TypeProperty(LanguageConstants.Any)),
+                EvaluatedOutputs,
                 TypePropertyFlags.ReadOnly,
                 "Evaluated values of the outputs the selected file declares, by output name."),
             new NamedTypeProperty(
