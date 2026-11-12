@@ -85,5 +85,67 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_UserDefinedFunctions_CanBeCalledFromAssertionsParamsAndEachOther()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "user-functions");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param prefix string
+
+                output name string = '${prefix}stg'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                type Naming = {
+                  prefix: string
+                  suffix: string?
+                }
+
+                func render(naming Naming) string => '${naming.prefix}${naming.?suffix ?? 'stg'}'
+                func renderAll(namings Naming[]) string[] => map(namings, n => render(n))
+                func isLower(value string) bool => value == toLower(value)
+
+                param naming Naming = { prefix: 'contoso' }
+                param fallback string = render({ prefix: 'fabrikam' })
+
+                var expected = render(naming)
+
+                test functions 'main.bicep' = {
+                  params: {
+                    prefix: toLower(naming.prefix)
+                  }
+                  assertions: {
+                    fromAssertion: {
+                      passWhen: target.evaluated.outputs.name == render(naming)
+                      message: 'Expected ${render(naming)}.'
+                    }
+                    fromVariable: {
+                      passWhen: target.evaluated.outputs.name == expected
+                      message: 'Expected ${expected}.'
+                    }
+                    fromAnotherFunction: {
+                      passWhen: length(filter(renderAll([naming, { prefix: 'UPPER' }]), n => !isLower(n))) == 1
+                      message: 'Only the upper-case name is not lower case.'
+                    }
+                    fromDefault: {
+                      passWhen: fallback == 'fabrikamstg'
+                      message: 'The default is rendered.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-detail", "all");
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("is not found");
+                output.Should().Contain("[✓] Evaluation functions (main.bicep) Passed!");
+                result.Should().Be(0);
+            }
+        }
     }
 }

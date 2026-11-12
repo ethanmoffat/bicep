@@ -108,6 +108,35 @@ test settingsAreApplied 'main.bicep' = {
 }
 ```
 
+### Functions in a test file
+
+A `func` declared in a test file can be called from a test's `params`, from an assertion's `passWhen` and `message`, from a variable, from a parameter default, and from another function. A user-defined type works as a function's parameter or result type. A function lets several assertions share one rule without repeating it:
+
+```bicep
+type Naming = {
+  prefix: string
+  suffix: string?
+}
+
+func render(naming Naming) string => '${naming.prefix}${naming.?suffix ?? 'stg'}'
+
+param naming Naming = { prefix: 'contoso' }
+
+test functions 'main.bicep' = {
+  params: {
+    prefix: naming.prefix
+  }
+  assertions: {
+    nameIsRendered: {
+      passWhen: target.evaluated.outputs.name == render(naming)
+      message: 'Expected ${render(naming)}.'
+    }
+  }
+}
+```
+
+An input file cannot declare a function. Declare it in the test file and supply only values from the input file.
+
 ## Selecting targets with `match`
 
 A test can also select its targets from the filesystem instead of naming one. Omit the literal path and declare a `match` selector in the test body:
