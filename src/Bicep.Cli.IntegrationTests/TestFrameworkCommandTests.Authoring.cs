@@ -320,8 +320,8 @@ namespace Bicep.Cli.IntegrationTests
 
             using (new AssertionScope())
             {
-                error.Should().Contain("[✗] Evaluation requiredInput (main.bicep) Failed at 1 / 2 assertions!");
-                error.Should().Contain("Could not be evaluated: The input \"required\" has no value. Supply it from a test case or give it a default.");
+                error.Should().Contain("[!] Evaluation requiredInput (main.bicep) could not be evaluated!");
+                error.Should().Contain("The input \"required\" has no value. Supply it from a test case or give it a default.");
                 error.Should().NotContain("\"optional\"");
                 result.Should().Be(1);
             }

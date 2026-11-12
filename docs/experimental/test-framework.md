@@ -705,7 +705,7 @@ The test file's parameters are a real, checked contract. A case that sets a prop
 not declare, omits one it requires, or supplies the wrong type is a compile error in the input file,
 reported against the case that caused it — not a silently ignored value.
 
-An input whose type is nullable, such as `param suffix string?`, is optional. A case can leave it out or set it to `null`, and the test then reads it as `null`, as a template reads a nullable parameter that nothing supplied. The `null` reaches a target's nullable parameter unchanged, so `suffix ?? 'none'` works on both sides. An input that is neither nullable nor given a default is required: a case that leaves it out is a compile error, and a run without an input file reports, for each assertion that reads it, that the input has no value.
+An input whose type is nullable, such as `param suffix string?`, is optional. A case can leave it out or set it to `null`, and the test then reads it as `null`, as a template reads a nullable parameter that nothing supplied. The `null` reaches a target's nullable parameter unchanged, so `suffix ?? 'none'` works on both sides. An input that is neither nullable nor given a default is required: a case that leaves it out is a compile error, and a run without an input file reports the evaluation as errored, saying that the input has no value.
 
 The decorators that constrain a declared type work on a test file's parameters and types exactly as
 they do in a template: `@secure`, `@allowed`, `@minLength`/`@maxLength`, `@minValue`/`@maxValue`,
