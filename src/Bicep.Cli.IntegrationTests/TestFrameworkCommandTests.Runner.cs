@@ -1,0 +1,404 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+using System.Text.Json;
+using Bicep.Core.UnitTests;
+using Bicep.Core.UnitTests.Utils;
+using FluentAssertions;
+using FluentAssertions.Execution;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace Bicep.Cli.IntegrationTests
+{
+    /// <summary>
+    /// How the runner turns test files and input cases into results, and how it reports the ones that
+    /// could not run.
+    /// </summary>
+    public partial class TestFrameworkCommandTests
+    {
+        private InvocationSettings TestFrameworkSettings => new(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+
+        /// <summary>
+        /// A target with one resource and a test whose single assertion bounds its resource count by
+        /// a case value. Returns the path of the test file.
+        /// </summary>
+        private string WriteCountPolicy(string outputFileDir)
+        {
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource sql 'Microsoft.Sql/servers@2021-11-01' existing = {
+                  name: 'server'
+                }
+                """, outputFileDir);
+
+            return FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                test sizePolicy 'main.bicep' = {
+                  assertions: {
+                    bounded: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources} resources.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+        }
+
+        private static JsonElement[] ParseCases(string output)
+            => [.. JsonDocument.Parse(output).RootElement.GetProperty("cases").EnumerateArray()];
+
+        [TestMethod]
+        public async Task Test_InputCases_OneCaseThatCannotBeEvaluatedDoesNotSetAsideTheOthers()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-case-error");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = WriteCountPolicy(outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case first = {
+                  maxResources: 1
+                }
+
+                case broken = {
+                  maxResources: int('abc')
+                }
+
+                case third = {
+                  maxResources: 0
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Select(x => x.GetProperty("inputCase").GetString()).Should().Equal("first", "broken", "third");
+                cases.Select(x => x.GetProperty("status").GetString()).Should().Equal("passed", "errored", "failed");
+                cases[1].GetProperty("error").GetString().Should().StartWith("The case \"broken\" could not be evaluated: The template language function 'int' cannot convert");
+                error.Should().Contain("policy.biceptestparam: The case \"broken\" could not be evaluated:");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_ACompileErrorInOneCaseStopsEveryCaseAndNamesTheCase()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-case-compile-error");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = WriteCountPolicy(outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case first = {
+                  maxResources: 1
+                }
+
+                case typo = {
+                  maxResources: 'one'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (junit, _, _) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "junit");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("BCP036");
+                error.Should().Contain("policy.biceptestparam: The input file has compilation errors and cannot supply any cases.");
+                error.Should().NotContain("has no value");
+                cases.Select(x => x.GetProperty("inputCase").GetString()).Should().Equal("first", "typo");
+                cases.Select(x => x.GetProperty("status").GetString()).Should().Equal("errored", "errored");
+                cases[0].GetProperty("error").GetString().Should().Be("The input file has compilation errors in case \"typo\", reported above, so none of its cases were evaluated.");
+                cases[1].GetProperty("error").GetString().Should().Be("The case \"typo\" has errors, reported above, so none of the file's cases were evaluated.");
+                junit.Should().Contain("<testcase name=\"main.bicep#policy.biceptestparam#typo\"");
+                junit.Should().Contain("The case \"typo\" has errors, reported above, so none of the file's cases were evaluated.</error>");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_AnInputFileThatCannotCompileIsReportedInsteadOfRunningWithoutCases()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-input-compile-error");
+            Directory.CreateDirectory(outputFileDir);
+
+            var testPath = WriteCountPolicy(outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                deploymentContext = {
+                  location: 'eastus'
+                }
+
+                case first = {
+                  maxResources: 1
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (console, consoleError, _) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("BCP037");
+                error.Should().Contain("policy.biceptestparam: The input file has compilation errors and cannot supply any cases.");
+                cases.Should().ContainSingle();
+                cases[0].GetProperty("caseId").GetString().Should().Be("policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam");
+                cases[0].GetProperty("inputFile").GetString().Should().Be("policy.biceptestparam");
+                cases[0].GetProperty("inputCase").ValueKind.Should().Be(JsonValueKind.Null);
+                cases[0].GetProperty("status").GetString().Should().Be("errored");
+                cases[0].GetProperty("error").GetString().Should().Be("The input file has compilation errors and cannot supply any cases.");
+                (console + consoleError).Should().Contain("[!] Evaluation sizePolicy (main.bicep) [policy.biceptestparam] could not be evaluated!");
+                (console + consoleError).Should().NotContain("has no value");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_MissingInput_ReadByAnEvaluatedAssertionErrorsTheEvaluation()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-missing-input-evaluated");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string
+
+                resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: name
+                  location: 'eastus'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param name string
+
+                test oneAccount 'main.bicep' = {
+                  params: {
+                    name: name
+                  }
+                  assertions: {
+                    deploysOne: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'One account.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (_, error, _) = await Bicep(TestFrameworkSettings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Should().ContainSingle();
+                cases[0].GetProperty("status").GetString().Should().Be("errored");
+                cases[0].GetProperty("error").GetString().Should().Be("The input \"name\" has no value. Supply it from a test case or give it a default.");
+                cases[0].TryGetProperty("assertions", out _).Should().BeFalse();
+                error.Should().Contain("[!] Evaluation oneAccount (main.bicep) could not be evaluated!");
+                error.Should().Contain("Failed! - Failed: 0, Errored: 1, Passed: 0, Total: 1");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_InputCases_ATestThatReadsNothingACaseSuppliesRunsOnce()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-case-independent");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'acct'
+                  location: 'eastus'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                var expected = 1
+
+                mocks = {
+                  perCase: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct${maxResources}'
+                    apiVersion: '2023-01-01'
+                    response: {}
+                  }
+                }
+
+                test sourceOnly 'main.bicep' = {
+                  assertions: {
+                    oneDeclared: {
+                      passWhen: length(target.resources) == expected
+                      message: 'One declaration.'
+                    }
+                  }
+                }
+
+                test readsParam 'main.bicep' = {
+                  assertions: {
+                    bounded: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources}.'
+                    }
+                  }
+                }
+
+                test readsEvaluated 'main.bicep' = {
+                  assertions: {
+                    oneInstance: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'One instance.'
+                    }
+                  }
+                }
+
+                test readsWholeTarget 'main.bicep' = {
+                  assertions: {
+                    hasKeys: {
+                      passWhen: length(items(target)) > 0
+                      message: 'Has keys.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case small = {
+                  maxResources: 0
+                }
+
+                case large = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (_, error, _) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Select(x => x.GetProperty("caseId").GetString()).Should().Equal(
+                    "policy.biceptest#sourceOnly#main.bicep",
+                    "policy.biceptest#readsParam#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsParam#main.bicep#policy.biceptestparam#large",
+                    "policy.biceptest#readsEvaluated#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsEvaluated#main.bicep#policy.biceptestparam#large",
+                    "policy.biceptest#readsWholeTarget#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsWholeTarget#main.bicep#policy.biceptestparam#large");
+                cases[0].GetProperty("inputFile").ValueKind.Should().Be(JsonValueKind.Null);
+                cases[0].GetProperty("inputCase").ValueKind.Should().Be(JsonValueKind.Null);
+                cases[0].GetProperty("status").GetString().Should().Be("passed");
+                error.Should().Contain("Failed! - Failed: 1, Errored: 0, Passed: 6, Total: 7");
+            }
+        }
+
+        /// <summary>
+        /// Two test files beside one target: the count policy, which takes cases, and a second file
+        /// with two source tests. Returns the directory.
+        /// </summary>
+        private string WriteSelectableTests(string name)
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, name);
+            Directory.CreateDirectory(outputFileDir);
+
+            WriteCountPolicy(outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case small = {
+                  maxResources: 0
+                }
+
+                case large = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "source.biceptest", """
+                test oneResource 'main.bicep' = {
+                  assertions: {
+                    one: {
+                      passWhen: length(target.resources) == 1
+                      message: 'One resource.'
+                    }
+                  }
+                }
+
+                test noModules 'main.bicep' = {
+                  assertions: {
+                    none: {
+                      passWhen: empty(target.modules)
+                      message: 'No modules.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            return outputFileDir;
+        }
+
+        [TestMethod]
+        public async Task Test_SelectTests_RunsOnlyTheNamedTestsWithEachOfTheirCases()
+        {
+            var outputFileDir = WriteSelectableTests("runner-select-tests");
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+            var inputPath = Path.Combine(outputFileDir, "policy.biceptestparam");
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "sizePolicy", "--test", "noModules", "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (single, _, singleResult) = await Bicep(TestFrameworkSettings, "test", Path.Combine(outputFileDir, "source.biceptest"), "--test", "noModules", "--output-format", "json");
+            var (listed, listError, listResult) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "oneResource", "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Select(x => x.GetProperty("caseId").GetString()).Should().Equal(
+                    "policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam#large",
+                    "source.biceptest#noModules#main.bicep");
+                singleResult.Should().Be(0);
+                ParseCases(single).Select(x => x.GetProperty("caseId").GetString()).Should().Equal("source.biceptest#noModules#main.bicep");
+                listResult.Should().Be(0);
+                listed.Trim().Should().Be("source.biceptest: oneResource -> main.bicep");
+                listError.Should().NotContain("policy.biceptest");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SelectTests_ANameNoTestFileDeclaresIsAnError()
+        {
+            var outputFileDir = WriteSelectableTests("runner-select-unknown");
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+
+            var (output, error, result) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "oneResource", "--test", "missing", "--output-format", "json");
+            var (_, listError, listResult) = await Bicep(TestFrameworkSettings, "test", Path.Combine(outputFileDir, "source.biceptest"), "--test", "OneResource", "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("--test missing: no test with this name was found in the test files being run.");
+                error.Should().NotContain("--test oneResource");
+                ParseCases(output).Select(x => x.GetProperty("caseId").GetString()).Should().Equal("source.biceptest#oneResource#main.bicep");
+                listResult.Should().Be(1);
+                listError.Should().Contain("--test OneResource: no test with this name was found in the test files being run.");
+            }
+        }
+    }
+}

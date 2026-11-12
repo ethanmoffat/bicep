@@ -40,14 +40,16 @@ public record TestInventory(ImmutableArray<TestInventoryEntry> Entries, Immutabl
 /// </summary>
 public static class TestDiscoveryService
 {
-    public static TestInventory Discover(SemanticModel testFileModel)
+    /// <param name="testFileModel">The test file.</param>
+    /// <param name="testNames">The names of the tests to list, or null to list every test.</param>
+    public static TestInventory Discover(SemanticModel testFileModel, IReadOnlySet<string>? testNames = null)
     {
         var testFileHandle = testFileModel.SourceFile.FileHandle;
         var testFileUri = testFileHandle.Uri;
         var entries = ImmutableArray.CreateBuilder<TestInventoryEntry>();
         var skippedDirectories = ImmutableArray.CreateBuilder<IOUri>();
 
-        foreach (var testDeclaration in testFileModel.Root.TestDeclarations)
+        foreach (var testDeclaration in testFileModel.Root.TestDeclarations.Where(test => testNames is null || testNames.Contains(test.Name)))
         {
             var declaration = testDeclaration.DeclaringTest;
 

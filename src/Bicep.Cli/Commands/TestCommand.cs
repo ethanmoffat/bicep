@@ -11,6 +11,7 @@ using Bicep.Cli.Logging;
 using Bicep.Cli.Services;
 using Bicep.Core;
 using Bicep.Core.Features;
+using Bicep.Core.Semantics;
 using Bicep.IO.Abstraction;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -123,6 +124,10 @@ namespace Bicep.Cli.Commands
             // Which input files turned out to belong to something that was run. An input passed over
             // for every discovered test file named a test nobody ran, which is a silent loss of cases.
             var inputsThatBound = new HashSet<IOUri>();
+            // The tests asked for by name, and which of those some test file declared. A name nobody
+            // declared selected nothing, which would otherwise read as a run with nothing to report.
+            var testNames = args.Tests.IsDefaultOrEmpty ? null : args.Tests.ToHashSet(LanguageConstants.IdentifierComparer);
+            var testNamesFound = new HashSet<string>(LanguageConstants.IdentifierComparer);
 
             foreach (var inputUri in inputUris)
             {
@@ -145,7 +150,7 @@ namespace Bicep.Cli.Commands
 
                 if (args.List)
                 {
-                    var (listHasErrors, inventory) = await ListAsync(args, inputUri, documentToStdout);
+                    var (listHasErrors, inventory) = await ListAsync(args, inputUri, documentToStdout, testNames, testNamesFound);
 
                     hasErrors |= listHasErrors;
                     allInventoryEntries.AddRange(inventory.Entries);
@@ -153,6 +158,12 @@ namespace Bicep.Cli.Commands
                 }
 
                 var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
+
+                if (!SelectsAnyTest(compilation.GetEntrypointSemanticModel(), testNames, testNamesFound))
+                {
+                    continue;
+                }
+
                 var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
                 var (inputCases, inputErrors, boundInputs) = await LoadInputCasesAsync(args, inputUri, discovered: args.FilePattern is not null);
 
@@ -167,7 +178,7 @@ namespace Bicep.Cli.Commands
 
                 hasErrors |= inputErrors.Length > 0;
 
-                var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel(), inputCases);
+                var testResults = await new TestRunner(compiler).RunAsync(compilation.GetEntrypointSemanticModel(), inputCases, testNames);
 
                 if (!documentToStdout)
                 {
@@ -177,6 +188,15 @@ namespace Bicep.Cli.Commands
                 allResults.AddRange(testResults.Results);
 
                 hasErrors |= summary.HasErrors;
+            }
+
+            if (testNames is not null)
+            {
+                foreach (var missing in args.Tests.Where(name => !testNamesFound.Contains(name)).Distinct(LanguageConstants.IdentifierComparer))
+                {
+                    await io.Error.Writer.WriteLineAsync($"{Option.Test} {missing}: no test with this name was found in the test files being run.");
+                    hasErrors = true;
+                }
             }
 
             if (args.List)
@@ -274,9 +294,10 @@ namespace Bicep.Cli.Commands
                 ArgumentHelper.ValidateBicepTestParamFile(inputUri);
 
                 var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
-                var result = TestInputCaseLoader.Load(compilation.GetEntrypointSemanticModel(), testFileUri);
+                var inputModel = compilation.GetEntrypointSemanticModel();
+                var result = TestInputCaseLoader.Load(inputModel, testFileUri);
 
-                if (result.Error is { } error)
+                if (result.Error is not null || inputModel.HasErrors())
                 {
                     if (discovered && result.BoundTestFile is not null)
                     {
@@ -284,12 +305,33 @@ namespace Bicep.Cli.Commands
                     }
 
                     diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+                }
+
+                if (result.Error is { } error)
+                {
                     errors.Add($"{inputUri.GetFileName()}: {error}");
+
+                    // A test file named outright is the only one an input whose binding could not be
+                    // read could have been meant for, so the failure is reported as that file's result:
+                    // running its tests without the cases instead would report outcomes nobody asked for.
+                    if (!discovered && result.BoundTestFile is null)
+                    {
+                        bound.Add(inputUri);
+                        cases.Add(TestInputCase.Failed(inputUri, null, error));
+                    }
+
                     continue;
                 }
 
                 bound.Add(inputUri);
                 cases.AddRange(result.Cases);
+
+                // A case that cannot run is reported here as well as in its results, so the run fails
+                // even when no evaluation reached the case. A file that does not compile is reported
+                // once, however many of its cases that stopped.
+                errors.AddRange(inputModel.HasErrors()
+                    ? [$"{inputUri.GetFileName()}: {TestInputCaseLoader.CompilationError}"]
+                    : result.Cases.Select(x => x.Error).OfType<string>().Select(error => $"{inputUri.GetFileName()}: {error}"));
             }
 
             return (cases.ToImmutable(), errors.ToImmutable(), bound.ToImmutable());
@@ -299,11 +341,17 @@ namespace Bicep.Cli.Commands
         /// Reports what a test file covers without compiling, restoring or evaluating any target.
         /// Listing confirms inventory; it never claims the targets compile or pass.
         /// </summary>
-        private async Task<(bool hasErrors, TestInventory inventory)> ListAsync(TestArguments args, IOUri inputUri, bool documentToStdout)
+        private async Task<(bool hasErrors, TestInventory inventory)> ListAsync(TestArguments args, IOUri inputUri, bool documentToStdout, IReadOnlySet<string>? testNames, HashSet<string> testNamesFound)
         {
             var compilation = await compiler.CreateCompilation(inputUri, skipRestore: true);
+
+            if (!SelectsAnyTest(compilation.GetEntrypointSemanticModel(), testNames, testNamesFound))
+            {
+                return (false, new([], []));
+            }
+
             var summary = diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
-            var inventory = TestDiscoveryService.Discover(compilation.GetEntrypointSemanticModel());
+            var inventory = TestDiscoveryService.Discover(compilation.GetEntrypointSemanticModel(), testNames);
 
             if (!documentToStdout)
             {
@@ -326,6 +374,24 @@ namespace Bicep.Cli.Commands
             }
 
             return (summary.HasErrors || inventory.HasErrors, inventory);
+        }
+
+        /// <summary>
+        /// Whether a test file declares any of the tests asked for by name, recording the names it
+        /// declares. A file that declares none of them takes no part in the run: it is not reported,
+        /// and neither are its diagnostics, since nothing that was asked for is in it.
+        /// </summary>
+        private static bool SelectsAnyTest(SemanticModel testFileModel, IReadOnlySet<string>? testNames, HashSet<string> testNamesFound)
+        {
+            if (testNames is null)
+            {
+                return true;
+            }
+
+            var declared = testFileModel.Root.TestDeclarations.Select(test => test.Name).Where(testNames.Contains).ToArray();
+            testNamesFound.UnionWith(declared);
+
+            return declared.Length > 0;
         }
 
         private void LogResults(TestResults testResults, bool qualifyWithTestFile, TestOutputDetail detail)
@@ -387,7 +453,7 @@ namespace Bicep.Cli.Commands
                 // Only what distinguishes this case from its siblings is left to say: the heading above
                 // has already named the test and the target.
                 var label = result.Identity.Inputs is { } inputs
-                    ? $"Case {inputs.InputFileName}: {inputs.Name}"
+                    ? $"Case {inputs.DisplayName}"
                     : $"Case {DescribeCase(result, qualifyWithTestFile)}";
 
                 LogResult(result, GroupIndent, label, writer);
@@ -420,7 +486,7 @@ namespace Bicep.Cli.Commands
             // The case is named so that two outcomes of the same test and target, differing only in
             // the values they ran with, are never reported as the same thing.
             return result.Identity.Inputs is { } inputs
-                ? $"{target} [{inputs.InputFileName}: {inputs.Name}]"
+                ? $"{target} [{inputs.DisplayName}]"
                 : target;
         }
 
@@ -542,6 +608,10 @@ namespace Bicep.Cli.Commands
                 Description = "Runs the tests once per case declared in the specified .biceptestparam file. Each input file applies to the test file it names. May be specified more than once.",
                 AllowMultipleArgumentsPerToken = true,
             };
+            var testOption = new System.CommandLine.Option<string[]>(Option.Test)
+            {
+                Description = "Runs only the test with the specified name, in every test file being run. May be specified more than once. A name that no test file declares is an error.",
+            };
             var listOption = new System.CommandLine.Option<bool>(Option.List)
             {
                 Description = "Lists the tests and targets that would run, without evaluating them.",
@@ -569,6 +639,7 @@ namespace Bicep.Cli.Commands
 
             command.Add(inputFileArgument);
             command.Add(inputsOption);
+            command.Add(testOption);
             command.Add(listOption);
             command.Add(outputFormatOption);
             command.Add(outputDetailOption);
@@ -588,6 +659,7 @@ namespace Bicep.Cli.Commands
                     result.GetValue(noRestoreOption),
                     result.GetValue(listOption),
                     [.. result.GetValue(inputsOption) ?? []],
+                    [.. result.GetValue(testOption) ?? []],
                     result.GetValue(outputFormatOption),
                     result.GetValue(outputDetailOption),
                     result.GetValue(resultsFileOption),

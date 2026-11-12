@@ -59,14 +59,15 @@ namespace Bicep.Cli.Services
         /// Runs every test in the file. When input cases are supplied, each test runs once per target per
         /// case: cases supply values, and can never change which targets a test applies to.
         /// </summary>
-        public async Task<TestResults> RunAsync(SemanticModel testFileModel, ImmutableArray<TestInputCase> inputCases = default)
+        /// <param name="testNames">The names of the tests to run, or null to run every test.</param>
+        public async Task<TestResults> RunAsync(SemanticModel testFileModel, ImmutableArray<TestInputCase> inputCases = default, IReadOnlySet<string>? testNames = null)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var testResults = ImmutableArray.CreateBuilder<TestResult>();
 
             // With no input file a test runs once against whatever defaults it declares, which is what
             // every existing test file already relies on.
-            TestInputCase?[] cases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
+            TestInputCase?[] allCases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
 
             // A test with compile errors is not what its author wrote, so whatever it computed would be
             // reported against the wrong test. Errors are located rather than counted: one broken test
@@ -78,11 +79,20 @@ namespace Bicep.Cli.Services
                 ? "The test file has errors, reported above, so none of its tests were evaluated."
                 : null;
 
-            foreach (var testDeclaration in tests)
+            // Unselected tests still count when locating errors above: an error in one of them is
+            // inside a test, so it does not stop the selected ones.
+            foreach (var testDeclaration in tests.Where(test => testNames is null || testNames.Contains(test.Name)))
             {
                 var testError = fileError ?? (errorPositions.Any(testDeclaration.DeclaringTest.Span.ContainsInclusive)
                     ? "The test has errors, reported above, so it was not evaluated."
                     : null);
+
+                // A test that reads nothing a case supplies gives every case the same answer, so it runs
+                // once and is reported without a case, instead of repeating that answer once per case.
+                // A case that could not supply its values does not stop it either, since it reads none.
+                TestInputCase?[] cases = allCases is not [null] && testError is null && !TestCaseDependence.DependsOnCase(testFileModel, testDeclaration.DeclaringTest)
+                    ? [null]
+                    : allCases;
 
                 if (testDeclaration.DeclaringTest.IsTargetless)
                 {
@@ -235,6 +245,13 @@ namespace Bicep.Cli.Services
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri, inputCase);
 
+            // A case that could not supply its values is reported here, once per evaluation it would
+            // have run, so it is counted under its own name rather than vanishing from the results.
+            if (inputCase?.Error is { } caseError)
+            {
+                return new TestResult(testDeclaration, identity, new TestEvaluation(null, caseError, [], []));
+            }
+
             if (testDeclaration.DeclaringTest.TryGetAssertionsSyntax() is { Properties: { } declared } && declared.Any())
             {
                 return new TestResult(testDeclaration, identity, EvaluateSemanticAssertions(testFileModel, testDeclaration, targetModel, factRoot, inputCase));
@@ -248,7 +265,9 @@ namespace Bicep.Cli.Services
             try
             {
                 var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
-                var mocks = GetMocks(testFileModel, inputCase);
+                // A test that reads no evaluated value never consults a mock, and runs without a case, so
+                // definitions that read the case's inputs are not evaluated for it.
+                var mocks = TestCaseDependence.DependsOnCase(testFileModel, testDeclaration.DeclaringTest) ? GetMocks(testFileModel, inputCase) : TestMockRegistry.Empty;
 
                 // Built here but not used unless an assertion actually reads an evaluated value: source
                 // policies must keep working without any deployment inputs.
@@ -267,7 +286,7 @@ namespace Bicep.Cli.Services
             }
             catch (Exception exception)
             {
-                return new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
+                return new TestEvaluation(null, BicepValueEvaluator.FindMissingInput(exception)?.Message ?? SanitizeEvaluationError(exception), [], []);
             }
         }
 

@@ -95,6 +95,13 @@ public class TestAssertionEvaluator
         }
         catch (Exception exception)
         {
+            // A missing input is not something this assertion got wrong: the case could not run at all,
+            // so it is raised to the evaluation and reported the way an unevaluated target is.
+            if (BicepValueEvaluator.FindMissingInput(exception) is { } missing)
+            {
+                throw missing;
+            }
+
             return new AssertionResult(name, false) { Message = message, Error = BicepValueEvaluator.Sanitize(exception) };
         }
     }

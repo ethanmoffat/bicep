@@ -3,6 +3,7 @@
 
 using System.Collections.Immutable;
 using Bicep.Core;
+using Bicep.Core.Diagnostics;
 using Bicep.Core.Emit;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
@@ -27,20 +28,18 @@ public record TestInputFileResult(IOUri InputFile, ImmutableArray<TestInputCase>
 /// </summary>
 public static class TestInputCaseLoader
 {
+    public const string CompilationError = "The input file has compilation errors and cannot supply any cases.";
+
     public static TestInputFileResult Load(SemanticModel inputFileModel, IOUri expectedTestFile)
     {
         var inputFileUri = inputFileModel.SourceFile.FileHandle.Uri;
-
-        if (inputFileModel.HasErrors())
-        {
-            return new(inputFileUri, [], "The input file has compilation errors and cannot supply any cases.");
-        }
+        var hasErrors = inputFileModel.HasErrors();
 
         // An input file binds to exactly one test file. Silently running its cases against a different
         // test would report results for inputs that were never written for it.
         if (!inputFileModel.Root.TryGetTestFileSemanticModelViaUsing().IsSuccess(out var boundTestModel, out var failure))
         {
-            return new(inputFileUri, [], failure.Message);
+            return new(inputFileUri, [], hasErrors ? CompilationError : failure.Message);
         }
 
         var boundUri = boundTestModel.SourceFile.FileHandle.Uri;
@@ -51,6 +50,34 @@ public static class TestInputCaseLoader
             // files can tell "these cases belong to one of the others" from "these cases belong to
             // a test file nobody is running".
             return new(inputFileUri, [], $"The input file supplies cases for \"{boundUri.GetPathRelativeTo(inputFileUri)}\", not the test file being run.", boundUri);
+        }
+
+        // From here on the file is known to be this test file's input, so whatever stops it is
+        // reported as one of this test file's results rather than as a file that was passed over.
+        // An input file that does not compile supplies no cases at all, as a template that does not
+        // compile deploys nothing. Where the errors lie only decides how the result is named: an error
+        // outside every case belongs to the file, while one inside a case is reported under that
+        // case's name and its siblings say which case stopped them.
+        var caseDeclarations = inputFileModel.Root.TestCaseDeclarations;
+
+        if (hasErrors)
+        {
+            var errorPositions = inputFileModel.GetAllDiagnostics().Where(x => x.IsError()).Select(x => x.Span.Position).ToImmutableArray();
+
+            if (errorPositions.Any(position => !caseDeclarations.Any(declaration => Contains(declaration.DeclaringTestCase, position))))
+            {
+                return new(inputFileUri, [TestInputCase.Failed(inputFileUri, null, CompilationError)], null);
+            }
+
+            var broken = caseDeclarations.Where(declaration => errorPositions.Any(position => Contains(declaration.DeclaringTestCase, position))).Select(x => x.Name).ToImmutableArray();
+            var siblingError = $"The input file has compilation errors in {(broken.Length == 1 ? "case" : "cases")} {string.Join(", ", broken.Select(x => $"\"{x}\""))}, reported above, so none of its cases were evaluated.";
+
+            return new(inputFileUri, [.. caseDeclarations.Select(declaration => TestInputCase.Failed(
+                inputFileUri,
+                declaration.Name,
+                broken.Contains(declaration.Name)
+                    ? $"The case \"{declaration.Name}\" has errors, reported above, so none of the file's cases were evaluated."
+                    : siblingError))], null);
         }
 
         var context = new EmitterContext(inputFileModel);
@@ -70,15 +97,18 @@ public static class TestInputCaseLoader
             }
             catch (Exception exception)
             {
-                return new(inputFileUri, [], $"The deployment context could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}");
+                return new(inputFileUri, [TestInputCase.Failed(inputFileUri, null, $"The deployment context could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}")], null);
             }
         }
 
-        foreach (var declaration in inputFileModel.Root.TestCaseDeclarations)
+        // Each case stands alone: one that cannot be evaluated is recorded under its own name and the
+        // rest of the file still runs, because a case's values never depend on another case's.
+        foreach (var declaration in caseDeclarations)
         {
             if (declaration.DeclaringTestCase.Body is not { } body)
             {
-                return new(inputFileUri, [], $"The case \"{declaration.Name}\" does not declare a body.");
+                cases.Add(TestInputCase.Failed(inputFileUri, declaration.Name, $"The case \"{declaration.Name}\" does not declare a body."));
+                continue;
             }
 
             try
@@ -92,11 +122,22 @@ public static class TestInputCaseLoader
             }
             catch (Exception exception)
             {
-                return new(inputFileUri, [], $"The case \"{declaration.Name}\" could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}");
+                cases.Add(TestInputCase.Failed(inputFileUri, declaration.Name, $"The case \"{declaration.Name}\" could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}"));
             }
         }
 
         return new(inputFileUri, cases.ToImmutable(), null);
+    }
+
+    /// <summary>
+    /// Whether a diagnostic belongs to a case. The decorators in front of a case are part of it, since
+    /// they set that case's deployment context.
+    /// </summary>
+    private static bool Contains(TestCaseDeclarationSyntax declaration, int position)
+    {
+        var start = declaration.Decorators.FirstOrDefault()?.Span.Position ?? declaration.Span.Position;
+
+        return position >= start && position <= declaration.Span.Position + declaration.Span.Length;
     }
 
     /// <summary>

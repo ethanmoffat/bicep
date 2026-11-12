@@ -148,7 +148,7 @@ public static class TestJUnitSerializer
     /// </summary>
     private static string GetCaseName(TestCaseIdentity identity)
         => identity.Inputs is { } inputs
-            ? $"{identity.RelativeTargetPath}#{inputs.InputFileName}#{inputs.Name}"
+            ? $"{identity.RelativeTargetPath}#{inputs.CaseIdSuffix}"
             : identity.RelativeTargetPath;
 
     /// <summary>
