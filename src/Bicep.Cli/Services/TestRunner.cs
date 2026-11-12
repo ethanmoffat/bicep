@@ -66,7 +66,7 @@ namespace Bicep.Cli.Services
 
             // With no input file a test runs once against whatever defaults it declares, which is what
             // every existing test file already relies on.
-            TestInputCase?[] cases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
+            TestInputCase?[] allCases = inputCases.IsDefaultOrEmpty ? [null] : [.. inputCases.Select(x => (TestInputCase?)x)];
 
             // A test with compile errors is not what its author wrote, so whatever it computed would be
             // reported against the wrong test. Errors are located rather than counted: one broken test
@@ -83,6 +83,13 @@ namespace Bicep.Cli.Services
                 var testError = fileError ?? (errorPositions.Any(testDeclaration.DeclaringTest.Span.ContainsInclusive)
                     ? "The test has errors, reported above, so it was not evaluated."
                     : null);
+
+                // A test that reads nothing a case supplies gives every case the same answer, so it runs
+                // once and is reported without a case, instead of repeating that answer once per case.
+                // A case that could not supply its values does not stop it either, since it reads none.
+                TestInputCase?[] cases = allCases is not [null] && testError is null && !TestCaseDependence.DependsOnCase(testFileModel, testDeclaration.DeclaringTest)
+                    ? [null]
+                    : allCases;
 
                 if (testDeclaration.DeclaringTest.IsTargetless)
                 {
@@ -255,7 +262,9 @@ namespace Bicep.Cli.Services
             try
             {
                 var facts = TestTargetFactsCollector.Collect(targetModel, factRoot);
-                var mocks = GetMocks(testFileModel, inputCase);
+                // A test that reads no evaluated value never consults a mock, and runs without a case, so
+                // definitions that read the case's inputs are not evaluated for it.
+                var mocks = TestCaseDependence.DependsOnCase(testFileModel, testDeclaration.DeclaringTest) ? GetMocks(testFileModel, inputCase) : TestMockRegistry.Empty;
 
                 // Built here but not used unless an assertion actually reads an evaluated value: source
                 // policies must keep working without any deployment inputs.

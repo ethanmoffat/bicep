@@ -532,7 +532,7 @@ Evaluation sizes (storage.bicep) - 0/3 cases passed
 Failed! - Failed: 0, Errored: 3, Passed: 0, Total: 3, Duration: 0ms
 ```
 
-An input file that does not compile supplies no cases, just as a template that does not compile deploys nothing, and the tests are never run without its cases instead. Each evaluation the file would have supplied is reported as errored. When every error lies inside cases, each evaluation keeps its case's name, and the reason names the case that holds the error. An error outside every case, such as a `deploymentContext` that does not type check or a `using` that names no test file, belongs to the file itself, so each evaluation is reported against the input file with no case name.
+An input file that does not compile supplies no cases, just as a template that does not compile deploys nothing, and the tests that read its cases are never run without them instead. Each evaluation the file would have supplied is reported as errored. When every error lies inside cases, each evaluation keeps its case's name, and the reason names the case that holds the error. An error outside every case, such as a `deploymentContext` that does not type check or a `using` that names no test file, belongs to the file itself, so each evaluation is reported against the input file with no case name.
 
 Decorators that shape a deployment or an export — `@batchSize`, `@export` and the resource
 decorators — are not available in a test file, because nothing in it is deployed or imported.
@@ -564,7 +564,7 @@ the two streams separately never leaves a heading without its cases.
 ### Cases and targets multiply
 
 Every case applies to the complete set of targets a test selected: a test covering M targets, run
-with N cases, produces M × N evaluations. Cases supply values; they can never change which targets a
+with N cases, produces M × N evaluations, unless it reads nothing a case supplies (see below). Cases supply values; they can never change which targets a
 test applies to. A different set of targets is a different test file.
 
 Each evaluation is judged on its own, and its identity names the case it ran with, so two runs of the
@@ -586,6 +586,69 @@ Failed! - Failed: 2, Errored: 0, Passed: 2, Total: 4, Duration: 162ms
 
 An assertion's `message` is ordinary Bicep and may interpolate the values the assertion actually ran
 with, so a threshold stated in the message cannot drift away from the condition that enforced it.
+
+### A test that reads nothing a case supplies runs once
+
+A case supplies the test file's parameters and its deployment context, and nothing else. A test whose assertions read only source facts, never `target.evaluated`, a parameter or a deployment function, gives every case the same answer. Such a test runs once per target, without a case, however many cases the input file declares:
+
+```bicep
+// storage-once.biceptest
+param maxResources int
+
+test storageOnly = {
+  match: {
+    include: ['storage.bicep']
+  }
+  assertions: {
+    onlyStorageAccounts: {
+      passWhen: length(filter(target.resources, r => r.type != 'Microsoft.Storage/storageAccounts')) == 0
+      message: 'Only storage accounts may be declared.'
+    }
+  }
+}
+
+test sizePolicy = {
+  match: {
+    include: ['storage.bicep']
+  }
+  assertions: {
+    boundedResourceCount: {
+      passWhen: length(target.resources) <= maxResources
+      message: 'A target may declare at most ${maxResources} resources.'
+    }
+  }
+}
+```
+
+```bicep
+// storage-once.biceptestparam
+using 'storage-once.biceptest'
+
+case strict = {
+  maxResources: 0
+}
+
+case relaxed = {
+  maxResources: 5
+}
+```
+
+```console
+$ bicep test storage-once.biceptest --inputs storage-once.biceptestparam --output-detail all
+[✓] Evaluation storageOnly (storage.bicep) Passed!
+Evaluation sizePolicy (storage.bicep) - 1/2 cases passed
+  [✗] Case storage-once.biceptestparam: strict Failed at 1 / 1 assertions!
+    [✗] Assertion boundedResourceCount failed!
+      A target may declare at most 0 resources.
+  [✓] Case storage-once.biceptestparam: relaxed Passed!
+Failed! - Failed: 1, Errored: 0, Passed: 2, Total: 3, Duration: 227ms
+```
+
+With two cases the file reports three evaluations: `storageOnly` once and `sizePolicy` once per case. Before this rule it reported four, counting the same `storageOnly` answer once for each case. A test that reads no case contributes one evaluation per target. In the JSON and JUnit documents its evaluation carries no input file or case, exactly as in a run without `--inputs`, and its `caseId` ends at the target: `storage-once.biceptest#storageOnly#storage.bicep`.
+
+The runner decides this from the test's assertions and messages, following the test file's variables and functions they use. A test is run once per case whenever the decision is uncertain: when it has no assertions of its own (it then runs the target's template, which takes the case's values), when it hands `target` as a whole to a function, or when it reads anything the runner cannot follow, such as an imported symbol. Such a test also ignores the test file's `mocks`, which only answer evaluated values, so a mock built from a parameter does not need a case to be built for it.
+
+Because it reads nothing an input file supplies, such a test still runs when the input file cannot supply its cases, for example because a case does not compile.
 
 ### Failures are attributed, not fatal
 
@@ -1848,6 +1911,7 @@ Notes on the contract:
 - `target` is `null` when a test could not be resolved to any target; there is no target to name.
 - `inputFile` and `inputCase` name the case a run used. Both are `null` when no input file was
   supplied, so a host that never passes `--inputs` sees exactly the document it saw before.
+  Both are also `null` for a test that reads nothing a case supplies, which runs once whatever the input file holds (see "A test that reads nothing a case supplies runs once"); its `caseId` ends at the target.
   `inputCase` alone is `null` when an input file could supply no cases at all, for example because it has a compile error outside every case: the errored entry is still attributed to `inputFile`, and its `caseId` ends at the input file.
 - `assertions` is present only for cases that were actually evaluated. An errored case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares

@@ -209,5 +209,105 @@ namespace Bicep.Cli.IntegrationTests
                 error.Should().Contain("Failed! - Failed: 0, Errored: 1, Passed: 0, Total: 1");
             }
         }
+
+        [TestMethod]
+        public async Task Test_InputCases_ATestThatReadsNothingACaseSuppliesRunsOnce()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-case-independent");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'acct'
+                  location: 'eastus'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param maxResources int
+
+                var expected = 1
+
+                mocks = {
+                  perCase: {
+                    operation: 'reference'
+                    resourceId: '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct${maxResources}'
+                    apiVersion: '2023-01-01'
+                    response: {}
+                  }
+                }
+
+                test sourceOnly 'main.bicep' = {
+                  assertions: {
+                    oneDeclared: {
+                      passWhen: length(target.resources) == expected
+                      message: 'One declaration.'
+                    }
+                  }
+                }
+
+                test readsParam 'main.bicep' = {
+                  assertions: {
+                    bounded: {
+                      passWhen: length(target.resources) <= maxResources
+                      message: 'At most ${maxResources}.'
+                    }
+                  }
+                }
+
+                test readsEvaluated 'main.bicep' = {
+                  assertions: {
+                    oneInstance: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'One instance.'
+                    }
+                  }
+                }
+
+                test readsWholeTarget 'main.bicep' = {
+                  assertions: {
+                    hasKeys: {
+                      passWhen: length(items(target)) > 0
+                      message: 'Has keys.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case small = {
+                  maxResources: 0
+                }
+
+                case large = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (_, error, _) = await Bicep(TestFrameworkSettings, "test", testPath, "--inputs", inputPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Select(x => x.GetProperty("caseId").GetString()).Should().Equal(
+                    "policy.biceptest#sourceOnly#main.bicep",
+                    "policy.biceptest#readsParam#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsParam#main.bicep#policy.biceptestparam#large",
+                    "policy.biceptest#readsEvaluated#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsEvaluated#main.bicep#policy.biceptestparam#large",
+                    "policy.biceptest#readsWholeTarget#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#readsWholeTarget#main.bicep#policy.biceptestparam#large");
+                cases[0].GetProperty("inputFile").ValueKind.Should().Be(JsonValueKind.Null);
+                cases[0].GetProperty("inputCase").ValueKind.Should().Be(JsonValueKind.Null);
+                cases[0].GetProperty("status").GetString().Should().Be("passed");
+                error.Should().Contain("Failed! - Failed: 1, Errored: 0, Passed: 6, Total: 7");
+            }
+        }
     }
 }
