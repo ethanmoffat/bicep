@@ -343,6 +343,38 @@ parameter the target requires. Omitting `assertions`
 preserves the target-owned behaviour above. An `assertions` object that is present but empty is an
 error, because it neither asserts anything nor falls back to anything.
 
+### Conditions over several lines
+
+Bicep cannot continue an expression onto the next line after `&&` or `||`, in a test file or in a template, and wrapping the condition in parentheses does not change that. A long condition can still span lines in a form Bicep accepts. An array literal takes one element per line, so `!contains([...], false)` holds when every line is true and `contains([...], true)` holds when any line is:
+
+```bicep
+test naming 'main.bicep' = {
+  params: {
+    prefix: 'contoso'
+  }
+  assertions: {
+    nameFollowsTheRules: {
+      passWhen: !contains([
+        startsWith(target.evaluated.outputs.name, 'contoso')
+        endsWith(target.evaluated.outputs.name, 'stg')
+        length(target.evaluated.outputs.name) <= 24
+      ], false)
+      message: 'The name starts with the prefix, ends with stg and has at most 24 characters.'
+    }
+  }
+}
+```
+
+Every element of the array is evaluated, so a line cannot guard the next one. Where one condition only makes sense once another holds, such as reading `items[0]` after checking `length(items) > 0`, use a conditional expression, which can break before `?` and before `:` and evaluates only the branch it takes:
+
+```bicep
+passWhen: length(items) > 0
+  ? items[0] == 'a'
+  : false
+```
+
+A function declared in the test file, or a variable, can also name a condition once so that each assertion stays short. See [Functions in a test file](#functions-in-a-test-file).
+
 ### The `target` symbol
 
 Inside `assertions`, `target` is a typed, read-only symbol describing the compiler's view of the
