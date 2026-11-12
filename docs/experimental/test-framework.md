@@ -531,6 +531,14 @@ A test file's inputs are its own. It decides which of them reach a target's prod
 which only shape its own policy. There is no implicit forwarding: a value a target never receives
 cannot influence what it computes.
 
+A value that reaches a target is checked the way ARM checks a deployment parameter, including each property of a user-defined type. ARM does not convert a string to a `bool` or an `int`, either for a top-level parameter or for a property nested inside an object or array, so a target that declares `flag: bool` rejects `'true'` with the error a deployment would report:
+
+```text
+Could not be evaluated: The provided value for the template parameter 'items[0].flag' is not valid. Expected a value of type 'Boolean', but received a value of type 'String'. ...
+```
+
+Some deployment tools convert such values on the client before they submit the deployment, for example `name=value` arguments given to `az deployment ... --parameters`, or a rollout system that renders its configuration into strings and converts them back. A case describes what ARM receives, so give the value its real type in the case, or convert it with `bool()` or `int()` in the test file when the source is a string.
+
 ### Running with `--inputs`
 
 ```console
