@@ -309,5 +309,96 @@ namespace Bicep.Cli.IntegrationTests
                 error.Should().Contain("Failed! - Failed: 1, Errored: 0, Passed: 6, Total: 7");
             }
         }
+
+        /// <summary>
+        /// Two test files beside one target: the count policy, which takes cases, and a second file
+        /// with two source tests. Returns the directory.
+        /// </summary>
+        private string WriteSelectableTests(string name)
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, name);
+            Directory.CreateDirectory(outputFileDir);
+
+            WriteCountPolicy(outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case small = {
+                  maxResources: 0
+                }
+
+                case large = {
+                  maxResources: 5
+                }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "source.biceptest", """
+                test oneResource 'main.bicep' = {
+                  assertions: {
+                    one: {
+                      passWhen: length(target.resources) == 1
+                      message: 'One resource.'
+                    }
+                  }
+                }
+
+                test noModules 'main.bicep' = {
+                  assertions: {
+                    none: {
+                      passWhen: empty(target.modules)
+                      message: 'No modules.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            return outputFileDir;
+        }
+
+        [TestMethod]
+        public async Task Test_SelectTests_RunsOnlyTheNamedTestsWithEachOfTheirCases()
+        {
+            var outputFileDir = WriteSelectableTests("runner-select-tests");
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+            var inputPath = Path.Combine(outputFileDir, "policy.biceptestparam");
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "sizePolicy", "--test", "noModules", "--inputs", inputPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (single, _, singleResult) = await Bicep(TestFrameworkSettings, "test", Path.Combine(outputFileDir, "source.biceptest"), "--test", "noModules", "--output-format", "json");
+            var (listed, listError, listResult) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "oneResource", "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Select(x => x.GetProperty("caseId").GetString()).Should().Equal(
+                    "policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam#small",
+                    "policy.biceptest#sizePolicy#main.bicep#policy.biceptestparam#large",
+                    "source.biceptest#noModules#main.bicep");
+                singleResult.Should().Be(0);
+                ParseCases(single).Select(x => x.GetProperty("caseId").GetString()).Should().Equal("source.biceptest#noModules#main.bicep");
+                listResult.Should().Be(0);
+                listed.Trim().Should().Be("source.biceptest: oneResource -> main.bicep");
+                listError.Should().NotContain("policy.biceptest");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_SelectTests_ANameNoTestFileDeclaresIsAnError()
+        {
+            var outputFileDir = WriteSelectableTests("runner-select-unknown");
+            var pattern = Path.Combine(outputFileDir, "*.biceptest");
+
+            var (output, error, result) = await Bicep(TestFrameworkSettings, "test", pattern, "--test", "oneResource", "--test", "missing", "--output-format", "json");
+            var (_, listError, listResult) = await Bicep(TestFrameworkSettings, "test", Path.Combine(outputFileDir, "source.biceptest"), "--test", "OneResource", "--list");
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                error.Should().Contain("--test missing: no test with this name was found in the test files being run.");
+                error.Should().NotContain("--test oneResource");
+                ParseCases(output).Select(x => x.GetProperty("caseId").GetString()).Should().Equal("source.biceptest#oneResource#main.bicep");
+                listResult.Should().Be(1);
+                listError.Should().Contain("--test OneResource: no test with this name was found in the test files being run.");
+            }
+        }
     }
 }

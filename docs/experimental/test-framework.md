@@ -1598,6 +1598,38 @@ an author who had to know in advance which of two spellings their path needed go
 file-not-found when they guessed wrong. Glob metacharacters are not legal in a Bicep file name, so
 which of the two was meant is never ambiguous.
 
+### Running named tests with `--test`
+
+`--test <name>` runs only the test declared with that name. Give it once per test to run several:
+
+```console
+$ bicep test "*.biceptest" --test sizePolicy --test namingPolicy --inputs storage-cases.biceptestparam --output-detail all
+[✓] Evaluation naming.biceptest: namingPolicy (modules/blobStorage.bicep) Passed!
+[✓] Evaluation naming.biceptest: namingPolicy (modules/fileStorage.bicep) Passed!
+Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) - 2/2 cases passed
+  [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
+  [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
+Passed! - Failed: 0, Errored: 0, Passed: 4, Total: 4, Duration: 425ms
+```
+
+A name selects that test in every file being run, because test names are only unique within a file. A selected test runs exactly as it would without `--test`: once per target and once per case of its input file. A test file that declares none of the names takes no part in the run, so its diagnostics are not reported and an input file bound to it is reported as not among the files being run. Names are matched as they are spelled in the test file, with the same case.
+
+`--test` also narrows `--list` to the named tests:
+
+```console
+$ bicep test "*.biceptest" --test sizePolicy --list
+storage-cases.biceptest: sizePolicy -> storage.bicep
+```
+
+A name that no test file being run declares is an error. The run still reports the tests that were found, and fails:
+
+```console
+$ bicep test storage-cases.biceptest --test sizePolicy --test sizepolicy --inputs storage-cases.biceptestparam
+--test sizepolicy: no test with this name was found in the test files being run.
+Failed! - Failed: 0, Errored: 0, Passed: 2, Total: 2, Duration: 85ms
+The run failed because errors were reported above, not because an evaluation did.
+```
+
 > There is no way to exclude a file from a glob at the command line, and no `.biceptestignore`. If a
 > glob reaches generated output — a `build/` or `out/` directory holding copies of your sources — each
 > copy is discovered and run as though it were a source file. Write the glob so that it cannot see

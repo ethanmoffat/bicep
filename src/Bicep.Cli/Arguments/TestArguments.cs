@@ -11,6 +11,7 @@ public record TestArguments(
     bool NoRestore,
     bool List,
     ImmutableArray<string> Inputs,
+    ImmutableArray<string> Tests,
     TestOutputFormat? OutputFormat,
     TestOutputDetail? OutputDetail,
     string? ResultsFile,

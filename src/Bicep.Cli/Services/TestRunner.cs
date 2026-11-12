@@ -59,7 +59,8 @@ namespace Bicep.Cli.Services
         /// Runs every test in the file. When input cases are supplied, each test runs once per target per
         /// case: cases supply values, and can never change which targets a test applies to.
         /// </summary>
-        public async Task<TestResults> RunAsync(SemanticModel testFileModel, ImmutableArray<TestInputCase> inputCases = default)
+        /// <param name="testNames">The names of the tests to run, or null to run every test.</param>
+        public async Task<TestResults> RunAsync(SemanticModel testFileModel, ImmutableArray<TestInputCase> inputCases = default, IReadOnlySet<string>? testNames = null)
         {
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var testResults = ImmutableArray.CreateBuilder<TestResult>();
@@ -78,7 +79,9 @@ namespace Bicep.Cli.Services
                 ? "The test file has errors, reported above, so none of its tests were evaluated."
                 : null;
 
-            foreach (var testDeclaration in tests)
+            // Unselected tests still count when locating errors above: an error in one of them is
+            // inside a test, so it does not stop the selected ones.
+            foreach (var testDeclaration in tests.Where(test => testNames is null || testNames.Contains(test.Name)))
             {
                 var testError = fileError ?? (errorPositions.Any(testDeclaration.DeclaringTest.Span.ContainsInclusive)
                     ? "The test has errors, reported above, so it was not evaluated."
