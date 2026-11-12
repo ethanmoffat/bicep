@@ -35,7 +35,7 @@ public record TestCaseIdentity(IOUri TestFile, string TestName, IOUri TargetFile
     /// working directory the CLI was invoked from.
     /// </summary>
     public string CaseId => Inputs is { } inputs
-        ? $"{TestFileName}#{TestName}#{RelativeTargetPath}#{inputs.InputFileName}#{inputs.Name}"
+        ? $"{TestFileName}#{TestName}#{RelativeTargetPath}#{inputs.CaseIdSuffix}"
         : $"{TestFileName}#{TestName}#{RelativeTargetPath}";
 
     public int CompareTo(TestCaseIdentity? other)

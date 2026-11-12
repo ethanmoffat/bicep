@@ -274,9 +274,10 @@ namespace Bicep.Cli.Commands
                 ArgumentHelper.ValidateBicepTestParamFile(inputUri);
 
                 var compilation = await compiler.CreateCompilation(inputUri, skipRestore: args.NoRestore);
-                var result = TestInputCaseLoader.Load(compilation.GetEntrypointSemanticModel(), testFileUri);
+                var inputModel = compilation.GetEntrypointSemanticModel();
+                var result = TestInputCaseLoader.Load(inputModel, testFileUri);
 
-                if (result.Error is { } error)
+                if (result.Error is not null || inputModel.HasErrors())
                 {
                     if (discovered && result.BoundTestFile is not null)
                     {
@@ -284,7 +285,21 @@ namespace Bicep.Cli.Commands
                     }
 
                     diagnosticLogger.LogDiagnostics(GetDiagnosticOptions(args), compilation);
+                }
+
+                if (result.Error is { } error)
+                {
                     errors.Add($"{inputUri.GetFileName()}: {error}");
+
+                    // A test file named outright is the only one an input whose binding could not be
+                    // read could have been meant for, so the failure is reported as that file's result:
+                    // running its tests without the cases instead would report outcomes nobody asked for.
+                    if (!discovered && result.BoundTestFile is null)
+                    {
+                        bound.Add(inputUri);
+                        cases.Add(TestInputCase.Failed(inputUri, null, error));
+                    }
+
                     continue;
                 }
 
@@ -292,8 +307,11 @@ namespace Bicep.Cli.Commands
                 cases.AddRange(result.Cases);
 
                 // A case that cannot run is reported here as well as in its results, so the run fails
-                // even when no evaluation reached the case.
-                errors.AddRange(result.Cases.Select(x => x.Error).OfType<string>().Select(error => $"{inputUri.GetFileName()}: {error}"));
+                // even when no evaluation reached the case. A file that does not compile is reported
+                // once, however many of its cases that stopped.
+                errors.AddRange(inputModel.HasErrors()
+                    ? [$"{inputUri.GetFileName()}: {TestInputCaseLoader.CompilationError}"]
+                    : result.Cases.Select(x => x.Error).OfType<string>().Select(error => $"{inputUri.GetFileName()}: {error}"));
             }
 
             return (cases.ToImmutable(), errors.ToImmutable(), bound.ToImmutable());
@@ -391,7 +409,7 @@ namespace Bicep.Cli.Commands
                 // Only what distinguishes this case from its siblings is left to say: the heading above
                 // has already named the test and the target.
                 var label = result.Identity.Inputs is { } inputs
-                    ? $"Case {inputs.InputFileName}: {inputs.Name}"
+                    ? $"Case {inputs.DisplayName}"
                     : $"Case {DescribeCase(result, qualifyWithTestFile)}";
 
                 LogResult(result, GroupIndent, label, writer);
@@ -424,7 +442,7 @@ namespace Bicep.Cli.Commands
             // The case is named so that two outcomes of the same test and target, differing only in
             // the values they ran with, are never reported as the same thing.
             return result.Identity.Inputs is { } inputs
-                ? $"{target} [{inputs.InputFileName}: {inputs.Name}]"
+                ? $"{target} [{inputs.DisplayName}]"
                 : target;
         }
 

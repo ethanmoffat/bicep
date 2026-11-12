@@ -518,11 +518,21 @@ they do in a template: `@secure`, `@allowed`, `@minLength`/`@maxLength`, `@minVa
 error in the input file rather than a surprise inside the target:
 
 ```console
-$ bicep test sizes.biceptest --inputs sizes.biceptestparam
-sizes.biceptestparam(4,13) : Error BCP333: The provided value (whose length will always be less than or equal to 1) is too short to assign to a target for which the minimum allowable length is 2.
+$ bicep test sizes.biceptest --inputs sizes.biceptestparam --output-detail all
+sizes.biceptestparam(4,11) : Error BCP333: The provided value (whose length will always be less than or equal to 1) is too short to assign to a target for which the minimum allowable length is 2.
 sizes.biceptestparam(9,9) : Error BCP036: The property "slot" expected a value of type "'blue' | 'green'" but the provided value is of type "'red'".
 sizes.biceptestparam: The input file has compilation errors and cannot supply any cases.
+Evaluation sizes (storage.bicep) - 0/3 cases passed
+  [!] Case sizes.biceptestparam: tooShort could not be evaluated!
+  Reason: The case "tooShort" has errors, reported above, so none of the file's cases were evaluated.
+  [!] Case sizes.biceptestparam: wrongSlot could not be evaluated!
+  Reason: The case "wrongSlot" has errors, reported above, so none of the file's cases were evaluated.
+  [!] Case sizes.biceptestparam: valid could not be evaluated!
+  Reason: The input file has compilation errors in cases "tooShort", "wrongSlot", reported above, so none of its cases were evaluated.
+Failed! - Failed: 0, Errored: 3, Passed: 0, Total: 3, Duration: 0ms
 ```
+
+An input file that does not compile supplies no cases, just as a template that does not compile deploys nothing, and the tests are never run without its cases instead. Each evaluation the file would have supplied is reported as errored. When every error lies inside cases, each evaluation keeps its case's name, and the reason names the case that holds the error. An error outside every case, such as a `deploymentContext` that does not type check or a `using` that names no test file, belongs to the file itself, so each evaluation is reported against the input file with no case name.
 
 Decorators that shape a deployment or an export — `@batchSize`, `@export` and the resource
 decorators — are not available in a test file, because nothing in it is deployed or imported.
@@ -579,9 +589,7 @@ with, so a threshold stated in the message cannot drift away from the condition 
 
 ### Failures are attributed, not fatal
 
-An input file that cannot contribute cases — because it fails to compile, or because it binds to a
-different test file — is reported and set aside. Everything else still runs, and the aggregate exit
-code is non-zero:
+An input file that binds to a different test file is reported and set aside. Everything else still runs, and the aggregate exit code is non-zero:
 
 ```console
 $ bicep test storage.biceptest --inputs storage-cases.biceptestparam --output-detail all
@@ -615,6 +623,32 @@ Failed! - Failed: 0, Errored: 2, Passed: 2, Total: 4, Duration: 151ms
 ```
 
 In the JSON and JUnit documents the errored evaluations carry the case's name in `inputCase`, like any other case.
+
+An input file that fails to compile is attributed too. Its compile errors are reported, none of its cases runs, and each evaluation it would have supplied is reported as errored under the case's name, or under the input file alone when an error lies outside every case:
+
+```console
+$ bicep test storage-cases.biceptest --inputs storage-cases-invalid.biceptestparam --output-format json
+storage-cases-invalid.biceptestparam(4,3) : Error BCP037: The property "location" is not allowed on objects of type "DeploymentContext". Permissible properties include "deploymentLocation", "deploymentName", "environment", "managementGroup", "resourceGroup", "resourceGroupLocation", "subscriptionId", "tenantId".
+storage-cases-invalid.biceptestparam: The input file has compilation errors and cannot supply any cases.
+```
+
+The error lies in the file's `deploymentContext`, outside every case, so each evaluation is reported against the input file. This is the first entry in `cases`:
+
+```json
+{
+  "caseId": "storage-cases.biceptest#namingRules#storage.bicep#storage-cases-invalid.biceptestparam",
+  "testFile": "storage-cases.biceptest",
+  "testName": "namingRules",
+  "target": "storage.bicep",
+  "inputFile": "storage-cases-invalid.biceptestparam",
+  "inputCase": null,
+  "status": "errored",
+  "error": "The input file has compilation errors and cannot supply any cases.",
+  "durationMs": 0.931
+}
+```
+
+`inputFile` names the input file while `inputCase` is null, and the `caseId` ends at the input file. JUnit names the evaluation `storage.bicep#storage-cases-invalid.biceptestparam` in the same way.
 
 ### Cases and a glob
 
@@ -1812,6 +1846,7 @@ Notes on the contract:
 - `target` is `null` when a test could not be resolved to any target; there is no target to name.
 - `inputFile` and `inputCase` name the case a run used. Both are `null` when no input file was
   supplied, so a host that never passes `--inputs` sees exactly the document it saw before.
+  `inputCase` alone is `null` when an input file could supply no cases at all, for example because it has a compile error outside every case: the errored entry is still attributed to `inputFile`, and its `caseId` ends at the input file.
 - `assertions` is present only for cases that were actually evaluated. An errored case never reached
   its assertions, and reporting zero counts would be indistinguishable from a target that declares
   none.
