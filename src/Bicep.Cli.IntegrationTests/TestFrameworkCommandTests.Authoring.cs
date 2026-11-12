@@ -216,5 +216,115 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_NullableInputs_WithoutAValue_EvaluateToNull()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "nullable-inputs");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param prefix string
+                param suffix string?
+
+                output name string = '${prefix}${suffix ?? '-none'}'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                type Tier = 'basic' | 'premium'
+
+                param prefix string
+                param suffix string?
+                param tags object?
+                param tier Tier?
+                param expected string
+
+                test nullable 'main.bicep' = {
+                  params: {
+                    prefix: prefix
+                    suffix: suffix
+                  }
+                  assertions: {
+                    omittedAreNull: {
+                      passWhen: tags == null && tier == null && (tags.?owner ?? 'nobody') == 'nobody'
+                      message: 'Tags are ${tags ?? 'null'} and tier is ${tier ?? 'null'}.'
+                    }
+                    nullReachesTheTarget: {
+                      passWhen: target.evaluated.outputs.name == expected
+                      message: 'Expected ${expected} but the name is ${target.evaluated.outputs.name}.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                case omitted = {
+                  prefix: 'contoso'
+                  expected: 'contoso-none'
+                }
+
+                case explicitNull = {
+                  prefix: 'contoso'
+                  suffix: null
+                  tags: null
+                  expected: 'contoso-none'
+                }
+
+                case supplied = {
+                  prefix: 'contoso'
+                  suffix: '-prod'
+                  expected: 'contoso-prod'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputsPath, "--output-detail", "all");
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("has no value");
+                output.Should().Contain("Evaluation nullable (main.bicep) - 3/3 cases passed");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_RequiredInput_WithoutAValue_StillReportsThatItHasNoValue()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "required-input");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                output name string = 'stg'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param optional string?
+                param required string
+
+                test requiredInput 'main.bicep' = {
+                  assertions: {
+                    optionalIsNull: {
+                      passWhen: optional == null
+                      message: 'The optional input is null.'
+                    }
+                    requiredIsSet: {
+                      passWhen: required == 'set'
+                      message: 'The required input is set.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--output-detail", "all");
+
+            using (new AssertionScope())
+            {
+                error.Should().Contain("[✗] Evaluation requiredInput (main.bicep) Failed at 1 / 2 assertions!");
+                error.Should().Contain("Could not be evaluated: The input \"required\" has no value. Supply it from a test case or give it a default.");
+                error.Should().NotContain("\"optional\"");
+                result.Should().Be(1);
+            }
+        }
     }
 }

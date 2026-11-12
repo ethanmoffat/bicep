@@ -8,6 +8,8 @@ using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
+using Bicep.Core.TypeSystem;
+using Bicep.Core.TypeSystem.Types;
 using Bicep.Core.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -24,6 +26,8 @@ namespace Bicep.Cli.Services;
 public static class BicepValueEvaluator
 {
     private const string DeploymentTemplateSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#";
+
+    private const string LanguageVersion = "2.0";
 
     private static readonly ConditionalWeakTable<SemanticModel, JToken> EmittedFiles = new();
 
@@ -114,6 +118,15 @@ public static class BicepValueEvaluator
             DeclareFunctions(context.SemanticModel, reachable.Functions, template);
         }
 
+        // The engine honors a nullable parameter only in a template that declares a language version,
+        // as a template Bicep emits for one does.
+        if (template["languageVersion"] is null &&
+            template["parameters"] is JObject declared &&
+            declared.Properties().Any(p => p.Value["nullable"] is not null))
+        {
+            DeclareLanguageVersion(template, LanguageVersion);
+        }
+
         var evaluated = TemplateEvaluator.Evaluate(template, configBuilder: (deploymentContext ?? TestDeploymentContext.Empty).Apply).ToJToken();
 
         return evaluated["outputs"]?["result"]?["value"] ?? JValue.CreateNull();
@@ -155,11 +168,18 @@ public static class BicepValueEvaluator
 
         if (emitted["languageVersion"] is { } languageVersion)
         {
-            // A template that refers to type definitions declares its language version, and at that
-            // version its resources are keyed by symbolic name.
-            template["languageVersion"] = languageVersion.DeepClone();
-            template["resources"] = new JObject();
+            // A template that refers to type definitions declares its language version.
+            DeclareLanguageVersion(template, languageVersion.DeepClone());
         }
+    }
+
+    /// <summary>
+    /// Declares the template's language version. At any version, its resources are keyed by symbolic name.
+    /// </summary>
+    private static void DeclareLanguageVersion(JObject template, JToken languageVersion)
+    {
+        template["languageVersion"] = languageVersion;
+        template["resources"] = new JObject();
     }
 
     /// <summary>
@@ -212,17 +232,30 @@ public static class BicepValueEvaluator
         {
             var value = ResolveInput(context, parameter, inputValues, deploymentContext);
 
-            result[parameter.Name] = new JObject
-            {
-                ["type"] = ArmTypeNameOf(value),
-                ["defaultValue"] = value,
-            };
+            // A nullable input with no value, or with an explicit null, is declared nullable with no
+            // default, which is how the engine yields null for an input nothing supplied. A null
+            // default is not the same thing: the engine treats it as a missing value.
+            result[parameter.Name] = value is null or { Type: JTokenType.Null }
+                ? new JObject
+                {
+                    ["type"] = ArmTypeNameOf(TypeHelper.TryRemoveNullability(parameter.Type) ?? parameter.Type),
+                    ["nullable"] = true,
+                }
+                : new JObject
+                {
+                    ["type"] = ArmTypeNameOf(value),
+                    ["defaultValue"] = value,
+                };
         }
 
         return result;
     }
 
-    private static JToken ResolveInput(
+    /// <summary>
+    /// Resolves the value an input takes: the case's value, then the declared default. A nullable
+    /// input with neither resolves to no value at all, which evaluates to null.
+    /// </summary>
+    private static JToken? ResolveInput(
         EmitterContext context,
         ParameterSymbol parameter,
         IReadOnlyDictionary<string, JToken>? inputValues,
@@ -238,8 +271,22 @@ public static class BicepValueEvaluator
             return Evaluate(context, defaultValue.DefaultValue, "string", deploymentContext: deploymentContext);
         }
 
+        if (TypeHelper.IsNullable(parameter.Type))
+        {
+            return null;
+        }
+
         throw new MissingInputException(parameter.Name);
     }
+
+    private static string ArmTypeNameOf(TypeSymbol type) => type switch
+    {
+        StringLiteralType or StringType => "string",
+        IntegerLiteralType or IntegerType => "int",
+        BooleanLiteralType or BooleanType => "bool",
+        ArrayType => "array",
+        _ => "object",
+    };
 
     private static string ArmTypeNameOf(JToken value) => value.Type switch
     {
