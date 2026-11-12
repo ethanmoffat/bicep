@@ -247,6 +247,7 @@ namespace Bicep.LanguageServer.Features.Language.Completion
                         }
 
                         yield return CreateKeywordCompletion(LanguageConstants.VariableKeyword, "Variable keyword", context.ReplacementRange);
+                        yield return CreateKeywordCompletion(LanguageConstants.ImportKeyword, "Import keyword", context.ReplacementRange);
 
                         break;
 

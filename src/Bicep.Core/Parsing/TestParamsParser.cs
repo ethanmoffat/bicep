@@ -64,6 +64,7 @@ namespace Bicep.Core.Parsing
                             LanguageConstants.TestCaseKeyword => this.TestCaseDeclaration(leadingNodes),
                             LanguageConstants.DeploymentContextKeyword => this.DeploymentContextDeclaration(leadingNodes),
                             LanguageConstants.VariableKeyword => this.VariableDeclaration(leadingNodes),
+                            LanguageConstants.ImportKeyword => this.CompileTimeImportDeclaration(ExpectKeyword(LanguageConstants.ImportKeyword), leadingNodes),
                             _ => throw new ExpectedTokenException(current, b => b.UnrecognizedTestParamsFileDeclaration()),
                         },
                         TokenType.NewLine => this.NewLine(),

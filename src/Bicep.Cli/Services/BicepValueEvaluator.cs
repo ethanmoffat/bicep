@@ -3,7 +3,6 @@
 
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
-using Bicep.Core;
 using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
@@ -68,20 +67,26 @@ public static class BicepValueEvaluator
         }
 
         var copies = new JArray();
+        var declarations = reachable.Variables.Select(variable => (variable.Name, Value: new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value)));
 
-        foreach (var variable in reachable.Variables)
+        if (reachable.UsesImports)
         {
-            var value = new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value);
+            // An imported variable is declared under the name the import closure gives it, and may read
+            // any other variable in the closure, so the whole closure is declared.
+            declarations = declarations.Concat(context.SemanticModel.ImportClosureInfo.ImportedVariablesInClosure.Select(variable => (variable.Name, variable.Value)));
+        }
 
+        foreach (var (name, value) in declarations)
+        {
             if (value is ForLoopExpression forLoop)
             {
                 // A variable whose value is a for-expression is declared as a copy loop, which is how a
                 // deployed template declares it.
-                copies.Add(Emit(context, emitter => emitter.EmitCopyObject(variable.Name, forLoop.Expression, forLoop.Body)));
+                copies.Add(Emit(context, emitter => emitter.EmitCopyObject(name, forLoop.Expression, forLoop.Body)));
             }
             else
             {
-                variables[variable.Name] = Emit(context, value);
+                variables[name] = Emit(context, value);
             }
         }
 
@@ -113,9 +118,9 @@ public static class BicepValueEvaluator
             template["parameters"] = parameters;
         }
 
-        if (reachable.Functions.Length > 0)
+        if (reachable.Functions.Length > 0 || reachable.UsesImports)
         {
-            DeclareFunctions(context.SemanticModel, reachable.Functions, template);
+            DeclareFunctions(context.SemanticModel, template);
         }
 
         // The engine honors a nullable parameter only in a template that declares a language version,
@@ -133,33 +138,21 @@ public static class BicepValueEvaluator
     }
 
     /// <summary>
-    /// Declares the user-defined functions an expression calls, directly or through another function.
+    /// Declares the user-defined functions the file declares or imports.
     ///
     /// They are copied from the file's own emitted template, so each one is declared exactly as a
     /// deployed template would declare it, along with the type definitions its parameters and result
-    /// refer to. The file is emitted once, and only when a function is called at all.
+    /// refer to. A function cannot read anything outside its own arguments, so declaring every one is
+    /// safe. The file is emitted once, and only when a function or an import is used at all.
     /// </summary>
-    private static void DeclareFunctions(SemanticModel model, ImmutableArray<DeclaredFunctionSymbol> functions, JObject template)
+    private static void DeclareFunctions(SemanticModel model, JObject template)
     {
         var emitted = EmittedFiles.GetValue(model, m => TestTemplateEmitter.Emit(m));
-        var called = functions.Select(f => f.Name).ToHashSet(LanguageConstants.IdentifierComparer);
-        var declared = new JArray();
 
-        foreach (var ns in emitted["functions"] as JArray ?? [])
+        if (emitted["functions"] is JArray functions)
         {
-            if (ns is JObject { } source &&
-                source["namespace"]?.Value<string>() == EmitConstants.UserDefinedFunctionsNamespace &&
-                source["members"] is JObject members)
-            {
-                declared.Add(new JObject
-                {
-                    ["namespace"] = EmitConstants.UserDefinedFunctionsNamespace,
-                    ["members"] = new JObject(members.Properties().Where(p => called.Contains(p.Name)).Select(p => p.DeepClone())),
-                });
-            }
+            template["functions"] = functions.DeepClone();
         }
-
-        template["functions"] = declared;
 
         if (emitted["definitions"] is JObject definitions)
         {
@@ -307,6 +300,7 @@ public static class BicepValueEvaluator
         var seenParameters = new HashSet<ParameterSymbol>();
         var seenFunctionVariables = new HashSet<string>();
         var seenFunctions = new HashSet<DeclaredFunctionSymbol>();
+        var usesImports = false;
         var functionVariablesByName = context.FunctionVariables.Values.ToDictionary(x => x.Name);
         var queue = new Queue<Expression>();
 
@@ -316,6 +310,7 @@ public static class BicepValueEvaluator
         {
             var collector = new SymbolReferenceCollector();
             collector.Visit(queue.Dequeue());
+            usesImports |= collector.UsesImports;
 
             foreach (var variable in collector.Variables)
             {
@@ -352,7 +347,7 @@ public static class BicepValueEvaluator
             }
         }
 
-        return new([.. variables], [.. parameters], [.. functionVariables], [.. functions]);
+        return new([.. variables], [.. parameters], [.. functionVariables], [.. functions], usesImports);
     }
 
     private static JToken Emit(EmitterContext context, Expression expression)
@@ -429,7 +424,7 @@ public static class BicepValueEvaluator
 
     private static string MissingMetadata(string name) => $"The deployment metadata '{name}' is not valid.";
 
-    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters, ImmutableArray<FunctionVariable> FunctionVariables, ImmutableArray<DeclaredFunctionSymbol> Functions);
+    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters, ImmutableArray<FunctionVariable> FunctionVariables, ImmutableArray<DeclaredFunctionSymbol> Functions, bool UsesImports);
 
     private class SymbolReferenceCollector : ExpressionVisitor
     {
@@ -440,6 +435,36 @@ public static class BicepValueEvaluator
         public List<string> SynthesizedVariables { get; } = [];
 
         public List<DeclaredFunctionSymbol> Functions { get; } = [];
+
+        public bool UsesImports { get; private set; }
+
+        public override void VisitImportedVariableReferenceExpression(ImportedVariableReferenceExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitImportedVariableReferenceExpression(expression);
+        }
+
+        public override void VisitWildcardImportVariablePropertyReferenceExpression(WildcardImportVariablePropertyReferenceExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitWildcardImportVariablePropertyReferenceExpression(expression);
+        }
+
+        public override void VisitImportedUserDefinedFunctionCallExpression(ImportedUserDefinedFunctionCallExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitImportedUserDefinedFunctionCallExpression(expression);
+        }
+
+        public override void VisitWildcardImportInstanceFunctionCallExpression(WildcardImportInstanceFunctionCallExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitWildcardImportInstanceFunctionCallExpression(expression);
+        }
 
         public override void VisitUserDefinedFunctionCallExpression(UserDefinedFunctionCallExpression expression)
         {

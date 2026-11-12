@@ -2120,7 +2120,7 @@ namespace Bicep.Core.Diagnostics
 
             public Diagnostic UnrecognizedTestParamsFileDeclaration() => CoreError(
                 "BCP464",
-                $"This declaration type is not recognized. Specify a \"{LanguageConstants.UsingKeyword}\", \"{LanguageConstants.TestCaseKeyword}\", \"{LanguageConstants.DeploymentContextKeyword}\" or \"{LanguageConstants.VariableKeyword}\" declaration.");
+                $"This declaration type is not recognized. Specify a \"{LanguageConstants.UsingKeyword}\", \"{LanguageConstants.TestCaseKeyword}\", \"{LanguageConstants.DeploymentContextKeyword}\", \"{LanguageConstants.VariableKeyword}\" or \"{LanguageConstants.ImportKeyword}\" declaration.");
 
             public Diagnostic ExpectedTestCaseIdentifier() => CoreError(
                 "BCP465",

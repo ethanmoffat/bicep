@@ -135,7 +135,57 @@ test functions 'main.bicep' = {
 }
 ```
 
-An input file cannot declare a function. Declare it in the test file and supply only values from the input file.
+An input file cannot declare a function. Declare it in the test file, or import it from a template as described next.
+
+### Importing from a template
+
+A test file and an input file can both `import` the variables, types and functions a template exports with `@export()`, by name or with `import * as`. A test can then check a template against the same values the deployment uses, and a case can take its value from the file that defines it instead of restating it as a literal:
+
+```bicep
+// shared.bicep
+@export()
+var defaultPrefix = 'contoso'
+
+@export()
+type Naming = {
+  prefix: string
+}
+
+@export()
+func render(naming Naming) string => '${naming.prefix}stg'
+```
+
+```bicep
+// policy.biceptest
+import { Naming, render } from 'shared.bicep'
+
+param naming Naming
+
+test imports 'main.bicep' = {
+  params: {
+    prefix: naming.prefix
+  }
+  assertions: {
+    nameIsRendered: {
+      passWhen: target.evaluated.outputs.name == render(naming)
+      message: 'Expected ${render(naming)}.'
+    }
+  }
+}
+```
+
+```bicep
+// policy.biceptestparam
+using 'policy.biceptest'
+
+import { defaultPrefix } from 'shared.bicep'
+
+case sharedPrefix = {
+  naming: { prefix: defaultPrefix }
+}
+```
+
+An exported variable keeps working when its value reads a file with a `load*` function or is a `for` expression. A test file cannot itself export anything.
 
 ## Selecting targets with `match`
 
@@ -269,7 +319,7 @@ top-level completions are scoped to what an input file can declare:
 
 | Offered | Not offered |
 |---------|-------------|
-| `using` (once), `case` and `deploymentContext` (only when `testFramework` is enabled), `var` | `param`, `test`, `extends`, `resource`, `module`, `output`, `targetScope`, `extension` |
+| `using` (once), `case` and `deploymentContext` (only when `testFramework` is enabled), `var`, `import` | `param`, `test`, `extends`, `resource`, `module`, `output`, `targetScope`, `extension` |
 
 `using` is offered only until one is declared, and `deploymentContext` only until the file declares
 its ambient context, because both are file-level singletons. `param` is not offered: an input file

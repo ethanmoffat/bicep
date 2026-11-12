@@ -326,5 +326,87 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(1);
             }
         }
+
+        [TestMethod]
+        public async Task Test_Imports_FromATemplate_WorkInTestAndInputFiles()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "imports");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param prefix string
+
+                output name string = '${prefix}stg'
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "settings.json", """
+                { "prefix": "contoso" }
+                """, outputFileDir);
+            FileHelper.SaveResultFile(TestContext, "shared.bicep", """
+                @export()
+                var defaultPrefix = loadJsonContent('settings.json').prefix
+
+                @export()
+                var regions = [for region in ['eastus', 'westus2']: toUpper(region)]
+
+                @export()
+                type Naming = {
+                  prefix: string
+                }
+
+                @export()
+                func render(naming Naming) string => '${naming.prefix}stg'
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                import { defaultPrefix, Naming, render } from 'shared.bicep'
+                import * as shared from 'shared.bicep'
+
+                param naming Naming
+
+                test imports 'main.bicep' = {
+                  params: {
+                    prefix: naming.prefix == defaultPrefix ? defaultPrefix : 'wrong'
+                  }
+                  assertions: {
+                    named: {
+                      passWhen: target.evaluated.outputs.name == render(naming)
+                      message: 'Expected ${render(naming)}.'
+                    }
+                    wildcard: {
+                      passWhen: target.evaluated.outputs.name == shared.render({ prefix: shared.defaultPrefix }) && shared.regions[1] == 'WESTUS2'
+                      message: 'Expected the shared rendering of ${shared.defaultPrefix}.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                import { defaultPrefix, regions } from 'shared.bicep'
+                import * as shared from 'shared.bicep'
+
+                case imported = {
+                  naming: { prefix: defaultPrefix }
+                }
+
+                case wildcard = {
+                  naming: { prefix: substring(shared.render({ prefix: shared.defaultPrefix }), 0, length(defaultPrefix)) }
+                }
+
+                case loop = {
+                  naming: { prefix: regions[0] == 'EASTUS' ? defaultPrefix : 'wrong' }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputsPath, "--output-detail", "all");
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("BCP376");
+                error.Should().NotContain("BCP464");
+                output.Should().Contain("Evaluation imports (main.bicep) - 3/3 cases passed");
+                result.Should().Be(0);
+            }
+        }
     }
 }
