@@ -39,6 +39,23 @@ public static class BicepValueEvaluator
         public string ParameterName { get; } = parameterName;
     }
 
+    /// <summary>
+    /// The missing input behind a failure, however deeply the evaluator wrapped it, or null when the
+    /// failure had another cause.
+    /// </summary>
+    public static MissingInputException? FindMissingInput(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is MissingInputException missing)
+            {
+                return missing;
+            }
+        }
+
+        return null;
+    }
+
     public static JToken Evaluate(
         EmitterContext context,
         SyntaxBase syntax,
@@ -231,20 +248,15 @@ public static class BicepValueEvaluator
     /// </summary>
     public static string Sanitize(Exception exception)
     {
-        if (exception is MissingInputException)
+        if (FindMissingInput(exception) is { } missing)
         {
-            return exception.Message;
+            return missing.Message;
         }
 
         var innermost = exception;
 
         while (innermost.InnerException is { } inner)
         {
-            if (inner is MissingInputException)
-            {
-                return inner.Message;
-            }
-
             innermost = inner;
         }
 

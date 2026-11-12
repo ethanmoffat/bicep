@@ -274,7 +274,7 @@ namespace Bicep.Cli.Services
             }
             catch (Exception exception)
             {
-                return new TestEvaluation(null, SanitizeEvaluationError(exception), [], []);
+                return new TestEvaluation(null, BicepValueEvaluator.FindMissingInput(exception)?.Message ?? SanitizeEvaluationError(exception), [], []);
             }
         }
 

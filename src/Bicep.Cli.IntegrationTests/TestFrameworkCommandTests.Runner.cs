@@ -159,5 +159,55 @@ namespace Bicep.Cli.IntegrationTests
                 (console + consoleError).Should().NotContain("has no value");
             }
         }
+
+        [TestMethod]
+        public async Task Test_MissingInput_ReadByAnEvaluatedAssertionErrorsTheEvaluation()
+        {
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "runner-missing-input-evaluated");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string
+
+                resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: name
+                  location: 'eastus'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                  kind: 'StorageV2'
+                }
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param name string
+
+                test oneAccount 'main.bicep' = {
+                  params: {
+                    name: name
+                  }
+                  assertions: {
+                    deploysOne: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'One account.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, _, result) = await Bicep(TestFrameworkSettings, "test", testPath, "--output-format", "json");
+            var cases = ParseCases(output);
+            var (_, error, _) = await Bicep(TestFrameworkSettings, "test", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                cases.Should().ContainSingle();
+                cases[0].GetProperty("status").GetString().Should().Be("errored");
+                cases[0].GetProperty("error").GetString().Should().Be("The input \"name\" has no value. Supply it from a test case or give it a default.");
+                cases[0].TryGetProperty("assertions", out _).Should().BeFalse();
+                error.Should().Contain("[!] Evaluation oneAccount (main.bicep) could not be evaluated!");
+                error.Should().Contain("Failed! - Failed: 0, Errored: 1, Passed: 0, Total: 1");
+            }
+        }
     }
 }

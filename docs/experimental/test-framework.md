@@ -667,10 +667,10 @@ Evaluation storage-cases.biceptest: sizePolicy (storage.bicep) - 2/2 cases passe
   [✓] Case storage-cases.biceptestparam: shortPrefix Passed!
   [✓] Case storage-cases.biceptestparam: prefixAtLengthLimit Passed!
 ... the example folder's other test files, several of them deliberately failing ...
-Failed! - Failed: 9, Errored: 4, Passed: 11, Total: 24, Duration: 620ms
+Failed! - Failed: 8, Errored: 5, Passed: 11, Total: 24, Duration: 620ms
 ```
 
-Without the input file the same glob reports `Failed: 9, Errored: 5, Passed: 8, Total: 22`:
+Without the input file the same glob reports `Failed: 8, Errored: 6, Passed: 8, Total: 22`:
 `storage-cases.biceptest` contributes one errored case, because its parameters have no values. With
 it, that one case becomes four that ran.
 
@@ -700,6 +700,8 @@ Failed! - Failed: 0, Errored: 1, Passed: 1, Total: 2, Duration: 254ms
 ```
 `sizePolicy` still ran because it never reaches `namePrefix`; only the test that needed the missing
 value was affected.
+
+A missing input stops the evaluation that reaches it, whether the target's parameters or one of the test's own assertions reads it. The evaluation is reported as errored with the input's name, the same as `namingRules` above. None of its assertions is reported, because none of them was judged.
 
 ### Deployment context
 
@@ -2127,25 +2129,8 @@ $ bicep test "*.biceptest" --output-detail all
 		fleet/regionStamp.bicep(24): fleetdev-primary-site
 		fleet/regionStamp.bicep(16): fleetdev-secondary-plan
 		fleet/regionStamp.bicep(24): fleetdev-secondary-site
-[✗] Evaluation fleet.biceptest: fleetShape (fleet.bicep) Failed at 6 / 8 assertions!
-	[✗] Assertion deploysOneAccountPerRegion failed!
-		Expected one data account per region, plus the backup account only when enabled.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
-	[✗] Assertion accountNamesAreLowerCase failed!
-		Storage account names must be lower case.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
-	[✗] Assertion stampsAreDistinct failed!
-		Each module call must produce its own stamp resources.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
-	[✗] Assertion primarySiteIsNamedForItsRole failed!
-		The primary stamp must expose the primary site name.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
-	[✗] Assertion eachAccountDeploysToItsRegion failed!
-		Each data account must be deployed to the region it was created for.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
-	[✗] Assertion eachSiteRunsOnItsOwnPlan failed!
-		Each site must run on the plan of its own stamp.
-		Could not be evaluated: The input "environment" has no value. Supply it from a test case or give it a default.
+[!] Evaluation fleet.biceptest: fleetShape (fleet.bicep) could not be evaluated!
+Reason: The input "environment" has no value. Supply it from a test case or give it a default.
 [!] Evaluation mocks-failing.biceptest: unconfiguredField (mocks.bicep) could not be evaluated!
 Reason: The input "identityName" has no value. Supply it from a test case or give it a default.
 [!] Evaluation mocks.biceptest: runtimeReads (mocks.bicep) could not be evaluated!
@@ -2174,7 +2159,7 @@ Reason: The input "namePrefix" has no value. Supply it from a test case or give 
 	[✗] Assertion nameWithinLengthLimit failed!
 [✓] Evaluation storage.biceptest: validPrefix (storage.bicep) Passed!
 [✓] Evaluation storage.biceptest: prefixAtLengthLimit (storage.bicep) Passed!
-Failed! - Failed: 9, Errored: 5, Passed: 8, Total: 22, Duration: 830ms
+Failed! - Failed: 8, Errored: 6, Passed: 8, Total: 22, Duration: 830ms
 ```
 
 The command exits with code `1`. Some of these files are deliberately failing examples; the rest
