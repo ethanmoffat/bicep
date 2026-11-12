@@ -19,7 +19,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace Bicep.Cli.IntegrationTests
 {
     [TestClass]
-    public class TestFrameworkCommandTests : TestBase
+    public partial class TestFrameworkCommandTests : TestBase
     {
         [TestMethod]
         public async Task Test_ZeroFiles_ShouldFail_WithExpectedErrorMessage()
