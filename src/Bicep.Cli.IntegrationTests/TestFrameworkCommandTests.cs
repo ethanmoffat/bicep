@@ -6027,5 +6027,63 @@ assert isEqual = foo == 'ShouldSucceed'", outputFileDir);
                 error.Should().Contain("--pattern");
             }
         }
+
+        [TestMethod]
+        public async Task Test_Single_FailsAnAssertionUnlessThereIsExactlyOneElement()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "single");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param names string[]
+
+                resource accounts 'Microsoft.Storage/storageAccounts@2023-01-01' = [for name in names: {
+                  name: name
+                  location: 'eastus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }]
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var region = single(['eastus'])
+
+                test one 'main.bicep' = {
+                  params: { names: ['logs'] }
+                  assertions: {
+                    theOnlyAccountIsInTheRegion: {
+                      passWhen: single(target.evaluated.resources).location == region
+                      message: 'The only account is in ${region}.'
+                    }
+                  }
+                }
+
+                test two 'main.bicep' = {
+                  params: { names: ['logs', 'data'] }
+                  assertions: {
+                    tooMany: {
+                      passWhen: single(target.evaluated.resources).name == 'logs'
+                      message: 'There is exactly one account.'
+                    }
+                    none: {
+                      passWhen: single(filter(target.evaluated.resources, r => r.name == 'audit')).name == 'audit'
+                      message: 'There is exactly one audit account.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation one (main.bicep) Passed!");
+                error.Should().Contain("Evaluation two (main.bicep) Failed at 2 / 2 assertions!");
+                error.Should().Contain("single() expects an array with exactly one element, but the array has 2.");
+                error.Should().Contain("single() expects an array with exactly one element, but the array has 0.");
+            }
+        }
     }
 }

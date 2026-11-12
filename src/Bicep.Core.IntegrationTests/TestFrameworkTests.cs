@@ -379,6 +379,41 @@ var leaked = target
         }
 
         [TestMethod]
+        public void Single_is_not_available_in_an_ordinary_bicep_file()
+        {
+            var result = CompilationHelper.Compile(ServicesWithTestFramework, @"
+var only = single([1])
+");
+
+            result.ExcludingLinterDiagnostics().Should().HaveDiagnostics(new[] {
+                ("BCP057", DiagnosticLevel.Error, "The name \"single\" does not exist in the current context."),
+            });
+        }
+
+        [TestMethod]
+        public void Single_in_a_test_file_returns_the_element_type()
+        {
+            var result = CompileTestFile(@"
+test foo 'target.bicep' = {
+  params: {}
+  assertions: {
+    theOnlyInstanceIsNamed: {
+      passWhen: single(target.evaluated.resources).name == 'contoso' && single(['a']) == 'a'
+      message: 'Exactly one instance.'
+    }
+    misspelled: {
+      passWhen: single(target.evaluated.resources).nmae == 'contoso'
+      message: 'Exactly one instance.'
+    }
+  }
+}
+");
+
+            result.ExcludingLinterDiagnostics().Diagnostics.Should().ContainSingle()
+                .Which.Message.Should().Contain("\"nmae\"");
+        }
+
+        [TestMethod]
         public void Misspelled_target_facts_are_reported_rather_than_silently_empty()
         {
             var result = CompilationHelper.Compile(ServicesWithTestFramework, @"

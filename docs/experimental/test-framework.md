@@ -295,6 +295,27 @@ parameter the target requires. Omitting `assertions`
 preserves the target-owned behaviour above. An `assertions` object that is present but empty is an
 error, because it neither asserts anything nor falls back to anything.
 
+### Expecting exactly one with `single()`
+
+A test file can call `single(array)`, which returns the only element of an array and fails the assertion when the array does not have exactly one. It replaces checking `length(x) == 1` in one place and reading `first(x)` in another:
+
+```bicep
+theOnlyAccountIsInTheRegion: {
+  passWhen: single(filter(target.evaluated.resources, r => r.symbolicName == 'logs')).location == region
+  message: 'The logs account belongs in ${region}.'
+}
+```
+
+When there are none, or more than one, the assertion fails and says how many there were:
+
+```console
+	[✗] Assertion theOnlyAccountIsInTheRegion failed!
+		The logs account belongs in eastus.
+		Could not be evaluated: single() expects an array with exactly one element, but the array has 2.
+```
+
+`single()` is available anywhere in a `.biceptest` file, and nowhere else: a `.bicep`, `.bicepparam` or `.biceptestparam` file reports `BCP057` for it, because ARM has no such function. In a test it is shorthand for `length(x) == 1 ? first(x) : fail(...)`, so it relies only on functions ARM evaluates. Its result has the type of the array's elements, so a misspelled property after it is still a compile error.
+
 ### The `target` symbol
 
 Inside `assertions`, `target` is a typed, read-only symbol describing the compiler's view of the
