@@ -137,7 +137,7 @@ public class TestAssertionEvaluator
     {
         var target = TestTargetFactsSerializer.Serialize(facts);
 
-        if (References(syntax, TestTargetType.EvaluatedPropertyName))
+        if (References(context, syntax, TestTargetType.EvaluatedPropertyName))
         {
             if (evaluated is null)
             {
@@ -146,8 +146,8 @@ public class TestAssertionEvaluator
 
             target[TestTargetType.EvaluatedPropertyName] = TestTargetFactsSerializer.SerializeEvaluated(
                 evaluated,
-                includeOutputs: References(syntax, TestTargetType.OutputsPropertyName),
-                includeWithModules: References(syntax, TestTargetType.WithModulesPropertyName),
+                includeOutputs: References(context, syntax, TestTargetType.OutputsPropertyName),
+                includeWithModules: References(context, syntax, TestTargetType.WithModulesPropertyName),
                 includeBodies: ReadsEvaluatedBody(context, syntax));
         }
 
@@ -161,13 +161,39 @@ public class TestAssertionEvaluator
 
     /// <summary>
     /// Whether the expression reads the named branch of the target anywhere, including inside lambdas.
+    /// An index reads it the same as a property access does: <c>target['evaluated']</c> is
+    /// <c>target.evaluated</c>. A key only known when the case runs may name it if the object it indexes
+    /// has such a member.
     /// </summary>
-    private static bool References(SyntaxBase syntax, string propertyName) => SyntaxAggregator.Aggregate(
+    private static bool References(EmitterContext context, SyntaxBase syntax, string propertyName) => SyntaxAggregator.Aggregate(
         syntax,
         seed: false,
-        function: (found, node) => found || (node is PropertyAccessSyntax access && access.PropertyName.IdentifierName == propertyName),
+        function: (found, node) => found || node switch
+        {
+            PropertyAccessSyntax access => string.Equals(access.PropertyName.IdentifierName, propertyName, StringComparison.OrdinalIgnoreCase),
+            ArrayAccessSyntax access => MayName(context.SemanticModel.GetTypeInfo(access.IndexExpression), propertyName) ??
+                (context.SemanticModel.GetTypeInfo(access.BaseExpression) is ObjectType indexed && indexed.Properties.ContainsKey(propertyName)),
+            _ => false,
+        },
         resultSelector: result => result,
         continuationFunction: (found, _) => !found);
+
+    /// <summary>
+    /// Whether an index of this type names the property: <c>true</c> or <c>false</c> when the key is
+    /// known from the source, <c>null</c> when it is only known when the case runs.
+    /// </summary>
+    private static bool? MayName(TypeSymbol indexType, string propertyName) => indexType switch
+    {
+        StringLiteralType literal => string.Equals(literal.RawStringValue, propertyName, StringComparison.OrdinalIgnoreCase),
+        UnionType union => union.Members.Select(member => MayName(member.Type, propertyName)).ToArray() switch
+        {
+            var named when named.Contains(true) => true,
+            var named when named.Contains(null) => null,
+            _ => false,
+        },
+        StringType or AnyType => null,
+        _ => false,
+    };
 
     /// <summary>
     /// Whether the expression reads a body key of an evaluated instance. The type decides, not the key

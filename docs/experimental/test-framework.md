@@ -1174,6 +1174,8 @@ reports something Azure assigns when the resource is created, such as a public I
 that value does not exist. A policy about which instances are deployed does not read outputs, so it is
 not failed by one it never asked about, and needs no mock to stand in for it.
 
+An assertion reads a branch when it names it, with either a property access or an index: `target['evaluated']['outputs']` reads the same values as `target.evaluated.outputs`, and so does an index whose key is a variable holding `'outputs'`. A key that is only known when the case runs, such as one passed in as a parameter, could name any member of the object it indexes, so every branch it could name is computed.
+
 The same holds inside a resource. A role assignment granting a newly created identity reads the
 identity's principal ID, which Azure assigns, so offline it cannot be computed. That value does not
 decide whether the assignment is deployed or what it is called, so a policy about

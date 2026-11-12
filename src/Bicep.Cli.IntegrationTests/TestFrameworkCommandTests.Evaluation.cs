@@ -79,5 +79,69 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_Evaluated_IndexAccessReadsTheSameMembersAsPropertyAccess()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "evaluated-index-access");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string
+
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: name
+                  location: 'westus2'
+                  kind: 'StorageV2'
+                  sku: { name: 'Standard_LRS' }
+                }
+
+                output accountName string = account.name
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param member string = 'evaluated'
+
+                var evaluatedKey = 'evaluated'
+
+                test indexed 'main.bicep' = {
+                  params: {
+                    name: 'contosodata'
+                  }
+                  assertions: {
+                    evaluatedByIndex: {
+                      passWhen: target['evaluated'].resources[0].name == 'contosodata'
+                      message: 'target[\'evaluated\'] should read the same values as target.evaluated.'
+                    }
+                    outputsByIndex: {
+                      passWhen: target['evaluated']['outputs']['accountName'] == 'contosodata'
+                      message: 'Outputs should be readable by index.'
+                    }
+                    withModulesByIndex: {
+                      passWhen: length(target['evaluated']['withModules']['resources']) == 1
+                      message: 'withModules should be readable by index.'
+                    }
+                    evaluatedByVariable: {
+                      passWhen: target[evaluatedKey].resources[0].name == 'contosodata'
+                      message: 'A key held in a variable should read the same member.'
+                    }
+                    evaluatedByComputedKey: {
+                      passWhen: target[member].resources[0].name == 'contosodata'
+                      message: 'A key only known when the case runs should read the same member.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                output.Should().Contain("Evaluation indexed (main.bicep) Passed!");
+                error.Should().NotContain("doesn't exist");
+                result.Should().Be(0);
+            }
+        }
     }
 }
