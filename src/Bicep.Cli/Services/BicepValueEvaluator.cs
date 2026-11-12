@@ -63,9 +63,27 @@ public static class BicepValueEvaluator
             variables[functionVariable.Name] = Emit(context, functionVariable.Value);
         }
 
+        var copies = new JArray();
+
         foreach (var variable in reachable.Variables)
         {
-            variables[variable.Name] = Emit(context, new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value));
+            var value = new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value);
+
+            if (value is ForLoopExpression forLoop)
+            {
+                // A variable whose value is a for-expression is declared as a copy loop, which is how a
+                // deployed template declares it.
+                copies.Add(Emit(context, emitter => emitter.EmitCopyObject(variable.Name, forLoop.Expression, forLoop.Body)));
+            }
+            else
+            {
+                variables[variable.Name] = Emit(context, value);
+            }
+        }
+
+        if (copies.Count > 0)
+        {
+            variables["copy"] = copies;
         }
 
         variables[ResultVariableName] = Emit(context, expression);
@@ -291,6 +309,9 @@ public static class BicepValueEvaluator
     }
 
     private static JToken Emit(EmitterContext context, Expression expression)
+        => Emit(context, emitter => emitter.EmitExpression(expression));
+
+    private static JToken Emit(EmitterContext context, Action<ExpressionEmitter> emit)
     {
         var textWriter = new StringWriter();
         using var writer = new PositionTrackingJsonTextWriter(textWriter)
@@ -299,7 +320,7 @@ public static class BicepValueEvaluator
             Formatting = Formatting.None,
         };
 
-        new ExpressionEmitter(writer, context).EmitExpression(expression);
+        emit(new ExpressionEmitter(writer, context));
         writer.Flush();
 
         return JToken.Parse(textWriter.ToString());

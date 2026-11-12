@@ -147,5 +147,74 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_ForExpressionVariables_EvaluateInTestAndInputFiles()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "for-variables");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param names string[]
+
+                output joined string = join(names, '-')
+                """, outputFileDir);
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                param names string[]
+                param expectedJoined string
+
+                var expected = [for (n, i) in names: { name: n, position: i + 1 }]
+                var described = [for e in expected: '${e.position}:${e.name}']
+
+                test loops 'main.bicep' = {
+                  params: {
+                    names: names
+                  }
+                  assertions: {
+                    joined: {
+                      passWhen: target.evaluated.outputs.joined == expectedJoined && join(map(expected, e => e.name), '-') == expectedJoined
+                      message: 'Joined ${target.evaluated.outputs.joined}.'
+                    }
+                    described: {
+                      passWhen: length(described) == 3 && described[1] == '2:${names[1]}'
+                      message: 'Described ${join(described, ',')}.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "policy.biceptestparam", """
+                using 'policy.biceptest'
+
+                var items = ['a', 'b', 'c']
+                var plain = [for n in items: toUpper(n)]
+                var indexed = [for (n, i) in items: '${n}${i}']
+                var objects = [for (n, i) in items: { name: n, index: i }]
+
+                case plainCase = {
+                  names: plain
+                  expectedJoined: 'A-B-C'
+                }
+
+                case indexedCase = {
+                  names: indexed
+                  expectedJoined: 'a0-b1-c2'
+                }
+
+                case objectCase = {
+                  names: map(objects, o => '${o.name}${o.index}')
+                  expectedJoined: 'a0-b1-c2'
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", testPath, "--inputs", inputsPath, "--output-detail", "all");
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("ForLoopExpression");
+                output.Should().Contain("Evaluation loops (main.bicep) - 3/3 cases passed");
+                result.Should().Be(0);
+            }
+        }
     }
 }

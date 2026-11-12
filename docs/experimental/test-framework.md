@@ -579,6 +579,26 @@ A test file's inputs are its own. It decides which of them reach a target's prod
 which only shape its own policy. There is no implicit forwarding: a value a target never receives
 cannot influence what it computes.
 
+### Variables and `for` expressions
+
+An input file and a test file can both declare variables, and a variable's value can be a `for` expression. A case can then build a list from a smaller one instead of spelling out every element:
+
+```bicep
+// storage-cases.biceptestparam
+using 'storage-cases.biceptest'
+
+var regions = ['eastus', 'westus2']
+var prefixes = [for (region, i) in regions: 'contoso${i}']
+var described = [for (region, i) in regions: { region: region, prefix: prefixes[i] }]
+
+case firstRegion = {
+  namePrefix: prefixes[0]
+  location: described[0].region
+}
+```
+
+As in a template, a `for` expression must be the whole value of a variable. A case property cannot hold one directly; build the list in a variable and set the property to the variable. A variable's `for` expression cannot filter with `if` either; wrap the list in `filter()` instead, as in `filter(prefixes, p => p != 'contoso1')`.
+
 ### Running with `--inputs`
 
 ```console
