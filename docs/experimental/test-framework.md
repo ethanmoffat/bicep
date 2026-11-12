@@ -596,6 +596,26 @@ Every evaluation passed, so the counts alone would have read as success. The ext
 run still failed, rather than leaving a non-zero exit code to be explained by a summary that looks
 green.
 
+A case is attributed the same way. Each case stands alone: one whose values cannot be evaluated is
+reported as errored under its own name, once for every evaluation it would have run, and the other
+cases in the same input file still run:
+
+```console
+$ bicep test storage-cases.biceptest --inputs storage-cases-broken.biceptestparam --output-detail all
+storage-cases-broken.biceptestparam: The case "unreadable" could not be evaluated: The template language function 'int' cannot convert provided value 'one' to integer value. Please see https://aka.ms/arm-function-int for usage details.
+Evaluation namingRules (storage.bicep) - 1/2 cases passed
+  [✓] Case storage-cases-broken.biceptestparam: shortPrefix Passed!
+  [!] Case storage-cases-broken.biceptestparam: unreadable could not be evaluated!
+  Reason: The case "unreadable" could not be evaluated: The template language function 'int' cannot convert provided value 'one' to integer value. Please see https://aka.ms/arm-function-int for usage details.
+Evaluation sizePolicy (storage.bicep) - 1/2 cases passed
+  [✓] Case storage-cases-broken.biceptestparam: shortPrefix Passed!
+  [!] Case storage-cases-broken.biceptestparam: unreadable could not be evaluated!
+  Reason: The case "unreadable" could not be evaluated: The template language function 'int' cannot convert provided value 'one' to integer value. Please see https://aka.ms/arm-function-int for usage details.
+Failed! - Failed: 0, Errored: 2, Passed: 2, Total: 4, Duration: 151ms
+```
+
+In the JSON and JUnit documents the errored evaluations carry the case's name in `inputCase`, like any other case.
+
 ### Cases and a glob
 
 An input file names one test file, so when a glob discovers several, an input bound to one of the

@@ -290,6 +290,10 @@ namespace Bicep.Cli.Commands
 
                 bound.Add(inputUri);
                 cases.AddRange(result.Cases);
+
+                // A case that cannot run is reported here as well as in its results, so the run fails
+                // even when no evaluation reached the case.
+                errors.AddRange(result.Cases.Select(x => x.Error).OfType<string>().Select(error => $"{inputUri.GetFileName()}: {error}"));
             }
 
             return (cases.ToImmutable(), errors.ToImmutable(), bound.ToImmutable());

@@ -16,6 +16,16 @@ namespace Bicep.Cli.Services;
 /// <param name="Context">The ambient deployment context this case is evaluated with.</param>
 public record TestInputCase(IOUri InputFile, string Name, ImmutableDictionary<string, JToken> Values, TestDeploymentContext Context)
 {
+    /// <summary>
+    /// Why this case cannot supply values, or null when it can. A case that cannot is still a case: it
+    /// is reported under its own name for every evaluation it would have run, so one broken case never
+    /// hides its siblings and is never silently dropped from the results.
+    /// </summary>
+    public string? Error { get; init; }
+
+    public static TestInputCase Failed(IOUri inputFile, string name, string error)
+        => new(inputFile, name, [], TestDeploymentContext.Empty) { Error = error };
+
     public string InputFileName
     {
         get

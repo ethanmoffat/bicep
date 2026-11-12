@@ -235,6 +235,13 @@ namespace Bicep.Cli.Services
             var testFileUri = testFileModel.SourceFile.FileHandle.Uri;
             var identity = new TestCaseIdentity(testFileUri, testDeclaration.Name, targetModel.SourceFile.FileHandle.Uri, inputCase);
 
+            // A case that could not supply its values is reported here, once per evaluation it would
+            // have run, so it is counted under its own name rather than vanishing from the results.
+            if (inputCase?.Error is { } caseError)
+            {
+                return new TestResult(testDeclaration, identity, new TestEvaluation(null, caseError, [], []));
+            }
+
             if (testDeclaration.DeclaringTest.TryGetAssertionsSyntax() is { Properties: { } declared } && declared.Any())
             {
                 return new TestResult(testDeclaration, identity, EvaluateSemanticAssertions(testFileModel, testDeclaration, targetModel, factRoot, inputCase));

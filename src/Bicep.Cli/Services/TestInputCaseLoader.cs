@@ -74,11 +74,14 @@ public static class TestInputCaseLoader
             }
         }
 
+        // Each case stands alone: one that cannot be evaluated is recorded under its own name and the
+        // rest of the file still runs, because a case's values never depend on another case's.
         foreach (var declaration in inputFileModel.Root.TestCaseDeclarations)
         {
             if (declaration.DeclaringTestCase.Body is not { } body)
             {
-                return new(inputFileUri, [], $"The case \"{declaration.Name}\" does not declare a body.");
+                cases.Add(TestInputCase.Failed(inputFileUri, declaration.Name, $"The case \"{declaration.Name}\" does not declare a body."));
+                continue;
             }
 
             try
@@ -92,7 +95,7 @@ public static class TestInputCaseLoader
             }
             catch (Exception exception)
             {
-                return new(inputFileUri, [], $"The case \"{declaration.Name}\" could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}");
+                cases.Add(TestInputCase.Failed(inputFileUri, declaration.Name, $"The case \"{declaration.Name}\" could not be evaluated: {BicepValueEvaluator.Sanitize(exception)}"));
             }
         }
 
