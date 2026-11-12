@@ -2,10 +2,13 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
 using Bicep.Core.Syntax;
+using Bicep.Core.TypeSystem;
+using Bicep.Core.TypeSystem.Types;
 using Bicep.Core.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -22,6 +25,10 @@ namespace Bicep.Cli.Services;
 public static class BicepValueEvaluator
 {
     private const string DeploymentTemplateSchema = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#";
+
+    private const string LanguageVersion = "2.0";
+
+    private static readonly ConditionalWeakTable<SemanticModel, JToken> EmittedFiles = new();
 
     /// <summary>
     /// The name of the variable an expression is staged in. Outputs are evaluated optimistically,
@@ -52,9 +59,40 @@ public static class BicepValueEvaluator
 
         var variables = seedVariables is null ? new JObject() : (JObject)Escape(seedVariables);
 
-        foreach (var variable in reachable.Variables)
+        // A load function's result is computed at compile time and staged in a synthesized variable,
+        // which every expression that calls it reads.
+        foreach (var functionVariable in reachable.FunctionVariables)
         {
-            variables[variable.Name] = Emit(context, new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value));
+            variables[functionVariable.Name] = Emit(context, functionVariable.Value);
+        }
+
+        var copies = new JArray();
+        var declarations = reachable.Variables.Select(variable => (variable.Name, Value: new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value)));
+
+        if (reachable.UsesImports)
+        {
+            // An imported variable is declared under the name the import closure gives it, and may read
+            // any other variable in the closure, so the whole closure is declared.
+            declarations = declarations.Concat(context.SemanticModel.ImportClosureInfo.ImportedVariablesInClosure.Select(variable => (variable.Name, variable.Value)));
+        }
+
+        foreach (var (name, value) in declarations)
+        {
+            if (value is ForLoopExpression forLoop)
+            {
+                // A variable whose value is a for-expression is declared as a copy loop, which is how a
+                // deployed template declares it.
+                copies.Add(Emit(context, emitter => emitter.EmitCopyObject(name, forLoop.Expression, forLoop.Body)));
+            }
+            else
+            {
+                variables[name] = Emit(context, value);
+            }
+        }
+
+        if (copies.Count > 0)
+        {
+            variables["copy"] = copies;
         }
 
         variables[ResultVariableName] = Emit(context, expression);
@@ -80,9 +118,61 @@ public static class BicepValueEvaluator
             template["parameters"] = parameters;
         }
 
+        if (reachable.Functions.Length > 0 || reachable.UsesImports)
+        {
+            DeclareFunctions(context.SemanticModel, template);
+        }
+
+        // The engine honors a nullable parameter only in a template that declares a language version,
+        // as a template Bicep emits for one does.
+        if (template["languageVersion"] is null &&
+            template["parameters"] is JObject declared &&
+            declared.Properties().Any(p => p.Value["nullable"] is not null))
+        {
+            DeclareLanguageVersion(template, LanguageVersion);
+        }
+
         var evaluated = TemplateEvaluator.Evaluate(template, configBuilder: (deploymentContext ?? TestDeploymentContext.Empty).Apply).ToJToken();
 
         return evaluated["outputs"]?["result"]?["value"] ?? JValue.CreateNull();
+    }
+
+    /// <summary>
+    /// Declares the user-defined functions the file declares or imports.
+    ///
+    /// They are copied from the file's own emitted template, so each one is declared exactly as a
+    /// deployed template would declare it, along with the type definitions its parameters and result
+    /// refer to. A function cannot read anything outside its own arguments, so declaring every one is
+    /// safe. The file is emitted once, and only when a function or an import is used at all.
+    /// </summary>
+    private static void DeclareFunctions(SemanticModel model, JObject template)
+    {
+        var emitted = EmittedFiles.GetValue(model, m => TestTemplateEmitter.Emit(m));
+
+        if (emitted["functions"] is JArray functions)
+        {
+            template["functions"] = functions.DeepClone();
+        }
+
+        if (emitted["definitions"] is JObject definitions)
+        {
+            template["definitions"] = definitions.DeepClone();
+        }
+
+        if (emitted["languageVersion"] is { } languageVersion)
+        {
+            // A template that refers to type definitions declares its language version.
+            DeclareLanguageVersion(template, languageVersion.DeepClone());
+        }
+    }
+
+    /// <summary>
+    /// Declares the template's language version. At any version, its resources are keyed by symbolic name.
+    /// </summary>
+    private static void DeclareLanguageVersion(JObject template, JToken languageVersion)
+    {
+        template["languageVersion"] = languageVersion;
+        template["resources"] = new JObject();
     }
 
     /// <summary>
@@ -135,17 +225,30 @@ public static class BicepValueEvaluator
         {
             var value = ResolveInput(context, parameter, inputValues, deploymentContext);
 
-            result[parameter.Name] = new JObject
-            {
-                ["type"] = ArmTypeNameOf(value),
-                ["defaultValue"] = value,
-            };
+            // A nullable input with no value, or with an explicit null, is declared nullable with no
+            // default, which is how the engine yields null for an input nothing supplied. A null
+            // default is not the same thing: the engine treats it as a missing value.
+            result[parameter.Name] = value is null or { Type: JTokenType.Null }
+                ? new JObject
+                {
+                    ["type"] = ArmTypeNameOf(TypeHelper.TryRemoveNullability(parameter.Type) ?? parameter.Type),
+                    ["nullable"] = true,
+                }
+                : new JObject
+                {
+                    ["type"] = ArmTypeNameOf(value),
+                    ["defaultValue"] = value,
+                };
         }
 
         return result;
     }
 
-    private static JToken ResolveInput(
+    /// <summary>
+    /// Resolves the value an input takes: the case's value, then the declared default. A nullable
+    /// input with neither resolves to no value at all, which evaluates to null.
+    /// </summary>
+    private static JToken? ResolveInput(
         EmitterContext context,
         ParameterSymbol parameter,
         IReadOnlyDictionary<string, JToken>? inputValues,
@@ -161,8 +264,22 @@ public static class BicepValueEvaluator
             return Evaluate(context, defaultValue.DefaultValue, "string", deploymentContext: deploymentContext);
         }
 
+        if (TypeHelper.IsNullable(parameter.Type))
+        {
+            return null;
+        }
+
         throw new MissingInputException(parameter.Name);
     }
+
+    private static string ArmTypeNameOf(TypeSymbol type) => type switch
+    {
+        StringLiteralType or StringType => "string",
+        IntegerLiteralType or IntegerType => "int",
+        BooleanLiteralType or BooleanType => "bool",
+        ArrayType => "array",
+        _ => "object",
+    };
 
     private static string ArmTypeNameOf(JToken value) => value.Type switch
     {
@@ -177,8 +294,14 @@ public static class BicepValueEvaluator
     {
         var variables = new List<VariableSymbol>();
         var parameters = new List<ParameterSymbol>();
+        var functionVariables = new List<FunctionVariable>();
+        var functions = new List<DeclaredFunctionSymbol>();
         var seenVariables = new HashSet<VariableSymbol>();
         var seenParameters = new HashSet<ParameterSymbol>();
+        var seenFunctionVariables = new HashSet<string>();
+        var seenFunctions = new HashSet<DeclaredFunctionSymbol>();
+        var usesImports = false;
+        var functionVariablesByName = context.FunctionVariables.Values.ToDictionary(x => x.Name);
         var queue = new Queue<Expression>();
 
         queue.Enqueue(expression);
@@ -187,6 +310,7 @@ public static class BicepValueEvaluator
         {
             var collector = new SymbolReferenceCollector();
             collector.Visit(queue.Dequeue());
+            usesImports |= collector.UsesImports;
 
             foreach (var variable in collector.Variables)
             {
@@ -204,12 +328,32 @@ public static class BicepValueEvaluator
                     parameters.Add(parameter);
                 }
             }
+
+            foreach (var name in collector.SynthesizedVariables)
+            {
+                if (functionVariablesByName.TryGetValue(name, out var functionVariable) && seenFunctionVariables.Add(name))
+                {
+                    functionVariables.Add(functionVariable);
+                }
+            }
+
+            foreach (var function in collector.Functions)
+            {
+                if (seenFunctions.Add(function))
+                {
+                    functions.Add(function);
+                    queue.Enqueue(new ExpressionBuilder(context).Convert(function.DeclaringFunction));
+                }
+            }
         }
 
-        return new([.. variables], [.. parameters]);
+        return new([.. variables], [.. parameters], [.. functionVariables], [.. functions], usesImports);
     }
 
     private static JToken Emit(EmitterContext context, Expression expression)
+        => Emit(context, emitter => emitter.EmitExpression(expression));
+
+    private static JToken Emit(EmitterContext context, Action<ExpressionEmitter> emit)
     {
         var textWriter = new StringWriter();
         using var writer = new PositionTrackingJsonTextWriter(textWriter)
@@ -218,7 +362,7 @@ public static class BicepValueEvaluator
             Formatting = Formatting.None,
         };
 
-        new ExpressionEmitter(writer, context).EmitExpression(expression);
+        emit(new ExpressionEmitter(writer, context));
         writer.Flush();
 
         return JToken.Parse(textWriter.ToString());
@@ -280,13 +424,61 @@ public static class BicepValueEvaluator
 
     private static string MissingMetadata(string name) => $"The deployment metadata '{name}' is not valid.";
 
-    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters);
+    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters, ImmutableArray<FunctionVariable> FunctionVariables, ImmutableArray<DeclaredFunctionSymbol> Functions, bool UsesImports);
 
     private class SymbolReferenceCollector : ExpressionVisitor
     {
         public List<VariableSymbol> Variables { get; } = [];
 
         public List<ParameterSymbol> Parameters { get; } = [];
+
+        public List<string> SynthesizedVariables { get; } = [];
+
+        public List<DeclaredFunctionSymbol> Functions { get; } = [];
+
+        public bool UsesImports { get; private set; }
+
+        public override void VisitImportedVariableReferenceExpression(ImportedVariableReferenceExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitImportedVariableReferenceExpression(expression);
+        }
+
+        public override void VisitWildcardImportVariablePropertyReferenceExpression(WildcardImportVariablePropertyReferenceExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitWildcardImportVariablePropertyReferenceExpression(expression);
+        }
+
+        public override void VisitImportedUserDefinedFunctionCallExpression(ImportedUserDefinedFunctionCallExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitImportedUserDefinedFunctionCallExpression(expression);
+        }
+
+        public override void VisitWildcardImportInstanceFunctionCallExpression(WildcardImportInstanceFunctionCallExpression expression)
+        {
+            UsesImports = true;
+
+            base.VisitWildcardImportInstanceFunctionCallExpression(expression);
+        }
+
+        public override void VisitUserDefinedFunctionCallExpression(UserDefinedFunctionCallExpression expression)
+        {
+            Functions.Add(expression.Symbol);
+
+            base.VisitUserDefinedFunctionCallExpression(expression);
+        }
+
+        public override void VisitSynthesizedVariableReferenceExpression(SynthesizedVariableReferenceExpression expression)
+        {
+            SynthesizedVariables.Add(expression.Name);
+
+            base.VisitSynthesizedVariableReferenceExpression(expression);
+        }
 
         public override void VisitVariableReferenceExpression(VariableReferenceExpression expression)
         {

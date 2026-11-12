@@ -89,6 +89,104 @@ $ bicep build main.bicep
 main.bicep(1,10) : Error BCP461: A ".biceptest" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead.
 ```
 
+### Reading files with `load*` functions
+
+`loadJsonContent`, `loadYamlContent`, `loadTextContent`, `loadFileAsBase64` and the other `load*` functions work in a test file and in an input file as they do in a template. A path is relative to the file that calls the function, and the file is read when the test is compiled. A value can come from the same file the deployment reads, so a test does not restate it as a literal:
+
+```bicep
+test settingsAreApplied 'main.bicep' = {
+  params: {
+    prefix: loadJsonContent('settings.json').prefix
+    tags: loadJsonContent('settings.json', '.tags')
+  }
+  assertions: {
+    tagsWithinLimit: {
+      passWhen: length(target.evaluated.outputs.tags) <= loadYamlContent('limits.yaml').maxTags
+      message: 'At most ${loadYamlContent('limits.yaml').maxTags} tags.'
+    }
+  }
+}
+```
+
+### Functions in a test file
+
+A `func` declared in a test file can be called from a test's `params`, from an assertion's `passWhen` and `message`, from a variable, from a parameter default, and from another function. A user-defined type works as a function's parameter or result type. A function lets several assertions share one rule without repeating it:
+
+```bicep
+type Naming = {
+  prefix: string
+  suffix: string?
+}
+
+func render(naming Naming) string => '${naming.prefix}${naming.?suffix ?? 'stg'}'
+
+param naming Naming = { prefix: 'contoso' }
+
+test functions 'main.bicep' = {
+  params: {
+    prefix: naming.prefix
+  }
+  assertions: {
+    nameIsRendered: {
+      passWhen: target.evaluated.outputs.name == render(naming)
+      message: 'Expected ${render(naming)}.'
+    }
+  }
+}
+```
+
+An input file cannot declare a function. Declare it in the test file, or import it from a template as described next.
+
+### Importing from a template
+
+A test file and an input file can both `import` the variables, types and functions a template exports with `@export()`, by name or with `import * as`. A test can then check a template against the same values the deployment uses, and a case can take its value from the file that defines it instead of restating it as a literal:
+
+```bicep
+// shared.bicep
+@export()
+var defaultPrefix = 'contoso'
+
+@export()
+type Naming = {
+  prefix: string
+}
+
+@export()
+func render(naming Naming) string => '${naming.prefix}stg'
+```
+
+```bicep
+// policy.biceptest
+import { Naming, render } from 'shared.bicep'
+
+param naming Naming
+
+test imports 'main.bicep' = {
+  params: {
+    prefix: naming.prefix
+  }
+  assertions: {
+    nameIsRendered: {
+      passWhen: target.evaluated.outputs.name == render(naming)
+      message: 'Expected ${render(naming)}.'
+    }
+  }
+}
+```
+
+```bicep
+// policy.biceptestparam
+using 'policy.biceptest'
+
+import { defaultPrefix } from 'shared.bicep'
+
+case sharedPrefix = {
+  naming: { prefix: defaultPrefix }
+}
+```
+
+An exported variable keeps working when its value reads a file with a `load*` function or is a `for` expression. A test file cannot itself export anything.
+
 ## Selecting targets with `match`
 
 A test can also select its targets from the filesystem instead of naming one. Omit the literal path and declare a `match` selector in the test body:
@@ -221,7 +319,7 @@ top-level completions are scoped to what an input file can declare:
 
 | Offered | Not offered |
 |---------|-------------|
-| `using` (once), `case` and `deploymentContext` (only when `testFramework` is enabled), `var` | `param`, `test`, `extends`, `resource`, `module`, `output`, `targetScope`, `extension` |
+| `using` (once), `case` and `deploymentContext` (only when `testFramework` is enabled), `var`, `import` | `param`, `test`, `extends`, `resource`, `module`, `output`, `targetScope`, `extension` |
 
 `using` is offered only until one is declared, and `deploymentContext` only until the file declares
 its ambient context, because both are file-level singletons. `param` is not offered: an input file
@@ -315,6 +413,38 @@ When there are none, or more than one, the assertion fails and says how many the
 ```
 
 `single()` is available anywhere in a `.biceptest` file, and nowhere else: a `.bicep`, `.bicepparam` or `.biceptestparam` file reports `BCP057` for it, because ARM has no such function. In a test it is shorthand for `length(x) == 1 ? first(x) : fail(...)`, so it relies only on functions ARM evaluates. Its result has the type of the array's elements, so a misspelled property after it is still a compile error.
+
+### Conditions over several lines
+
+Bicep cannot continue an expression onto the next line after `&&` or `||`, in a test file or in a template, and wrapping the condition in parentheses does not change that. A long condition can still span lines in a form Bicep accepts. An array literal takes one element per line, so `!contains([...], false)` holds when every line is true and `contains([...], true)` holds when any line is:
+
+```bicep
+test naming 'main.bicep' = {
+  params: {
+    prefix: 'contoso'
+  }
+  assertions: {
+    nameFollowsTheRules: {
+      passWhen: !contains([
+        startsWith(target.evaluated.outputs.name, 'contoso')
+        endsWith(target.evaluated.outputs.name, 'stg')
+        length(target.evaluated.outputs.name) <= 24
+      ], false)
+      message: 'The name starts with the prefix, ends with stg and has at most 24 characters.'
+    }
+  }
+}
+```
+
+Every element of the array is evaluated, so a line cannot guard the next one. Where one condition only makes sense once another holds, such as reading `items[0]` after checking `length(items) > 0`, use a conditional expression, which can break before `?` and before `:` and evaluates only the branch it takes:
+
+```bicep
+passWhen: length(items) > 0
+  ? items[0] == 'a'
+  : false
+```
+
+A function declared in the test file, or a variable, can also name a condition once so that each assertion stays short. See [Functions in a test file](#functions-in-a-test-file).
 
 ### The `target` symbol
 
@@ -575,6 +705,8 @@ The test file's parameters are a real, checked contract. A case that sets a prop
 not declare, omits one it requires, or supplies the wrong type is a compile error in the input file,
 reported against the case that caused it — not a silently ignored value.
 
+An input whose type is nullable, such as `param suffix string?`, is optional. A case can leave it out or set it to `null`, and the test then reads it as `null`, as a template reads a nullable parameter that nothing supplied. The `null` reaches a target's nullable parameter unchanged, so `suffix ?? 'none'` works on both sides. An input that is neither nullable nor given a default is required: a case that leaves it out is a compile error, and a run without an input file reports, for each assertion that reads it, that the input has no value.
+
 The decorators that constrain a declared type work on a test file's parameters and types exactly as
 they do in a template: `@secure`, `@allowed`, `@minLength`/`@maxLength`, `@minValue`/`@maxValue`,
 `@metadata` and `@sealed`. A case is checked against them, so a value outside the range is a compile
@@ -593,6 +725,26 @@ decorators — are not available in a test file, because nothing in it is deploy
 A test file's inputs are its own. It decides which of them reach a target's production `params`, and
 which only shape its own policy. There is no implicit forwarding: a value a target never receives
 cannot influence what it computes.
+
+### Variables and `for` expressions
+
+An input file and a test file can both declare variables, and a variable's value can be a `for` expression. A case can then build a list from a smaller one instead of spelling out every element:
+
+```bicep
+// storage-cases.biceptestparam
+using 'storage-cases.biceptest'
+
+var regions = ['eastus', 'westus2']
+var prefixes = [for (region, i) in regions: 'contoso${i}']
+var described = [for (region, i) in regions: { region: region, prefix: prefixes[i] }]
+
+case firstRegion = {
+  namePrefix: prefixes[0]
+  location: described[0].region
+}
+```
+
+As in a template, a `for` expression must be the whole value of a variable. A case property cannot hold one directly; build the list in a variable and set the property to the variable. A variable's `for` expression cannot filter with `if` either; wrap the list in `filter()` instead, as in `filter(prefixes, p => p != 'contoso1')`.
 
 ### Running with `--inputs`
 

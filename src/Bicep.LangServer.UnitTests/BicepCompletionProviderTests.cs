@@ -622,7 +622,7 @@ output length int =
             var completions = await GetTestParamsFileDeclarationCompletions(testFrameworkEnabled: true);
             var labels = completions.Select(c => c.Label).ToList();
 
-            labels.Should().Contain(["using", "case", "deploymentContext", "var"]);
+            labels.Should().Contain(["using", "case", "deploymentContext", "var", "import"]);
         }
 
         [TestMethod]

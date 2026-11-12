@@ -73,6 +73,13 @@ public abstract class ImportedSymbol<T> : ImportedSymbol where T : ExportMetadat
             ExportMetadataKind.Type => true,
             _ => false,
         },
+        BicepTestFile or BicepTestParamFile => ExportMetadata.Kind switch
+        {
+            ExportMetadataKind.Type or
+            ExportMetadataKind.Variable or
+            ExportMetadataKind.Function => true,
+            _ => false,
+        },
         _ => false,
     };
 }
