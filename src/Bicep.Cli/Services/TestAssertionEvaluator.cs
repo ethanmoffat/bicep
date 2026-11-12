@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Bicep.Core;
 using Bicep.Core.Emit;
 using Bicep.Core.Intermediate;
 using Bicep.Core.Semantics;
@@ -174,21 +175,74 @@ public class TestAssertionEvaluator
     /// alone, so an output that happens to be called <c>location</c> does not count; a value whose type
     /// is not known is assumed to be one, since rendering a body that is not read costs nothing but
     /// omitting one that is would fail the read.
+    ///
+    /// An instance used as a whole value - converted with <c>string()</c>, compared, interpolated,
+    /// spread or indexed by a computed key - reads its body too, because the body is part of that
+    /// value.
     /// </summary>
     private static bool ReadsEvaluatedBody(EmitterContext context, SyntaxBase syntax) => SyntaxAggregator.Aggregate(
         syntax,
         seed: false,
         function: (found, node) => found || node switch
         {
-            PropertyAccessSyntax access => TestTargetType.EvaluatedBodyPropertyNames.Contains(access.PropertyName.IdentifierName) &&
-                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)),
-            ArrayAccessSyntax { IndexExpression: StringSyntax index } access => index.TryGetLiteralValue() is { } key &&
+            PropertyAccessSyntax access when TestTargetType.EvaluatedBodyPropertyNames.Contains(access.PropertyName.IdentifierName) &&
+                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)) => true,
+            ArrayAccessSyntax { IndexExpression: StringSyntax index } access when index.TryGetLiteralValue() is { } key &&
                 TestTargetType.EvaluatedBodyPropertyNames.Contains(key) &&
-                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)),
+                IsEvaluatedResourceOrUnknown(context.SemanticModel.GetTypeInfo(access.BaseExpression)) => true,
+            // An argument is judged through the expression it wraps, which knows which call it is passed to.
+            FunctionArgumentSyntax => false,
+            ExpressionSyntax expression => UsesEvaluatedInstanceWhole(context, expression),
             _ => false,
         },
         resultSelector: result => result,
         continuationFunction: (found, _) => !found);
+
+    /// <summary>
+    /// Functions that hand an instance on unchanged, or only count instances. Whatever they return is
+    /// checked in turn where it is used.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> PassThroughFunctions = ImmutableHashSet.Create(
+        LanguageConstants.IdentifierComparer,
+        "filter", "map", "sort", "reduce", "groupBy", "toObject", "first", "last", "take", "skip", "single", "concat", "flatten", "length", "empty");
+
+    private static bool UsesEvaluatedInstanceWhole(EmitterContext context, ExpressionSyntax expression)
+    {
+        if (!ContainsEvaluatedResource(context.SemanticModel.GetTypeInfo(expression), []))
+        {
+            return false;
+        }
+
+        return context.SemanticModel.Binder.GetParent(expression) switch
+        {
+            // A key read is decided by the key, and what it returns is checked where that is used.
+            PropertyAccessSyntax access when ReferenceEquals(access.BaseExpression, expression) => false,
+            ArrayAccessSyntax access when ReferenceEquals(access.BaseExpression, expression) =>
+                access.IndexExpression is not StringSyntax { } index || index.TryGetLiteralValue() is null
+                    ? context.SemanticModel.GetTypeInfo(access.IndexExpression) is not (IntegerType or IntegerLiteralType)
+                    : false,
+            ParenthesizedExpressionSyntax or NonNullAssertionSyntax or TernaryOperationSyntax or LambdaSyntax or TypedLambdaSyntax => false,
+            BinaryOperationSyntax binary => binary.Operator is not BinaryOperator.Coalesce,
+            ForSyntax @for => !ReferenceEquals(@for.Expression, expression),
+            FunctionArgumentSyntax argument => context.SemanticModel.Binder.GetParent(argument) is not FunctionCallSyntaxBase call ||
+                !PassThroughFunctions.Contains(call.Name.IdentifierName),
+            _ => true,
+        };
+    }
+
+    /// <summary>
+    /// Whether a value of this type holds an evaluated instance anywhere within it, such as an array of
+    /// instances or the <c>evaluated</c> object itself.
+    /// </summary>
+    private static bool ContainsEvaluatedResource(TypeSymbol type, ImmutableHashSet<TypeSymbol> visited) =>
+        !visited.Contains(type) && type switch
+        {
+            _ when TestTargetType.IsEvaluatedResourceFact(type) => true,
+            ArrayType array => ContainsEvaluatedResource(array.Item.Type, visited.Add(type)),
+            UnionType union => union.Members.Any(member => ContainsEvaluatedResource(member.Type, visited.Add(type))),
+            ObjectType @object => @object.Properties.Values.Any(property => ContainsEvaluatedResource(property.TypeReference.Type, visited.Add(type))),
+            _ => false,
+        };
 
     private static bool IsEvaluatedResourceOrUnknown(TypeSymbol type) => type is AnyType || TestTargetType.IsEvaluatedResourceFact(type);
 

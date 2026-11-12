@@ -1060,6 +1060,19 @@ the instance and the declaration" below), however much of its body the assertion
 Bodies are computed only for an assertion that reads one, and they are all-or-nothing for the
 instances in scope: if any instance's body could not be computed, reading a body fails and names it.
 
+An assertion also reads bodies when it uses an instance as a whole value: passing it to `string()` or another function that looks inside it, comparing it with `==` or `!=`, interpolating it, spreading it, or indexing it with a computed key. `string(r)` therefore shows the same `properties` that reading `r.properties` would, which makes it a quick way to see what an instance holds:
+
+```bicep
+showTheAccount: {
+  passWhen: false
+  message: string(single(filter(target.evaluated.resources, r => r.symbolicName == 'account')))
+}
+```
+
+Functions that only pass instances along or count them, such as `filter`, `map`, `sort`, `first`, `single` and `length`, do not read bodies by themselves, so `length(filter(target.evaluated.resources, r => r.type == '...'))` still needs none.
+
+`string(null)` is an error, as it is in ARM: the template language's `string()` does not accept null. A value that may be null, such as a body key the declaration does not set, needs a fallback first, as in `string(r.sku ?? {})` or `string(r.?tags ?? 'none')`.
+
 ```text
 Could not be evaluated: The properties of 'assignment' (main.bicep(6)) could not be evaluated for this case: The language expression property 'principalId' doesn't exist, ...
 ```
