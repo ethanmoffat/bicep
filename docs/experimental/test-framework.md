@@ -1194,6 +1194,15 @@ An unevaluatable condition is an error rather than a silent exclusion. Reporting
 condition that could not be computed would let a policy pass by describing a smaller deployment than
 the case actually produces.
 
+Variables are evaluated the way ARM evaluates them: every variable in a template is computed up front, before any resource, whether or not anything reads it. A variable that is only used in the branch of a conditional the case does not take is still computed, so a `for` expression or lambda inside it has to succeed for the case's values:
+
+```bicep
+var explicit = [for e in endpoints: { kind: e.kind }]
+var effective = empty(regions) ? explicit : regions
+```
+
+When `endpoints` holds objects without a `kind` property, `explicit` fails even when `regions` is not empty, and the deployment would fail the same way. Read the property with `e.?kind`, or write the expression inside the conditional, where only the branch that is taken is evaluated. A variable that reads a runtime value, such as a module output or a property of an existing resource, behaves differently: Bicep writes its expression into each place that uses it, so that read only happens when the branch around it is taken, and a branch the case does not take needs no mock for it.
+
 ## Mocks
 
 Some values a deployment uses do not come from its own source. An `existing` resource is read from
