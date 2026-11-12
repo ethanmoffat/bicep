@@ -89,6 +89,25 @@ $ bicep build main.bicep
 main.bicep(1,10) : Error BCP461: A ".biceptest" file declares tests and is not a deployable template, so it cannot be referenced here. Reference the Bicep file under test instead.
 ```
 
+### Reading files with `load*` functions
+
+`loadJsonContent`, `loadYamlContent`, `loadTextContent`, `loadFileAsBase64` and the other `load*` functions work in a test file and in an input file as they do in a template. A path is relative to the file that calls the function, and the file is read when the test is compiled. A value can come from the same file the deployment reads, so a test does not restate it as a literal:
+
+```bicep
+test settingsAreApplied 'main.bicep' = {
+  params: {
+    prefix: loadJsonContent('settings.json').prefix
+    tags: loadJsonContent('settings.json', '.tags')
+  }
+  assertions: {
+    tagsWithinLimit: {
+      passWhen: length(target.evaluated.outputs.tags) <= loadYamlContent('limits.yaml').maxTags
+      message: 'At most ${loadYamlContent('limits.yaml').maxTags} tags.'
+    }
+  }
+}
+```
+
 ## Selecting targets with `match`
 
 A test can also select its targets from the filesystem instead of naming one. Omit the literal path and declare a `match` selector in the test body:

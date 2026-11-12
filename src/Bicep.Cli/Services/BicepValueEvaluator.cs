@@ -52,6 +52,13 @@ public static class BicepValueEvaluator
 
         var variables = seedVariables is null ? new JObject() : (JObject)Escape(seedVariables);
 
+        // A load function's result is computed at compile time and staged in a synthesized variable,
+        // which every expression that calls it reads.
+        foreach (var functionVariable in reachable.FunctionVariables)
+        {
+            variables[functionVariable.Name] = Emit(context, functionVariable.Value);
+        }
+
         foreach (var variable in reachable.Variables)
         {
             variables[variable.Name] = Emit(context, new ExpressionBuilder(context).Convert(variable.DeclaringVariable.Value));
@@ -177,8 +184,11 @@ public static class BicepValueEvaluator
     {
         var variables = new List<VariableSymbol>();
         var parameters = new List<ParameterSymbol>();
+        var functionVariables = new List<FunctionVariable>();
         var seenVariables = new HashSet<VariableSymbol>();
         var seenParameters = new HashSet<ParameterSymbol>();
+        var seenFunctionVariables = new HashSet<string>();
+        var functionVariablesByName = context.FunctionVariables.Values.ToDictionary(x => x.Name);
         var queue = new Queue<Expression>();
 
         queue.Enqueue(expression);
@@ -204,9 +214,17 @@ public static class BicepValueEvaluator
                     parameters.Add(parameter);
                 }
             }
+
+            foreach (var name in collector.SynthesizedVariables)
+            {
+                if (functionVariablesByName.TryGetValue(name, out var functionVariable) && seenFunctionVariables.Add(name))
+                {
+                    functionVariables.Add(functionVariable);
+                }
+            }
         }
 
-        return new([.. variables], [.. parameters]);
+        return new([.. variables], [.. parameters], [.. functionVariables]);
     }
 
     private static JToken Emit(EmitterContext context, Expression expression)
@@ -280,13 +298,22 @@ public static class BicepValueEvaluator
 
     private static string MissingMetadata(string name) => $"The deployment metadata '{name}' is not valid.";
 
-    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters);
+    private record ReachableSymbols(ImmutableArray<VariableSymbol> Variables, ImmutableArray<ParameterSymbol> Parameters, ImmutableArray<FunctionVariable> FunctionVariables);
 
     private class SymbolReferenceCollector : ExpressionVisitor
     {
         public List<VariableSymbol> Variables { get; } = [];
 
         public List<ParameterSymbol> Parameters { get; } = [];
+
+        public List<string> SynthesizedVariables { get; } = [];
+
+        public override void VisitSynthesizedVariableReferenceExpression(SynthesizedVariableReferenceExpression expression)
+        {
+            SynthesizedVariables.Add(expression.Name);
+
+            base.VisitSynthesizedVariableReferenceExpression(expression);
+        }
 
         public override void VisitVariableReferenceExpression(VariableReferenceExpression expression)
         {
