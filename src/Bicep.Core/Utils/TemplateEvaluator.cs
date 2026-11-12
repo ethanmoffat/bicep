@@ -390,8 +390,13 @@ namespace Bicep.Core.Utils
 
             if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
             {
-                // A relative scope names a resource in the deployment's own scope.
-                var scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
+                // A relative scope names a resource in the deployment's own scope, except a management
+                // group, which is a tenant resource wherever it is named from.
+                var scopeString = scope.StartsWith('/')
+                    ? scope
+                    : scope.StartsWith("Microsoft.Management/managementGroups/", StringComparison.OrdinalIgnoreCase)
+                        ? $"/providers/{scope}"
+                        : $"{deploymentScopeString}providers/{scope}";
                 return scopeString.EndsWith('/') ? scopeString : scopeString + "/";
             }
 

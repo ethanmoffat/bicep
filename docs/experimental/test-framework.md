@@ -817,6 +817,8 @@ $ bicep test deployment-name.biceptest --inputs deployment-name.biceptestparam -
 Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 161ms
 ```
 
+A module does not need to output its own name for a test to check it: `target.evaluated.modules` reports the name each module call computed (see [Which deployment each module call creates](#which-deployment-each-module-call-creates)).
+
 There is no implicit default. A target that reads `deployment()` without a name being supplied is
 not given an invented one:
 
@@ -986,6 +988,8 @@ offline evaluator working out the consequences of the source and the values supp
 | `target.evaluated.resources` | Resource instances the selected file would deploy |
 | `target.evaluated.outputs` | Evaluated values of the outputs the selected file declares, by name |
 | `target.evaluated.withModules.resources` | The same instances for the selected file **plus every local module reachable from it** |
+| `target.evaluated.modules` | The deployment each module call in the selected file creates, one per loop instance (see "Which deployment each module call creates" below) |
+| `target.evaluated.withModules.modules` | The same deployments for the selected file **plus those created by every local module reachable from it** |
 
 Each instance carries:
 
@@ -1120,6 +1124,44 @@ Unlike bodies, these are always available: they need nothing beyond the name and
 Bicep requires to be computable before anything deploys. Like every evaluated value they are never
 written to a report. An `existing` resource is not reported at all, because nothing deploys it; a
 mock keyed by its real resource ID is what checks where it is read from.
+
+### Which deployment each module call creates
+
+Each module call creates a nested deployment, and `target.evaluated.modules` lists them, one for each loop instance of each call the case deploys. `target.resources` and `target.modules` describe the declarations; this is what those declarations produce for the case. Each deployment carries:
+
+| Fact | Description |
+|------|-------------|
+| `name` | The deployment name the call computed for this instance, such as `'${deployment().name}-primary'` worked out with this case's values |
+| `symbolicName` | The symbolic name of the module declaration |
+| `instanceId` | Distinguishes instances of the same call, including loop indices and, under `withModules`, the path of calls that reached it |
+| `file`, `line` | The module declaration that produced the deployment |
+| `id` | The ID of the `Microsoft.Resources/deployments` resource, which sits beneath the scope the deployment is created at |
+| `subscriptionId`, `resourceGroup` | The subscription and resource group the module deploys into. Empty where there is none |
+| `scope` | The ID of what the module deploys into: its own `scope:` argument, or the caller's scope when it has none |
+
+ARM limits a deployment name to 64 characters. Because a name is often built from a parameter and `deployment().name`, a long input case can break it, and the source alone does not show it:
+
+```bicep
+namesFitTheLimit: {
+  failOn: filter(target.evaluated.withModules.modules, m => length(m.name) > 64)
+  message: 'Azure rejects a deployment name longer than 64 characters.'
+}
+```
+
+A violation names the declaration and the deployment, in the same way as a resource instance:
+
+```console
+	[✗] Assertion namesFitTheLimit failed!
+		Azure rejects a deployment name longer than 64 characters.
+		main.bicep(2): a-very-long-stamp-name-that-goes-on-and-on-and-on-and-on-and-on-0
+		main.bicep(2): a-very-long-stamp-name-that-goes-on-and-on-and-on-and-on-and-on-1
+```
+
+A call whose condition is false is not listed. An unevaluatable condition is an error, as it is for a resource.
+
+The name and the scope are always available, because Bicep requires both to be computable before anything deploys. A module call whose arguments are only known at deployment time is still listed in `target.evaluated.modules`. Reading `target.evaluated.withModules.modules` follows the call into the module, so it fails and names the call, in the same way as `withModules.resources` (see "Evaluation happens only when it is asked for" below).
+
+The order follows the evaluated template, which lists looped calls after the others, so compare names as a set or sort them first. `modules` lists every call, including a call to a registry or template spec module. `target.evaluated.resources` is unchanged: as before, it reports a call to a module the evaluator cannot follow as a `Microsoft.Resources/deployments` instance with no `properties`, and it does not report a call to a local module.
 
 ### Source facts and evaluated instances are different questions
 

@@ -162,6 +162,20 @@ namespace Bicep.Cli.IntegrationTests
                   name: 'root'
                   scope: tenant()
                 }
+
+                module sibling 'definition.bicep' = {
+                  name: 'sibling'
+                  scope: managementGroup('mg-other')
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "definition.bicep", """
+                targetScope = 'managementGroup'
+
+                resource definition 'Microsoft.Authorization/policyDefinitions@2023-04-01' = {
+                  name: 'definition'
+                  properties: {}
+                }
                 """, outputFileDir);
 
             FileHelper.SaveResultFile(TestContext, "tenant.bicep", """
@@ -233,8 +247,17 @@ namespace Bicep.Cli.IntegrationTests
                         ['landingZone/storage/blobs', '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-workload']
                         ['landingZone/storage/doNotDelete', account]
                         ['root/group', '/']
+                        ['sibling/definition', '/providers/Microsoft.Management/managementGroups/mg-other']
                       ]
                       message: 'Each instance should report what it is deployed into.'
+                    }
+                    everyModuleCallReportsWhereItRuns: {
+                      passWhen: map(target.evaluated.modules, m => [m.name, m.scope, m.id]) == [
+                        ['landingZone', '/subscriptions/22222222-2222-2222-2222-222222222222', '/subscriptions/22222222-2222-2222-2222-222222222222/providers/Microsoft.Resources/deployments/landingZone']
+                        ['root', '/', '/providers/Microsoft.Resources/deployments/root']
+                        ['sibling', '/providers/Microsoft.Management/managementGroups/mg-other', '/providers/Microsoft.Management/managementGroups/mg-other/providers/Microsoft.Resources/deployments/sibling']
+                      ]
+                      message: 'Each module deployment should report where it runs.'
                     }
                     everyIdBeginsWithItsScope: {
                       failOn: filter(target.evaluated.withModules.resources, r => !startsWith(r.id, r.scope))
@@ -267,6 +290,186 @@ namespace Bicep.Cli.IntegrationTests
                 error.Should().NotContain("Error");
                 output.Should().Contain("Evaluation placement (main.bicep) [placement.biceptestparam: only] Passed!");
                 result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Facts_ReportTheDeploymentEachModuleCallCreates()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "facts-evaluated-modules");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param stamp string
+                param zones string[]
+                param withAudit bool = false
+
+                module privateZones 'zone.bicep' = [for zone in zones: {
+                  name: '${stamp}-pdz-${replace(zone, '.', '-')}'
+                  params: { zoneName: zone }
+                }]
+
+                module shared 'zone.bicep' = {
+                  name: '${stamp}-shared'
+                  scope: resourceGroup('rg-shared')
+                  params: { zoneName: 'shared.example.com' }
+                }
+
+                module audit 'zone.bicep' = if (withAudit) {
+                  name: '${stamp}-audit'
+                  params: { zoneName: 'audit.example.com' }
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "zone.bicep", """
+                param zoneName string
+
+                resource zone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+                  name: zoneName
+                  location: 'global'
+                }
+
+                module records 'records.bicep' = {
+                  name: '${deployment().name}-records'
+                  params: { zoneName: zone.name }
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "records.bicep", """
+                param zoneName string
+
+                output zone string = zoneName
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "naming.biceptest", """
+                param stamp string
+                param zones string[]
+
+                test naming 'main.bicep' = {
+                  params: {
+                    stamp: stamp
+                    zones: zones
+                  }
+                  assertions: {
+                    eachCallIsNamedForItsStamp: {
+                      passWhen: sort(map(target.evaluated.modules, m => [m.instanceId, m.name, m.resourceGroup]), (a, b) => a[0] < b[0]) == [
+                        ['privateZones[0]', 'west-pdz-privatelink-blob-core-windows-net', 'rg-app']
+                        ['privateZones[1]', 'west-pdz-privatelink-vaultcore-azure-net', 'rg-app']
+                        ['shared', 'west-shared', 'rg-shared']
+                      ]
+                      message: 'Each module deployment is named for the stamp and the zone it creates.'
+                    }
+                    deploymentsAreAddressedWhereTheyRun: {
+                      passWhen: map(filter(target.evaluated.modules, m => m.symbolicName == 'shared'), m => [m.id, m.scope]) == [['/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-shared/providers/Microsoft.Resources/deployments/west-shared', '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-shared']]
+                      message: 'The shared zone deployment runs in the shared resource group.'
+                    }
+                    callsCarryTheirDeclaration: {
+                      passWhen: map(filter(target.evaluated.modules, m => m.symbolicName == 'privateZones'), m => '${m.file}:${m.line}') == ['main.bicep:5', 'main.bicep:5']
+                      message: 'A call points at its declaration.'
+                    }
+                    nestedCallsAreNamedPerCall: {
+                      passWhen: sort(map(filter(target.evaluated.withModules.modules, m => m.symbolicName == 'records'), m => [m.instanceId, m.name, m.file]), (a, b) => a[0] < b[0]) == [
+                        ['privateZones[0]/records', 'west-pdz-privatelink-blob-core-windows-net-records', 'zone.bicep']
+                        ['privateZones[1]/records', 'west-pdz-privatelink-vaultcore-azure-net-records', 'zone.bicep']
+                        ['shared/records', 'west-shared-records', 'zone.bicep']
+                      ]
+                      message: 'A nested call is named from the deployment that makes it.'
+                    }
+                    namesFitTheDeploymentLimit: {
+                      failOn: filter(target.evaluated.withModules.modules, m => length(m.name) > 64)
+                      message: 'Deployment names are limited to 64 characters.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "naming.biceptestparam", """
+                using 'naming.biceptest'
+
+                deploymentContext = {
+                  subscriptionId: '11111111-1111-1111-1111-111111111111'
+                  resourceGroup: 'rg-app'
+                  deploymentName: 'naming'
+                  deploymentLocation: 'westus'
+                }
+
+                case west = {
+                  stamp: 'west'
+                  zones: ['privatelink.blob.core.windows.net', 'privatelink.vaultcore.azure.net']
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                output.Should().Contain("Evaluation naming (main.bicep) [naming.biceptestparam: west] Passed!");
+                result.Should().Be(0);
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Facts_NameAModuleCallWhoseArgumentsAreOnlyKnownAtDeployment()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "facts-evaluated-unresolved-module");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+                  name: 'workload'
+                  location: 'eastus'
+                }
+
+                module grant 'grant.bicep' = {
+                  name: 'grant-${identity.name}'
+                  params: {
+                    principalId: identity.properties.principalId
+                  }
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "grant.bicep", """
+                param principalId string
+
+                module inner 'inner.bicep' = {
+                  name: 'inner'
+                }
+
+                output principal string = principalId
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "inner.bicep", "", outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test named 'main.bicep' = {
+                  assertions: {
+                    theCallIsNamed: {
+                      passWhen: map(target.evaluated.modules, m => m.name) == ['grant-workload']
+                      message: 'A deployment name does not depend on the arguments.'
+                    }
+                  }
+                }
+
+                test nested 'main.bicep' = {
+                  assertions: {
+                    readsWhatTheModuleCalls: {
+                      passWhen: length(target.evaluated.withModules.modules) > 0
+                      message: 'What a module calls needs the arguments it is called with.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                output.Should().Contain("Evaluation named (main.bicep) Passed!");
+                error.Should().Contain("The arguments of module 'grant' could not be evaluated for this case");
+                result.Should().Be(1);
             }
         }
     }

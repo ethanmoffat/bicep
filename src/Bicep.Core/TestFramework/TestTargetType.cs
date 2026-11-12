@@ -185,6 +185,26 @@ public static class TestTargetType
         ],
         null);
 
+    /// <summary>
+    /// One module call the target would make for the case being run: the deployment ARM would create
+    /// for it. Its resources are under <c>withModules.resources</c>; this describes the call itself.
+    /// </summary>
+    private static readonly ObjectType EvaluatedModuleFact = new(
+        "evaluatedModuleFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The deployment name the call computes for this case, which is the name the deployment has in Azure."),
+            new NamedTypeProperty(SymbolicNamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the module declaration this call came from."),
+            new NamedTypeProperty(InstanceIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "Identifies this call among the others the same declaration produced, including enclosing module call and loop indices."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(IdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource ID of the deployment, beneath the scope it deploys to."),
+            new NamedTypeProperty(SubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The subscription the deployment runs in. Empty at tenant or management group scope."),
+            new NamedTypeProperty(ResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource group the deployment runs in. Empty if it does not run in one."),
+            new NamedTypeProperty(ScopePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The ID of the resource group, subscription or management group the deployment runs in, or '/' for the tenant."),
+        ],
+        null);
+
     private static readonly ObjectType EvaluatedWithModules = new(
         "evaluatedWithModules",
         TypeSymbolValidationFlags.Default,
@@ -194,6 +214,11 @@ public static class TestTargetType
                 new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
                 TypePropertyFlags.ReadOnly,
                 "Evaluated instances from the selected file together with every local module reachable from it."),
+            new NamedTypeProperty(
+                ModulesPropertyName,
+                new TypedArrayType(EvaluatedModuleFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Module calls the selected file makes together with the calls made by every local module reachable from it."),
         ],
         null);
 
@@ -210,6 +235,11 @@ public static class TestTargetType
                 new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
                 TypePropertyFlags.ReadOnly,
                 "Resource instances the selected file would deploy. Loops are expanded, false conditions are excluded and existing references are not instances."),
+            new NamedTypeProperty(
+                ModulesPropertyName,
+                new TypedArrayType(EvaluatedModuleFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Module calls the selected file would make, one per deployment. Loops are expanded and false conditions are excluded."),
             new NamedTypeProperty(
                 OutputsPropertyName,
                 // The selected file is not known until a target is bound, and one test may cover many

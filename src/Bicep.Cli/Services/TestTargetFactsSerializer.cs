@@ -107,6 +107,7 @@ public static class TestTargetFactsSerializer
         var result = new JObject
         {
             [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local, includeBodies),
+            [TestTargetType.ModulesPropertyName] = SerializeEvaluatedModules(evaluated.LocalModules),
         };
 
         if (includeOutputs)
@@ -119,11 +120,25 @@ public static class TestTargetFactsSerializer
             result[TestTargetType.WithModulesPropertyName] = new JObject
             {
                 [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.WithModules, includeBodies),
+                [TestTargetType.ModulesPropertyName] = SerializeEvaluatedModules(evaluated.WithModulesModules),
             };
         }
 
         return result;
     }
+
+    private static JArray SerializeEvaluatedModules(IEnumerable<TestEvaluatedModule> modules) => new(modules.Select(module => new JObject
+    {
+        [TestTargetType.NamePropertyName] = module.Name,
+        [TestTargetType.SymbolicNamePropertyName] = module.SymbolicName,
+        [TestTargetType.InstanceIdPropertyName] = module.InstanceId,
+        [TestTargetType.FilePropertyName] = module.File,
+        [TestTargetType.LinePropertyName] = module.Line,
+        [TestTargetType.IdPropertyName] = module.Id,
+        [TestTargetType.SubscriptionIdPropertyName] = module.SubscriptionId,
+        [TestTargetType.ResourceGroupPropertyName] = module.ResourceGroup,
+        [TestTargetType.ScopePropertyName] = module.Scope,
+    }).ToArray<object>());
 
     /// <summary>
     /// Bodies are rendered only for an assertion that reads one. The facts reach ARM as a single value,
