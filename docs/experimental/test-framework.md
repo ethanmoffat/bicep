@@ -937,7 +937,7 @@ Three rules differ from what you might expect:
   ```
 
   A failure while computing a resource's body keeps the name of the resource in front of that
-  message. A target that never reads `environment()` does not need one.
+  message, and a failure while computing an output keeps the name of the output. A target that never reads `environment()` does not need one.
 
 ## Evaluated values
 
@@ -1172,7 +1172,8 @@ about the selected file alone is not failed by a module it did not ask about.
 `target.evaluated.outputs` is likewise only computed when an assertion reads it. An output often
 reports something Azure assigns when the resource is created, such as a public IP address, and offline
 that value does not exist. A policy about which instances are deployed does not read outputs, so it is
-not failed by one it never asked about, and needs no mock to stand in for it.
+not failed by one it never asked about, and needs no mock to stand in for it. Each output is computed
+on its own as well, so an assertion that reads one output is not failed by another it never mentions.
 
 An assertion reads a branch when it names it, with either a property access or an index: `target['evaluated']['outputs']` reads the same values as `target.evaluated.outputs`, and so does an index whose key is a variable holding `'outputs'`. A key that is only known when the case runs, such as one passed in as a parameter, could name any member of the object it indexes, so every branch it could name is computed.
 
@@ -1343,7 +1344,7 @@ $ bicep test mocks-failing.biceptest --inputs mocks-failing.biceptestparam --out
 [✗] Evaluation unconfiguredField (mocks.bicep) [mocks-failing.biceptestparam: eastus] Failed at 1 / 1 assertions!
 	[✗] Assertion clientIdIsResolved failed!
 		The deployment reads a client ID that no mock answers.
-		Could not be evaluated: The language expression property 'clientId' doesn't exist, available properties are 'principalId'.
+		Could not be evaluated: The output 'deployClientId' could not be evaluated for this case: The language expression property 'clientId' doesn't exist, available properties are 'principalId'.
 ```
 
 A request that no mock answers at all is reported the same way, naming the request so it can be
@@ -1356,8 +1357,12 @@ configured:
 Neither case falls back to a guessed value, and neither reaches Azure. A test that cannot get a value
 it needs fails; it does not quietly describe a deployment that was never computed.
 
-Because `target.evaluated.outputs` is computed as a set, a target whose outputs read an unanswered
-value cannot report any of them for that case. An assertion that does not read outputs is unaffected.
+Each output is computed on its own. An output that reads an unanswered value cannot be reported for that case, and an assertion that reads it fails with the output's name in front of the reason, as above. The target's other outputs are still reported, so an assertion that reads only those passes or fails on their values, and an assertion that does not read outputs at all is unaffected. An assertion that uses the outputs object as a whole, such as `items(target.evaluated.outputs)`, or indexes it with a key only known when the case runs, reads every output. An output that passes on a module's output names that module output when it is the one that could not be computed:
+
+```console
+Could not be evaluated: The output 'endpoint' could not be evaluated for this case: It reads the output 'endpoint' of module 'storage', which could not be evaluated: No mock answers reference on ...
+```
+
 Other tests and other cases still run, and the failure is attributed to the one that hit it.
 
 Absence only matters where a value is actually read, so the same three rules follow:
@@ -2076,7 +2081,7 @@ $ bicep test "*.biceptest" --output-detail all
 		Could not be evaluated: The properties of 'origin' (environment.bicep(23)) could not be evaluated for this case: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
 	[✗] Assertion endpointIsTheAccountInThisCloud failed!
 		The published endpoint must be the account in the cloud being deployed to.
-		Could not be evaluated: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
+		Could not be evaluated: The output 'blobEndpoint' could not be evaluated for this case: environment() was evaluated but no environment was supplied. Set 'environment' in the input file's deploymentContext, or override it for this case with @environment().
 [✗] Evaluation fleet-failing.biceptest: storageOnly (fleet.bicep) Failed at 1 / 1 assertions!
 	[✗] Assertion onlyStorageIsDeployed failed!
 		This fleet is only allowed to deploy storage accounts.
@@ -2153,7 +2158,6 @@ The specified input "...\bicepconfig.json" was not recognized as a Bicep or Bice
 - Reading any evaluated body fails if one instance in scope has a body that cannot be computed offline, even if the assertion is about a different instance.
 - Module-to-module argument flow is resolved by repeated evaluation, up to a bounded number of rounds. A longer chain than that is left unresolved.
 - Mocks answer exact `reference` and `listKeys` requests. There is no conditional, sequenced or counted setup, and mocks cannot be declared in an input file.
-- `target.evaluated.outputs` is computed as a set, so a target with any unanswered runtime read reports none of its outputs for that case. Assertions that do not read outputs are unaffected.
 - A module call is evaluated whole: one argument that cannot be computed offline leaves all of that module's instances and outputs unknown, even those that do not depend on it.
 - Tests evaluate templates offline. They do not deploy resources, call Azure, or validate authorization.
 - A fact typed as plain `string`, such as a resource's `type`, can be compared with a misspelled value without any diagnostic; the assertion simply never holds. Only facts typed as a closed set, such as `targetScope`, are checked by `no-impossible-comparisons`.

@@ -42,6 +42,13 @@ namespace Bicep.Core.Utils
         }
 
         /// <summary>
+        /// A runtime read that nothing answered, raised with the reason the caller's handler gave.
+        /// </summary>
+        private sealed class UnansweredRequestException(Exception reason) : Exception(reason.Message, reason)
+        {
+        }
+
+        /// <summary>
         /// Which resources' properties are still unknown while resources are evaluated one at a time, and
         /// why the last attempt at each failed. A resource that is not here has been computed.
         /// </summary>
@@ -116,7 +123,7 @@ namespace Bicep.Core.Utils
 
                     // A list operation is answered by the resource provider, never by the template, so an
                     // unanswered one has no offline result at all.
-                    this.config.OnUnansweredRequestFunc?.Invoke(functionExpression.Function, target.ResourceId, apiVersion);
+                    this.ReportUnanswered(functionExpression.Function, target.ResourceId, apiVersion);
                 }
 
                 if (functionExpression.Function.EqualsOrdinalInsensitively("reference"))
@@ -145,7 +152,7 @@ namespace Bicep.Core.Utils
                         // runtime state. Without an answer there is nothing to report but the declaration.
                         if (target.Resource?.Existing?.Value == true)
                         {
-                            this.config.OnUnansweredRequestFunc?.Invoke("reference", target.ResourceId, resolved ?? target.ApiVersion);
+                            this.ReportUnanswered("reference", target.ResourceId, resolved ?? target.ApiVersion);
                         }
                     }
 
@@ -189,7 +196,32 @@ namespace Bicep.Core.Utils
             }
 
             public bool ShouldIgnoreExceptionDuringEvaluation(Exception exception) =>
+                (this.config.TolerateUnresolvedValues && IsUnanswered(exception)) ||
                 this.context.ShouldIgnoreExceptionDuringEvaluation(exception);
+
+            /// <summary>
+            /// Reports a runtime read nothing answered. While values are tolerated, the read is left in
+            /// place like any other value that cannot be computed yet, so it fails only where a caller that
+            /// expects every value asks for it.
+            /// </summary>
+            private void ReportUnanswered(string operation, string resourceId, string? apiVersion)
+            {
+                try
+                {
+                    this.config.OnUnansweredRequestFunc?.Invoke(operation, resourceId, apiVersion);
+                }
+                catch (Exception exception) when (!exception.IsFatal())
+                {
+                    throw new UnansweredRequestException(exception);
+                }
+            }
+
+            private static bool IsUnanswered(Exception? exception) => exception switch
+            {
+                null => false,
+                UnansweredRequestException => true,
+                _ => IsUnanswered(exception.InnerException),
+            };
 
             /// <summary>
             /// States a runtime read in terms of what it addresses rather than how it was written. Symbolic
@@ -256,6 +288,11 @@ namespace Bicep.Core.Utils
         /// </summary>
         public delegate void OnUnresolvedResourcePropertiesDelegate(string symbolicName, Exception exception);
 
+        /// <summary>
+        /// Reports that one output could not be computed. <paramref name="name"/> is the output's name.
+        /// </summary>
+        public delegate void OnUnresolvedOutputDelegate(string name, Exception exception);
+
         public record EvaluationConfiguration(
             string TenantId,
             string ManagementGroup,
@@ -279,6 +316,12 @@ namespace Bicep.Core.Utils
             /// than left in place as its own unevaluated text.
             /// </summary>
             public bool StrictOutputs { get; init; }
+
+            /// <summary>
+            /// Reports an output that cannot be computed, instead of failing the whole template. The output
+            /// is left out and the others are still computed.
+            /// </summary>
+            public OnUnresolvedOutputDelegate? OnUnresolvedOutputFunc { get; init; }
 
             /// <summary>
             /// Leaves a resource value that cannot yet be computed in place instead of failing, so a
@@ -453,6 +496,27 @@ namespace Bicep.Core.Utils
             {
                 foreach (var outputKey in template.Outputs.Keys.ToList())
                 {
+                    if (config.OnUnresolvedOutputFunc is { } onUnresolvedOutput)
+                    {
+                        try
+                        {
+                            template.Outputs[outputKey].Value.Value = config.StrictOutputs
+                                ? ExpressionsEngine.EvaluateLanguageExpressionsRecursive(
+                                    root: template.Outputs[outputKey].Value.Value,
+                                    evaluationContext: evaluationContext)
+                                : ExpressionsEngine.EvaluateLanguageExpressionsOptimistically(
+                                    root: template.Outputs[outputKey].Value.Value,
+                                    evaluationContext: evaluationContext);
+                        }
+                        catch (Exception exception)
+                        {
+                            template.Outputs.Remove(outputKey);
+                            onUnresolvedOutput(outputKey, exception);
+                        }
+
+                        continue;
+                    }
+
                     // Optimistic evaluation leaves an expression it cannot compute as raw text, which reads
                     // as a successfully produced value. A caller that needs an output to mean what it says
                     // asks for strict evaluation and gets the failure instead.

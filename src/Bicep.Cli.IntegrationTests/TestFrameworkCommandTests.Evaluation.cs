@@ -143,5 +143,144 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_Evaluated_ReportsEachOutputThatDoesNotReadAnUnansweredValue()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputs-per-output");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                param name string
+
+                resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+                  name: 'contoso-identity'
+                }
+
+                resource assignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid(name)
+                  properties: {
+                    principalId: identity.properties.principalId
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                output accountName string = '${name}data'
+                output principalId string = identity.properties.principalId
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test instances 'main.bicep' = {
+                  params: { name: 'contoso' }
+                  assertions: {
+                    oneAssignment: {
+                      passWhen: length(target.evaluated.resources) == 1
+                      message: 'Instances do not depend on an output or a body.'
+                    }
+                  }
+                }
+
+                test computed 'main.bicep' = {
+                  params: { name: 'contoso' }
+                  assertions: {
+                    accountName: {
+                      passWhen: target.evaluated.outputs.accountName == 'contosodata' && target.evaluated.outputs['accountName'] == 'contosodata'
+                      message: 'An output that reads nothing unanswered is reported.'
+                    }
+                  }
+                }
+
+                test unanswered 'main.bicep' = {
+                  params: { name: 'contoso' }
+                  assertions: {
+                    principal: {
+                      passWhen: !empty(target.evaluated.outputs.principalId)
+                      message: 'An output that reads an unanswered value is named.'
+                    }
+                  }
+                }
+
+                test whole 'main.bicep' = {
+                  params: { name: 'contoso' }
+                  assertions: {
+                    everyOutput: {
+                      passWhen: length(items(target.evaluated.outputs)) == 2
+                      message: 'Reading every output reads the one that could not be computed.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation instances (main.bicep) Passed!");
+                output.Should().Contain("Evaluation computed (main.bicep) Passed!");
+                error.Should().Contain("Evaluation unanswered (main.bicep) Failed at 1 / 1 assertions!");
+                error.Should().Contain("Evaluation whole (main.bicep) Failed at 1 / 1 assertions!");
+                error.Should().Contain("Could not be evaluated: The output 'principalId' could not be evaluated for this case: No mock answers reference on");
+                error.Should().NotContain("'accountName' could not be evaluated");
+            }
+        }
+
+        [TestMethod]
+        public async Task Test_Evaluated_AnOutputThatReadsAnUncomputedModuleOutputNamesIt()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "outputs-module-chain");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "storage.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contosodata'
+                }
+
+                output name string = account.name
+                output endpoint string = account.properties.primaryEndpoints.blob
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                module storage 'storage.bicep' = {
+                  name: 'storage'
+                }
+
+                output name string = storage.outputs.name
+                output endpoint string = storage.outputs.endpoint
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test name 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    name: {
+                      passWhen: target.evaluated.outputs.name == 'contosodata'
+                      message: 'A module output that was computed flows back.'
+                    }
+                  }
+                }
+
+                test endpoint 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    endpoint: {
+                      passWhen: !empty(target.evaluated.outputs.endpoint)
+                      message: 'The module output it passes on could not be computed.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation name (main.bicep) Passed!");
+                error.Should().Contain("Could not be evaluated: The output 'endpoint' could not be evaluated for this case: It reads the output 'endpoint' of module 'storage', which could not be evaluated: No mock answers reference on");
+            }
+        }
     }
 }
