@@ -20,6 +20,7 @@ public static class TestTargetFactsSerializer
         [TestTargetType.ImportsPropertyName] = SerializeImports(facts.Local),
         [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.Local),
         [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.Local),
+        [TestTargetType.VariablesPropertyName] = SerializeVariables(facts.Local),
         [TestTargetType.TargetScopePropertyName] = facts.TargetScope,
         [TestTargetType.WithModulesPropertyName] = new JObject
         {
@@ -28,8 +29,17 @@ public static class TestTargetFactsSerializer
             [TestTargetType.ImportsPropertyName] = SerializeImports(facts.WithModules),
             [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.WithModules),
             [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.WithModules),
+            [TestTargetType.VariablesPropertyName] = SerializeVariables(facts.WithModules),
         },
     };
+
+    private static JArray SerializeVariables(TestFactSet facts) => new(facts.Variables.Select(variable => new JObject
+    {
+        [TestTargetType.NamePropertyName] = variable.Name,
+        [TestTargetType.ExportedPropertyName] = variable.Exported,
+        [TestTargetType.FilePropertyName] = variable.File,
+        [TestTargetType.LinePropertyName] = variable.Line,
+    }).ToArray<object>());
 
     private static JArray SerializeParameters(TestFactSet facts) => new(facts.Parameters.Select(parameter => new JObject
     {

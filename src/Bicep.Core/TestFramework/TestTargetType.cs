@@ -42,6 +42,8 @@ public static class TestTargetType
     public const string IdPropertyName = "id";
     public const string SubscriptionIdPropertyName = "subscriptionId";
     public const string ResourceGroupPropertyName = "resourceGroup";
+    public const string VariablesPropertyName = "variables";
+    public const string ExportedPropertyName = "exported";
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -114,6 +116,17 @@ public static class TestTargetType
         [
             new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The output name, which is also the name a caller reads."),
             new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declared type as written. Whitespace, line breaks and comments between tokens collapse to single spaces."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+        ],
+        null);
+
+    private static readonly ObjectType VariableFact = new(
+        "variableFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The variable name."),
+            new NamedTypeProperty(ExportedPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration carries @export(), so another file may import it."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
         ],
@@ -255,5 +268,10 @@ public static class TestTargetType
             new TypedArrayType(OutputFact, TypeSymbolValidationFlags.Default),
             TypePropertyFlags.ReadOnly,
             "Output declarations in source order. Their values for a case are under evaluated.outputs."),
+        new NamedTypeProperty(
+            VariablesPropertyName,
+            new TypedArrayType(VariableFact, TypeSymbolValidationFlags.Default),
+            TypePropertyFlags.ReadOnly,
+            "Variable declarations in source order. Imported variables are not declarations and are reported under imports."),
     ];
 }

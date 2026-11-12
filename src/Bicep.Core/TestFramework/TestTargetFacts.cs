@@ -61,6 +61,16 @@ public record TestParameterFact(string Name, string Type, bool Required, bool Ha
 public record TestOutputFact(string Name, string Type, string File, int Line);
 
 /// <summary>
+/// A variable declaration. Only what the declaration itself states is reported: a variable's value is
+/// usually computed, and what it computes to is a question for the evaluated view.
+/// </summary>
+/// <param name="Name">The variable name.</param>
+/// <param name="Exported">Whether the declaration carries <c>@export()</c>, so another file may import it.</param>
+/// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
+/// <param name="Line">The 1-based line the declaration starts on.</param>
+public record TestVariableFact(string Name, bool Exported, string File, int Line);
+
+/// <summary>
 /// The declarations visible at one query scope.
 /// </summary>
 public record TestFactSet(
@@ -68,9 +78,10 @@ public record TestFactSet(
     ImmutableArray<TestModuleFact> Modules,
     ImmutableArray<TestImportFact> Imports,
     ImmutableArray<TestParameterFact> Parameters,
-    ImmutableArray<TestOutputFact> Outputs)
+    ImmutableArray<TestOutputFact> Outputs,
+    ImmutableArray<TestVariableFact> Variables)
 {
-    public static readonly TestFactSet Empty = new([], [], [], [], []);
+    public static readonly TestFactSet Empty = new([], [], [], [], [], []);
 }
 
 /// <summary>

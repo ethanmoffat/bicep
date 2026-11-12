@@ -37,13 +37,14 @@ public static class TestTargetFactsCollector
         var imports = ImmutableArray.CreateBuilder<TestImportFact>();
         var parameters = ImmutableArray.CreateBuilder<TestParameterFact>();
         var outputs = ImmutableArray.CreateBuilder<TestOutputFact>();
+        var variables = ImmutableArray.CreateBuilder<TestVariableFact>();
         var visited = new HashSet<IOUri>();
 
-        CollectTransitively(targetModel, factRoot, visited, resources, modules, imports, parameters, outputs);
+        CollectTransitively(targetModel, factRoot, visited, resources, modules, imports, parameters, outputs, variables);
 
         return new TestTargetFacts(
             local,
-            new TestFactSet(resources.ToImmutable(), modules.ToImmutable(), imports.ToImmutable(), parameters.ToImmutable(), outputs.ToImmutable()),
+            new TestFactSet(resources.ToImmutable(), modules.ToImmutable(), imports.ToImmutable(), parameters.ToImmutable(), outputs.ToImmutable(), variables.ToImmutable()),
             FormatTargetScope(targetModel.TargetScope));
     }
 
@@ -72,7 +73,8 @@ public static class TestTargetFactsCollector
         ImmutableArray<TestModuleFact>.Builder modules,
         ImmutableArray<TestImportFact>.Builder imports,
         ImmutableArray<TestParameterFact>.Builder parameters,
-        ImmutableArray<TestOutputFact>.Builder outputs)
+        ImmutableArray<TestOutputFact>.Builder outputs,
+        ImmutableArray<TestVariableFact>.Builder variables)
     {
         if (!visited.Add(model.SourceFile.FileHandle.Uri))
         {
@@ -86,12 +88,13 @@ public static class TestTargetFactsCollector
         imports.AddRange(facts.Imports);
         parameters.AddRange(facts.Parameters);
         outputs.AddRange(facts.Outputs);
+        variables.AddRange(facts.Variables);
 
         foreach (var moduleSymbol in model.Root.ModuleDeclarations)
         {
             if (TryGetReferencedModel(moduleSymbol) is { } referenced)
             {
-                CollectTransitively(referenced, factRoot, visited, resources, modules, imports, parameters, outputs);
+                CollectTransitively(referenced, factRoot, visited, resources, modules, imports, parameters, outputs, variables);
             }
         }
     }
@@ -147,7 +150,15 @@ public static class TestTargetFactsCollector
                 GetLine(lineStarts, output.DeclaringSyntax)))
             .ToImmutableArray();
 
-        return new TestFactSet(resources, modules, imports, parameters, outputs);
+        var variables = model.Root.VariableDeclarations
+            .Select(variable => new TestVariableFact(
+                variable.Name,
+                variable.IsExported(model),
+                file,
+                GetLine(lineStarts, variable.DeclaringSyntax)))
+            .ToImmutableArray();
+
+        return new TestFactSet(resources, modules, imports, parameters, outputs, variables);
     }
 
     private static TestImportFact CollectImport(

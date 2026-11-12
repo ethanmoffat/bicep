@@ -307,8 +307,9 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.imports` | Compile-time `import` statements in the file |
 | `target.parameters` | Parameters the file declares, in source order |
 | `target.outputs` | Outputs the file declares, in source order |
+| `target.variables` | Variables the file declares, in source order |
 | `target.targetScope` | The scope the file deploys to |
-| `target.withModules` | Resources, modules, imports, parameters and outputs for the file **plus every module it transitively reaches** |
+| `target.withModules` | Resources, modules, imports, parameters, outputs and variables for the file **plus every module it transitively reaches** |
 | `target.evaluated` | What the file would actually produce for this input case, computed offline — see [Evaluated values](#evaluated-values) |
 
 Each resource carries `symbolicName`, `type` (without the API version), `existing`, `waitsFor`, `file`
@@ -397,6 +398,29 @@ test compositionPolicy = {
 
 These assertions are in [`source-policy.biceptest`](examples/test-framework/source-policy.biceptest),
 alongside a module policy requiring each storage module to output the name it chose.
+
+#### Variables
+
+Each variable carries `name`, `exported`, `file` and `line`. `exported` is whether the declaration carries `@export()`, so another file may import it. `line` is where the declaration starts, which for a decorated variable is its first decorator.
+
+A variable imported from another file is not a declaration of this file. It is reported under `imports`, and the file that declares it reports it under its own `variables` when it is reachable through `withModules`.
+
+There is no value and no type fact. A variable's value is a question about a deployment, so it is better asserted through what that value produces under [Evaluated values](#evaluated-values). Most variables declare no type, so a type fact would usually be empty or inferred.
+
+A policy that keeps a removed alias from coming back can name the variables directly:
+
+```bicep
+var removed = ['cnameRecords', 'privateLinkCnameRecords']
+
+test dnsZone 'main.bicep' = {
+  assertions: {
+    removedVariablesStayRemoved: {
+      failOn: filter(target.variables, v => contains(removed, v.name))
+      message: 'The legacy alias variables must stay removed.'
+    }
+  }
+}
+```
 
 #### Deployment order with `waitsFor`
 
