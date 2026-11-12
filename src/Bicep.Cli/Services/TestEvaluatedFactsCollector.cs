@@ -4,6 +4,7 @@
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using Azure.Deployments.Expression.Engines;
+using Azure.Deployments.Expression.Expressions;
 using Bicep.Core.Semantics;
 using Bicep.Core.TestFramework;
 using Bicep.Core.Utils;
@@ -307,14 +308,56 @@ public sealed partial class TestEvaluatedFactsProvider(
     /// </summary>
     private static bool HoldsUnevaluatedExpression(JToken evaluated, JToken? declared) => (evaluated, declared) switch
     {
-        (JObject evaluatedObject, JObject declaredObject) => evaluatedObject.Properties().Any(property => HoldsUnevaluatedExpression(property.Value, declaredObject[property.Name])),
+        (JObject evaluatedObject, JObject declaredObject) => evaluatedObject.Properties().Any(property =>
+            PropertyLoopInput(declaredObject, property.Name) is { } input
+                ? property.Value is JArray items && items.Any(item => HoldsUnevaluatedExpression(item, input))
+                : HoldsUnevaluatedExpression(property.Value, declaredObject[property.Name])),
         (JArray evaluatedArray, JArray declaredArray) => evaluatedArray.Select((item, index) => index < declaredArray.Count && HoldsUnevaluatedExpression(item, declaredArray[index])).Any(holds => holds),
         (JValue { Type: JTokenType.String } evaluatedValue, JValue { Type: JTokenType.String } declaredValue) =>
             evaluatedValue.Value<string>() is { } text &&
-            text == declaredValue.Value<string>() &&
-            ExpressionsEngine.IsLanguageExpression(text),
+            declaredValue.Value<string>() is { } declaredText &&
+            ExpressionsEngine.IsLanguageExpression(text) &&
+            (text == declaredText || IsLoopIteration(text, declaredText)),
         _ => false,
     };
+
+    /// <summary>
+    /// Whether an expression is still a loop's declared expression, unevaluated, for one iteration.
+    /// Expanding a loop replaces each <c>copyIndex()</c> with the iteration's number and writes the
+    /// expression out again, so its text no longer matches the declaration even though nothing in it was
+    /// computed.
+    /// </summary>
+    private static bool IsLoopIteration(string evaluated, string declared)
+        => declared.Contains("copyIndex", StringComparison.OrdinalIgnoreCase) &&
+            ExpressionsEngine.IsLanguageExpression(declared) &&
+            IsLoopIteration(ExpressionsEngine.ParseLanguageExpression(evaluated), ExpressionsEngine.ParseLanguageExpression(declared));
+
+    private static bool IsLoopIteration(LanguageExpression evaluated, LanguageExpression declared) => (evaluated, declared) switch
+    {
+        (JTokenExpression { Value.Type: JTokenType.Integer }, FunctionExpression declaredFunction) =>
+            declaredFunction.Function.Equals("copyIndex", StringComparison.OrdinalIgnoreCase),
+        (FunctionExpression evaluatedFunction, FunctionExpression declaredFunction) =>
+            evaluatedFunction.Function.Equals(declaredFunction.Function, StringComparison.OrdinalIgnoreCase) &&
+            AreLoopIterations(evaluatedFunction.Parameters, declaredFunction.Parameters) &&
+            AreLoopIterations(evaluatedFunction.Properties, declaredFunction.Properties),
+        (JTokenExpression evaluatedToken, JTokenExpression declaredToken) => JToken.DeepEquals(evaluatedToken.Value, declaredToken.Value),
+        _ => false,
+    };
+
+    private static bool AreLoopIterations(LanguageExpression[]? evaluated, LanguageExpression[]? declared)
+        => (evaluated ?? []).Length == (declared ?? []).Length &&
+            (evaluated ?? []).Zip(declared ?? []).All(pair => IsLoopIteration(pair.First, pair.Second));
+
+    /// <summary>
+    /// A property built by a loop - a <c>for</c> expression in a module argument, say - is declared as
+    /// <c>"copy": [{ "name": ..., "count": ..., "input": ... }]</c> rather than under its own name. Each
+    /// element it evaluates to is declared by the loop's input, so that is what an element is compared
+    /// with.
+    /// </summary>
+    private static JToken? PropertyLoopInput(JObject declared, string name)
+        => declared[name] is null && declared["copy"] is JArray loops
+            ? loops.OfType<JObject>().FirstOrDefault(loop => loop["name"] is JValue { Value: string loopName } && StringComparer.OrdinalIgnoreCase.Equals(loopName, name))?["input"]
+            : null;
 
     private static JObject CollectOutputs(JObject template)
     {
