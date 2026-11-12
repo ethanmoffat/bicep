@@ -1018,6 +1018,8 @@ would:
 - a declaration's own `scope: resourceGroup(...)`;
 - for an extension resource such as a role assignment, the resource it is scoped to. Its `id` sits
   beneath that resource's, and it deploys into that resource's subscription and resource group.
+  Two role assignments that share a name but are assigned on different resources are therefore two
+  instances with two `id`s, as Azure treats them, and a read of either one sees its own body.
 
 A resource group's `id` is `/subscriptions/<id>/resourceGroups/<name>`, as Azure addresses it, and
 its own `resourceGroup` is empty: it deploys into a subscription, not into itself. At tenant or
@@ -1297,6 +1299,8 @@ is read as
 ```
 
 so that is what the mock states. Write the resource ID Azure would use, and it matches.
+
+An extension resource is read beneath the resource it is scoped to. An existing `Microsoft.Authorization/locks` named `lock` with `scope: account` is read as `.../providers/Microsoft.Storage/storageAccounts/<account>/providers/Microsoft.Authorization/locks/lock`, so two locks with that name on different accounts are two reads, each answered by the mock for its own ID.
 
 ### One response answers both views of a resource
 

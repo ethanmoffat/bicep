@@ -350,24 +350,32 @@ namespace Bicep.Core.Utils
 
         /// <summary>
         /// The resource ID a resource is addressed by. A declaration may state a subscription or
-        /// resource group of its own, which is where the resource actually lives; using the deployment's
-        /// scope for it would address something else entirely.
+        /// resource group of its own, or the resource an extension resource is applied to, which is where
+        /// the resource actually lives; using the deployment's scope for it would address something else
+        /// entirely, and two extension resources with one name on different resources would collide.
         /// </summary>
-        private static string GetResourceId(string scopeString, string subscriptionId, TemplateResource resource)
+        private static string GetResourceId(string scopeString, string subscriptionId, TemplateResource resource) =>
+            $"{GetScopeString(scopeString, subscriptionId, resource.Scope?.Value, resource.SubscriptionId?.Value, resource.ResourceGroup?.Value)}providers/{GetTypesAndNames(resource.Type.Value, resource.Name.Value)}";
+
+        private static string GetTypesAndNames(string type, string name)
         {
-            var typeSegments = resource.Type.Value.Split('/');
-            var nameSegments = resource.Name.Value.Split('/');
+            var typeSegments = type.Split('/');
+            var nameSegments = name.Split('/');
 
             var types = new[] { typeSegments.First() }
-                .Concat(typeSegments.Skip(1).Zip(nameSegments, (type, name) => $"{type}/{name}"));
+                .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
 
-            return $"{GetScopeString(scopeString, subscriptionId, resource)}providers/{string.Join('/', types)}";
+            return string.Join('/', types);
         }
 
-        private static string GetScopeString(string deploymentScopeString, string subscriptionId, TemplateResource resource)
+        private static string GetScopeString(string deploymentScopeString, string subscriptionId, string? scope, string? declaredSubscriptionId, string? declaredResourceGroup)
         {
-            var declaredSubscriptionId = resource.SubscriptionId?.Value;
-            var declaredResourceGroup = resource.ResourceGroup?.Value;
+            if (scope is { Length: > 0 })
+            {
+                // A relative scope names a resource in the deployment's own scope.
+                var scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
+                return scopeString.EndsWith('/') ? scopeString : scopeString + "/";
+            }
 
             if (declaredResourceGroup is { Length: > 0 })
             {
@@ -390,35 +398,22 @@ namespace Bicep.Core.Utils
 
         /// <summary>
         /// The ARM resource ID of one resource from an evaluated template, as Azure would address it once
-        /// deployed. Unlike the lookup used to answer <c>reference()</c>, this honours an extension
-        /// resource's <c>scope</c>, so a role assignment is addressed beneath what it is assigned on, and
-        /// addresses a resource group the way Azure does rather than as a provider resource.
+        /// deployed. Like the lookup used to answer <c>reference()</c>, this honours an extension
+        /// resource's <c>scope</c>, so a role assignment is addressed beneath what it is assigned on; it
+        /// also addresses a resource group the way Azure does rather than as a provider resource.
         /// </summary>
         public static string GetEvaluatedResourceId(JToken template, JObject resource, EvaluationConfiguration config)
         {
             var deploymentScope = GetDeploymentScope(template["$schema"]?.Value<string>() ?? string.Empty);
-            var deploymentScopeString = GetDeploymentScopeString(deploymentScope, config);
-            var declaredSubscriptionId = resource["subscriptionId"]?.Value<string>();
-            var declaredResourceGroup = resource["resourceGroup"]?.Value<string>();
             var type = resource["type"]?.Value<string>() ?? string.Empty;
             var name = resource["name"]?.Value<string>() ?? string.Empty;
 
-            string scopeString;
-
-            if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
-            {
-                // A relative scope names a resource in the deployment's own scope.
-                scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
-                scopeString = scopeString.EndsWith('/') ? scopeString : scopeString + "/";
-            }
-            else if (declaredResourceGroup is { Length: > 0 })
-            {
-                scopeString = $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : config.SubscriptionId)}/resourceGroups/{declaredResourceGroup}/";
-            }
-            else
-            {
-                scopeString = declaredSubscriptionId is { Length: > 0 } ? $"/subscriptions/{declaredSubscriptionId}/" : deploymentScopeString;
-            }
+            var scopeString = GetScopeString(
+                GetDeploymentScopeString(deploymentScope, config),
+                config.SubscriptionId,
+                resource["scope"] is { Type: JTokenType.String } scope ? scope.Value<string>() : null,
+                resource["subscriptionId"]?.Value<string>(),
+                resource["resourceGroup"]?.Value<string>());
 
             if (string.Equals(type, "Microsoft.Resources/resourceGroups", StringComparison.OrdinalIgnoreCase) &&
                 scopeString.StartsWith("/subscriptions/", StringComparison.OrdinalIgnoreCase) &&
@@ -427,12 +422,7 @@ namespace Bicep.Core.Utils
                 return $"{scopeString}resourceGroups/{name}";
             }
 
-            var typeSegments = type.Split('/');
-            var nameSegments = name.Split('/');
-            var types = new[] { typeSegments.First() }
-                .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
-
-            return $"{scopeString}providers/{string.Join('/', types)}";
+            return $"{scopeString}providers/{GetTypesAndNames(type, name)}";
         }
 
         private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope, bool outerScopeByDefault)

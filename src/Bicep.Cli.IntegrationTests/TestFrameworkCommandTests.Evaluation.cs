@@ -282,5 +282,163 @@ namespace Bicep.Cli.IntegrationTests
                 error.Should().Contain("Could not be evaluated: The output 'endpoint' could not be evaluated for this case: It reads the output 'endpoint' of module 'storage', which could not be evaluated: No mock answers reference on");
             }
         }
+
+        [TestMethod]
+        public async Task Test_Evaluated_ExtensionResourcesWithOneNameOnDifferentScopesAreEachEvaluated()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "scoped-extension-resources");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "grants.bicep", """
+                resource first 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contosofirst'
+                }
+
+                resource second 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+                  name: 'contososecond'
+                }
+
+                resource firstReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('reader')
+                  scope: first
+                  properties: {
+                    principalId: 'reader'
+                    roleDefinitionId: 'reader'
+                  }
+                }
+
+                resource secondReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('reader')
+                  scope: second
+                  properties: {
+                    principalId: 'reader'
+                    roleDefinitionId: 'reader'
+                  }
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                resource first 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'contosofirst'
+                  location: 'westus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+
+                resource second 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'contososecond'
+                  location: 'westus'
+                  sku: { name: 'Standard_LRS' }
+                  kind: 'StorageV2'
+                }
+
+                resource firstOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('owner')
+                  scope: first
+                  properties: {
+                    principalId: 'owner'
+                    roleDefinitionId: 'first-role'
+                  }
+                }
+
+                resource secondOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid('owner')
+                  scope: second
+                  properties: {
+                    principalId: 'owner'
+                    roleDefinitionId: 'second-role'
+                  }
+                }
+
+                resource firstLock 'Microsoft.Authorization/locks@2020-05-01' existing = {
+                  name: 'lock'
+                  scope: first
+                }
+
+                resource secondLock 'Microsoft.Authorization/locks@2020-05-01' existing = {
+                  name: 'lock'
+                  scope: second
+                }
+
+                module grants 'grants.bicep' = {
+                  name: 'grants'
+                }
+
+                output roles array = [firstOwner.properties.roleDefinitionId, secondOwner.properties.roleDefinitionId]
+                output ids array = [firstOwner.id, secondOwner.id]
+                output levels array = [firstLock.properties.level, secondLock.properties.level]
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                var storage = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DummyResourceGroup/providers/Microsoft.Storage/storageAccounts'
+
+                mocks = {
+                  firstLock: {
+                    operation: 'reference'
+                    resourceId: '${storage}/contosofirst/providers/Microsoft.Authorization/locks/lock'
+                    apiVersion: '2020-05-01'
+                    response: { properties: { level: 'CanNotDelete' } }
+                  }
+                  secondLock: {
+                    operation: 'reference'
+                    resourceId: '${storage}/contososecond/providers/Microsoft.Authorization/locks/lock'
+                    apiVersion: '2020-05-01'
+                    response: { properties: { level: 'ReadOnly' } }
+                  }
+                }
+
+                test scoped 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    bothDeployed: {
+                      passWhen: length(filter(target.evaluated.resources, r => r.type == 'Microsoft.Authorization/roleAssignments')) == 2
+                      message: 'Each assignment is its own resource.'
+                    }
+                    eachBodyIsRead: {
+                      passWhen: target.evaluated.outputs.roles == ['first-role', 'second-role']
+                      message: 'A read of each assignment sees its own body.'
+                    }
+                    idsAreScoped: {
+                      passWhen: target.evaluated.outputs.ids == map(filter(target.evaluated.resources, r => r.type == 'Microsoft.Authorization/roleAssignments'), r => r.id) && target.evaluated.outputs.ids[0] == '${storage}/contosofirst/providers/Microsoft.Authorization/roleAssignments/${guid('owner')}'
+                      message: 'Each assignment is addressed beneath what it is assigned on.'
+                    }
+                    eachMockAnswers: {
+                      passWhen: target.evaluated.outputs.levels == ['CanNotDelete', 'ReadOnly']
+                      message: 'Each existing lock is answered by the mock for its scope.'
+                    }
+                    modulesToo: {
+                      passWhen: length(filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/roleAssignments')) == 4
+                      message: 'A module declaring the same pair contributes both.'
+                    }
+                  }
+                }
+
+                test attributed 'main.bicep' = {
+                  params: {}
+                  assertions: {
+                    noAssignments: {
+                      failOn: filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/roleAssignments')
+                      message: 'Each assignment is reported by its own declaration.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                result.Should().Be(1);
+                output.Should().Contain("Evaluation scoped (main.bicep) Passed!");
+                error.Should().ContainAll(
+                    "Assertion noAssignments failed!",
+                    "main.bicep(15): ",
+                    "main.bicep(24): ",
+                    "grants.bicep(9): ",
+                    "grants.bicep(18): ");
+                error.Should().NotContain("same key");
+            }
+        }
     }
 }
