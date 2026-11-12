@@ -353,29 +353,9 @@ namespace Bicep.Core.Utils
         /// </summary>
         public static string GetEvaluatedResourceId(JToken template, JObject resource, EvaluationConfiguration config)
         {
-            var deploymentScope = GetDeploymentScope(template["$schema"]?.Value<string>() ?? string.Empty);
-            var deploymentScopeString = GetDeploymentScopeString(deploymentScope, config);
-            var declaredSubscriptionId = resource["subscriptionId"]?.Value<string>();
-            var declaredResourceGroup = resource["resourceGroup"]?.Value<string>();
             var type = resource["type"]?.Value<string>() ?? string.Empty;
             var name = resource["name"]?.Value<string>() ?? string.Empty;
-
-            string scopeString;
-
-            if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
-            {
-                // A relative scope names a resource in the deployment's own scope.
-                scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
-                scopeString = scopeString.EndsWith('/') ? scopeString : scopeString + "/";
-            }
-            else if (declaredResourceGroup is { Length: > 0 })
-            {
-                scopeString = $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : config.SubscriptionId)}/resourceGroups/{declaredResourceGroup}/";
-            }
-            else
-            {
-                scopeString = declaredSubscriptionId is { Length: > 0 } ? $"/subscriptions/{declaredSubscriptionId}/" : deploymentScopeString;
-            }
+            var scopeString = GetEvaluatedScopeString(template, resource, config);
 
             if (string.Equals(type, "Microsoft.Resources/resourceGroups", StringComparison.OrdinalIgnoreCase) &&
                 scopeString.StartsWith("/subscriptions/", StringComparison.OrdinalIgnoreCase) &&
@@ -390,6 +370,37 @@ namespace Bicep.Core.Utils
                 .Concat(typeSegments.Skip(1).Zip(nameSegments, (typeSegment, nameSegment) => $"{typeSegment}/{nameSegment}"));
 
             return $"{scopeString}providers/{string.Join('/', types)}";
+        }
+
+        /// <summary>
+        /// The ID of what one resource from an evaluated template is deployed into, as used to build its
+        /// resource ID: the resource an extension resource is scoped to, or the resource group,
+        /// subscription, management group or tenant (<c>/</c>) it is deployed to. Never ends in a slash
+        /// unless it is the tenant.
+        /// </summary>
+        public static string GetEvaluatedResourceScope(JToken template, JObject resource, EvaluationConfiguration config)
+            => GetEvaluatedScopeString(template, resource, config) is var scope && scope.Length > 1 ? scope.TrimEnd('/') : scope;
+
+        private static string GetEvaluatedScopeString(JToken template, JObject resource, EvaluationConfiguration config)
+        {
+            var deploymentScope = GetDeploymentScope(template["$schema"]?.Value<string>() ?? string.Empty);
+            var deploymentScopeString = GetDeploymentScopeString(deploymentScope, config);
+            var declaredSubscriptionId = resource["subscriptionId"]?.Value<string>();
+            var declaredResourceGroup = resource["resourceGroup"]?.Value<string>();
+
+            if (resource["scope"] is { Type: JTokenType.String } scopeToken && scopeToken.Value<string>() is { Length: > 0 } scope)
+            {
+                // A relative scope names a resource in the deployment's own scope.
+                var scopeString = scope.StartsWith('/') ? scope : $"{deploymentScopeString}providers/{scope}";
+                return scopeString.EndsWith('/') ? scopeString : scopeString + "/";
+            }
+
+            if (declaredResourceGroup is { Length: > 0 })
+            {
+                return $"/subscriptions/{(declaredSubscriptionId is { Length: > 0 } ? declaredSubscriptionId : config.SubscriptionId)}/resourceGroups/{declaredResourceGroup}/";
+            }
+
+            return declaredSubscriptionId is { Length: > 0 } ? $"/subscriptions/{declaredSubscriptionId}/" : deploymentScopeString;
         }
 
         private static void ProcessTemplateLanguageExpressions(Template template, EvaluationConfiguration config, TemplateDeploymentScope deploymentScope, bool outerScopeByDefault)

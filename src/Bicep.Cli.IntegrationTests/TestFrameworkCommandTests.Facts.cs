@@ -137,5 +137,137 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_Facts_ReportWhatEachEvaluatedInstanceIsDeployedInto()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "facts-evaluated-scope");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                targetScope = 'managementGroup'
+
+                resource definition 'Microsoft.Authorization/policyDefinitions@2023-04-01' = {
+                  name: 'definition'
+                  properties: {}
+                }
+
+                module landingZone 'subscription.bicep' = {
+                  name: 'landingZone'
+                  scope: subscription('22222222-2222-2222-2222-222222222222')
+                }
+
+                module root 'tenant.bicep' = {
+                  name: 'root'
+                  scope: tenant()
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "tenant.bicep", """
+                targetScope = 'tenant'
+
+                resource group 'Microsoft.Management/managementGroups@2023-04-01' = {
+                  name: 'mg-child'
+                  properties: {}
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "subscription.bicep", """
+                targetScope = 'subscription'
+
+                resource workload 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+                  name: 'rg-workload'
+                  location: 'westus'
+                }
+
+                resource readers 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: '00000000-0000-0000-0000-00000000000a'
+                  properties: {
+                    principalId: 'p'
+                    roleDefinitionId: 'r'
+                  }
+                }
+
+                module storage 'storage.bicep' = {
+                  name: 'storage'
+                  scope: workload
+                }
+                """, outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "storage.bicep", """
+                resource account 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+                  name: 'account'
+                  location: 'westus'
+                  kind: 'StorageV2'
+                  sku: {
+                    name: 'Standard_LRS'
+                  }
+                }
+
+                resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' = {
+                  parent: account
+                  name: 'default'
+                }
+
+                resource doNotDelete 'Microsoft.Authorization/locks@2020-05-01' = {
+                  name: 'doNotDelete'
+                  scope: account
+                  properties: {
+                    level: 'CanNotDelete'
+                  }
+                }
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "placement.biceptest", """
+                var account = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-workload/providers/Microsoft.Storage/storageAccounts/account'
+
+                test placement 'main.bicep' = {
+                  assertions: {
+                    everyInstanceReportsWhatItIsDeployedInto: {
+                      passWhen: map(target.evaluated.withModules.resources, r => [r.instanceId, r.scope]) == [
+                        ['definition', '/providers/Microsoft.Management/managementGroups/mg-root']
+                        ['landingZone/workload', '/subscriptions/22222222-2222-2222-2222-222222222222']
+                        ['landingZone/readers', '/subscriptions/22222222-2222-2222-2222-222222222222']
+                        ['landingZone/storage/account', '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-workload']
+                        ['landingZone/storage/blobs', '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-workload']
+                        ['landingZone/storage/doNotDelete', account]
+                        ['root/group', '/']
+                      ]
+                      message: 'Each instance should report what it is deployed into.'
+                    }
+                    everyIdBeginsWithItsScope: {
+                      failOn: filter(target.evaluated.withModules.resources, r => !startsWith(r.id, r.scope))
+                      message: 'An instance is addressed beneath what it is deployed into.'
+                    }
+                    locksSitOnTheAccount: {
+                      failOn: filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/locks' && !endsWith(r.scope, '/storageAccounts/account'))
+                      message: 'Locks belong on the storage account.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var inputsPath = FileHelper.SaveResultFile(TestContext, "placement.biceptestparam", """
+                using 'placement.biceptest'
+
+                deploymentContext = {
+                  managementGroup: 'mg-root'
+                  deploymentName: 'placement'
+                  deploymentLocation: 'westus'
+                }
+
+                case only = {}
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath, "--inputs", inputsPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                output.Should().Contain("Evaluation placement (main.bicep) [placement.biceptestparam: only] Passed!");
+                result.Should().Be(0);
+            }
+        }
     }
 }

@@ -30,6 +30,11 @@ namespace Bicep.Cli.Services;
 /// </param>
 /// <param name="SubscriptionId">The subscription the instance lives in, or empty at tenant or management group scope.</param>
 /// <param name="ResourceGroup">The resource group the instance lives in, or empty if it is not deployed into one.</param>
+/// <param name="Scope">
+/// The ID of what the instance is deployed into, the prefix of <paramref name="Id"/>: the resource an
+/// extension resource is scoped to, otherwise its resource group, subscription, management group or the
+/// tenant (<c>/</c>).
+/// </param>
 public record TestEvaluatedResource(
     string Name,
     string Type,
@@ -41,4 +46,5 @@ public record TestEvaluatedResource(
     string? UnresolvedReason,
     string Id,
     string SubscriptionId,
-    string ResourceGroup);
+    string ResourceGroup,
+    string Scope);

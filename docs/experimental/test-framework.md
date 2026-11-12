@@ -998,6 +998,7 @@ Each instance carries:
 | `file`, `line` | The declaration that produced the instance |
 | `id` | The resource ID Azure would address the instance by (see "Where each instance deploys" below) |
 | `subscriptionId`, `resourceGroup` | The subscription and resource group the instance deploys into. Empty where there is none |
+| `scope` | The ID of what the instance is deployed into, which `id` begins with (see "Where each instance deploys" below) |
 | `properties`, `location`, `sku`, `kind`, `identity`, `tags`, `zones` | What the declaration sets, computed for this case. Null where the declaration sets nothing |
 
 ### What each instance declares
@@ -1044,7 +1045,7 @@ names and outputs that do not read that body are unaffected.
 
 ### Where each instance deploys
 
-`id`, `subscriptionId` and `resourceGroup` say where an instance lands, worked out the way Azure
+`id`, `subscriptionId`, `resourceGroup` and `scope` say where an instance lands, worked out the way Azure
 would:
 
 - the case's `deploymentContext` for the selected file;
@@ -1058,6 +1059,26 @@ its own `resourceGroup` is empty: it deploys into a subscription, not into itsel
 management group scope `subscriptionId` is empty too. A context value the input file does not state
 is the evaluator's placeholder (`00000000-0000-0000-0000-000000000000`, `DummyResourceGroup`), the
 same one `subscription()` and `resourceGroup()` return, so state it if an assertion compares it.
+
+`scope` is the ID of what the instance is deployed into, the same prefix ARM builds its `id` from:
+
+| Instance | `scope` |
+|----------|---------|
+| An extension resource, such as a role assignment or lock | The `id` of the resource it is scoped to |
+| A resource group | Its subscription, `/subscriptions/<id>` |
+| A resource deployed into a resource group, including a child resource | `/subscriptions/<id>/resourceGroups/<name>` |
+| A resource deployed at subscription scope | `/subscriptions/<id>` |
+| A resource deployed at management group scope | `/providers/Microsoft.Management/managementGroups/<name>` |
+| A resource deployed at tenant scope | `/` |
+
+This answers questions `resourceGroup` cannot, such as whether every lock sits on a storage account or whether a role assignment is granted on a resource or on its whole subscription:
+
+```bicep
+locksSitOnTheAccount: {
+  failOn: filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/locks' && !endsWith(r.scope, '/storageAccounts/account'))
+  message: 'Locks belong on the storage account.'
+}
+```
 
 These are the evaluated counterpart of a module's `scope:` argument: rather than asserting what a
 module call was handed, an assertion checks where its resources actually end up.

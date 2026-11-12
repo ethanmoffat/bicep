@@ -144,6 +144,7 @@ public static class TestTargetFactsSerializer
             [TestTargetType.IdPropertyName] = resource.Id,
             [TestTargetType.SubscriptionIdPropertyName] = resource.SubscriptionId,
             [TestTargetType.ResourceGroupPropertyName] = resource.ResourceGroup,
+            [TestTargetType.ScopePropertyName] = resource.Scope,
         };
 
         if (includeBodies)

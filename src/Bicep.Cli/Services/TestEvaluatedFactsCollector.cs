@@ -424,7 +424,8 @@ public sealed partial class TestEvaluatedFactsProvider(
                 body[key] = isModuleWrapper && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
             }
 
-            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default));
+            var configuration = deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default);
+            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, configuration);
             var location = ResourceLocationPattern().Match(id);
             var isResourceGroup = string.Equals(type, ResourceGroupResourceType, StringComparison.OrdinalIgnoreCase);
 
@@ -439,7 +440,8 @@ public sealed partial class TestEvaluatedFactsProvider(
                 deployment.Unresolved.TryGetValue(property.Name, out var unresolvedReason) ? unresolvedReason : null,
                 id,
                 location.Groups["subscription"] is { Success: true } subscription ? subscription.Value : string.Empty,
-                !isResourceGroup && location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty));
+                !isResourceGroup && location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty,
+                TemplateEvaluator.GetEvaluatedResourceScope(deployment.Source, resource, configuration)));
         }
 
         return collected.ToImmutable();

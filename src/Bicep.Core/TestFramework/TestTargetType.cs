@@ -44,6 +44,7 @@ public static class TestTargetType
     public const string ResourceGroupPropertyName = "resourceGroup";
     public const string VariablesPropertyName = "variables";
     public const string ExportedPropertyName = "exported";
+    public const string ScopePropertyName = "scope";
     public const string AllowedPropertyName = "allowed";
     public const string MinLengthPropertyName = "minLength";
     public const string MaxLengthPropertyName = "maxLength";
@@ -173,6 +174,7 @@ public static class TestTargetType
             new NamedTypeProperty(IdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource ID Azure would address this instance by, built from where it deploys: the case's deployment context, a module's scope, the declaration's own subscription or resource group, or the resource an extension resource is scoped to. A context value the input file does not state is the evaluator's placeholder."),
             new NamedTypeProperty(SubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The subscription this instance deploys into. Empty at tenant or management group scope."),
             new NamedTypeProperty(ResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource group this instance deploys into. Empty if it is not deployed into one, including a resource group itself. An extension resource deploys into the resource group of what it is scoped to."),
+            new NamedTypeProperty(ScopePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The ID of what this instance is deployed into, which its id begins with: for an extension resource, the ID of the resource it is scoped to; otherwise the ID of its resource group, subscription or management group, or '/' for the tenant. A resource group's scope is its subscription."),
             new NamedTypeProperty("properties", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's properties as this case computes them. Null if the declaration sets none."),
             new NamedTypeProperty("location", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's location as this case computes it. Null if the declaration sets none."),
             new NamedTypeProperty("sku", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's SKU as this case computes it. Null if the declaration sets none."),
