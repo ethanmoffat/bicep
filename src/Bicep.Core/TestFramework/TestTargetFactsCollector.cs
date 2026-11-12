@@ -6,10 +6,13 @@ using Bicep.Core.Emit;
 using Bicep.Core.Navigation;
 using Bicep.Core.Parsing;
 using Bicep.Core.Semantics;
+using Bicep.Core.Semantics.Namespaces;
 using Bicep.Core.Syntax;
 using Bicep.Core.Text;
 using Bicep.Core.TypeSystem;
+using Bicep.Core.TypeSystem.Types;
 using Bicep.IO.Abstraction;
+using Newtonsoft.Json.Linq;
 
 namespace Bicep.Core.TestFramework;
 
@@ -133,13 +136,7 @@ public static class TestTargetFactsCollector
         // Required-ness is the compiler's own answer, the same one a parameters file is checked against,
         // rather than a second definition that could disagree with it.
         var parameters = model.Root.ParameterDeclarations
-            .Select(parameter => new TestParameterFact(
-                parameter.Name,
-                DeclaredTypeText(parameter.DeclaringParameter.Type),
-                model.Parameters.TryGetValue(parameter.Name, out var metadata) && metadata.IsRequired,
-                SyntaxHelper.TryGetDefaultValue(parameter.DeclaringParameter) is not null,
-                file,
-                GetLine(lineStarts, parameter.DeclaringSyntax)))
+            .Select(parameter => CollectParameter(model, parameter, file, lineStarts))
             .ToImmutableArray();
 
         var outputs = model.Root.OutputDeclarations
@@ -159,6 +156,99 @@ public static class TestTargetFactsCollector
             .ToImmutableArray();
 
         return new TestFactSet(resources, modules, imports, parameters, outputs, variables);
+    }
+
+    /// <summary>
+    /// Lengths and integer bounds are read from the declared type, which already merges the decorators of a
+    /// type alias with the parameter's own (the parameter's win). <c>@allowed()</c> never reaches the
+    /// declared type, so it is read from the decorator itself.
+    /// </summary>
+    private static TestParameterFact CollectParameter(SemanticModel model, ParameterSymbol parameter, string file, ImmutableArray<int> lineStarts)
+    {
+        var declaredType = model.GetDeclaredType(parameter.DeclaringParameter) is { } declared
+            ? TypeHelper.TryRemoveNullability(declared) ?? declared
+            : null;
+
+        var (minLength, maxLength) = declaredType switch
+        {
+            StringType @string => (@string.MinLength, @string.MaxLength),
+            ArrayType array and not TupleType => (array.MinLength, array.MaxLength),
+            _ => ((long?)null, (long?)null),
+        };
+
+        var (minValue, maxValue) = declaredType is IntegerType integer
+            ? (integer.MinValue, integer.MaxValue)
+            : (null, null);
+
+        return new TestParameterFact(
+            parameter.Name,
+            DeclaredTypeText(parameter.DeclaringParameter.Type),
+            model.Parameters.TryGetValue(parameter.Name, out var metadata) && metadata.IsRequired,
+            SyntaxHelper.TryGetDefaultValue(parameter.DeclaringParameter) is not null,
+            file,
+            GetLine(lineStarts, parameter.DeclaringSyntax),
+            GetAllowedValues(model, parameter.DeclaringParameter),
+            minLength,
+            maxLength,
+            minValue,
+            maxValue);
+    }
+
+    private static ImmutableArray<JToken>? GetAllowedValues(SemanticModel model, ParameterDeclarationSyntax declaration)
+    {
+        if (SemanticModelHelper.TryGetDecoratorInNamespace(model, declaration, SystemNamespaceType.BuiltInName, LanguageConstants.ParameterAllowedPropertyName) is not { } decorator ||
+            decorator.Arguments.FirstOrDefault()?.Expression is not ArraySyntax allowed)
+        {
+            return null;
+        }
+
+        return ToJArray(allowed.Items.Select(item => model.GetTypeInfo(item.Value))) is { } values ? values.ToImmutableArray() : null;
+    }
+
+    /// <summary>
+    /// <c>@allowed()</c> takes compile-time constants, so each value is a literal type that converts exactly.
+    /// </summary>
+    private static JToken? ToJToken(TypeSymbol type) => type switch
+    {
+        BooleanLiteralType boolean => boolean.Value,
+        IntegerLiteralType integer => integer.Value,
+        StringLiteralType @string => @string.RawStringValue,
+        NullType => JValue.CreateNull(),
+        TupleType tuple => ToJArray(tuple.Items.Select(item => item.Type)),
+        ObjectType @object when @object.AdditionalProperties is null => ToJObject(@object),
+        _ => null,
+    };
+
+    private static JArray? ToJArray(IEnumerable<TypeSymbol> items)
+    {
+        var array = new JArray();
+        foreach (var item in items)
+        {
+            if (ToJToken(item) is not { } converted)
+            {
+                return null;
+            }
+
+            array.Add(converted);
+        }
+
+        return array;
+    }
+
+    private static JObject? ToJObject(ObjectType @object)
+    {
+        var converted = new JObject();
+        foreach (var (key, property) in @object.Properties)
+        {
+            if (ToJToken(property.TypeReference.Type) is not { } value)
+            {
+                return null;
+            }
+
+            converted[key] = value;
+        }
+
+        return converted;
     }
 
     private static TestImportFact CollectImport(

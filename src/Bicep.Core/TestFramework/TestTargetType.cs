@@ -44,6 +44,14 @@ public static class TestTargetType
     public const string ResourceGroupPropertyName = "resourceGroup";
     public const string VariablesPropertyName = "variables";
     public const string ExportedPropertyName = "exported";
+    public const string AllowedPropertyName = "allowed";
+    public const string MinLengthPropertyName = "minLength";
+    public const string MaxLengthPropertyName = "maxLength";
+    public const string MinValuePropertyName = "minValue";
+    public const string MaxValuePropertyName = "maxValue";
+
+    private static readonly TypeSymbol NullableArray = TypeHelper.CreateTypeUnion(LanguageConstants.Array, LanguageConstants.Null);
+    private static readonly TypeSymbol NullableInt = TypeHelper.CreateTypeUnion(LanguageConstants.Int, LanguageConstants.Null);
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -107,6 +115,11 @@ public static class TestTargetType
             new NamedTypeProperty(HasDefaultPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration supplies a default value. A nullable parameter can be neither required nor defaulted."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(AllowedPropertyName, NullableArray, TypePropertyFlags.ReadOnly, "The values listed by @allowed(), or null when the declaration has none. A literal union type such as 'a' | 'b' is reported through type instead."),
+            new NamedTypeProperty(MinLengthPropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The least length accepted, from @minLength() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MaxLengthPropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The greatest length accepted, from @maxLength() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MinValuePropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The least integer accepted, from @minValue() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MaxValuePropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The greatest integer accepted, from @maxValue() on the parameter or its type alias, or null when there is no bound."),
         ],
         null);
 

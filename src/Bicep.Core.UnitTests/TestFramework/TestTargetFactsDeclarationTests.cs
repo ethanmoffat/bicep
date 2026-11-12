@@ -68,4 +68,51 @@ output upper string = inner
             ("top", "main.bicep"),
             ("inner", "modules/child.bicep"));
     }
+
+    [TestMethod]
+    public void Collect_ReportsParameterBoundsFromTheParameterAndItsTypeAlias()
+    {
+        // The parameter's own decorator wins over its alias's, the same rule the compiler validates by.
+        var facts = Collect(("main.bicep", """
+@minLength(3)
+@maxLength(63)
+type accountName = string
+
+param name accountName
+@maxLength(24)
+param shortName accountName
+@minLength(1)
+param zones string[]?
+@minValue(1)
+@maxValue(10)
+param count int
+param plain string
+param pair [string, string]
+"""));
+
+        facts.Local.Parameters.Select(x => (x.Name, x.MinLength, x.MaxLength, x.MinValue, x.MaxValue)).Should().Equal(
+            ("name", 3L, 63L, (long?)null, (long?)null),
+            ("shortName", 3L, 24L, null, null),
+            ("zones", 1L, null, null, null),
+            ("count", null, null, 1L, 10L),
+            ("plain", null, null, null, null),
+            ("pair", null, null, null, null));
+    }
+
+    [TestMethod]
+    public void Collect_ReportsAllowedValuesOnlyFromTheDecorator()
+    {
+        var facts = Collect(("main.bicep", """
+@allowed(['Standard', 'Premium'])
+param tier string
+@allowed([1, 3, -1])
+param retention int?
+param kind 'a' | 'b'
+"""));
+
+        var allowed = facts.Local.Parameters.ToDictionary(x => x.Name, x => x.Allowed);
+        allowed["tier"]!.Value.Select(x => x.ToString()).Should().Equal("Standard", "Premium");
+        allowed["retention"]!.Value.Select(x => (long)x).Should().Equal(1, 3, -1);
+        allowed["kind"].Should().BeNull();
+    }
 }

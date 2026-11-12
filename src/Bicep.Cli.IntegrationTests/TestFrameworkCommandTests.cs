@@ -3021,6 +3021,11 @@ assert isNever = foo == 'NeverMatches'", outputFileDir);
                         type: 'DataProtection?'
                         required: false
                         hasDefault: false
+                        allowed: null
+                        minLength: null
+                        maxLength: null
+                        minValue: null
+                        maxValue: null
                         file: 'main.bicep'
                         line: 6
                       }

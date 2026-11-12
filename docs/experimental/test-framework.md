@@ -343,8 +343,9 @@ must supply, what it may read back and where it may be deployed. Like every sour
 parameter values, so a test that selects its target with `match` can police a file with required
 parameters without a `params` block.
 
-Each parameter carries `name`, `type`, `required`, `hasDefault`, `file` and `line`. Each output
-carries `name`, `type`, `file` and `line`.
+Each parameter carries `name`, `type`, `required`, `hasDefault`, `allowed`, `minLength`,
+`maxLength`, `minValue`, `maxValue`, `file` and `line`. Each output carries `name`, `type`, `file`
+and `line`.
 
 - `required` is the compiler's own definition, the one a parameters file is checked against: there
   is no default **and** the type does not accept `null`. A nullable parameter with no default, such
@@ -372,6 +373,23 @@ carries `name`, `type`, `file` and `line`.
   goes ahead and reports the assertion that never holds. Most facts, such as a resource's `type`,
   are typed as plain `string`, and a misspelling there cannot be caught this way.
 - `line` is where the declaration starts, which for a decorated parameter is its first decorator.
+- `allowed` is the list `@allowed()` gives, in the order written, or `null` when the parameter has no such decorator. A literal union type such as `'a' | 'b'` restricts values too, but it is part of the type and is reported through `type`. `@allowed()` cannot decorate a type declaration, so a parameter typed with an alias never inherits a list. Use `p.allowed ?? []` to search the list without a null check.
+- `minLength` and `maxLength` are the length bounds of a string or array parameter, and `minValue` and `maxValue` are the bounds of an integer parameter. Each is `null` when there is no bound. They come from the same declared type the compiler validates arguments against, so a bound written on a type alias counts, and a bound on the parameter itself overrides the alias's. A tuple type has a fixed length and reports none.
+
+```bicep
+test storageContract 'storage.bicep' = {
+  assertions: {
+    noGeoRedundantSku: {
+      failOn: filter(target.parameters, p => contains(p.allowed ?? [], 'Standard_GRS'))
+      message: 'Geo-redundant storage must not be offered.'
+    }
+    retentionIsBounded: {
+      passWhen: filter(target.parameters, p => p.name == 'retentionDays')[0].maxValue == 90
+      message: 'Retention may not exceed 90 days.'
+    }
+  }
+}
+```
 
 There is deliberately no default-value fact. A default is usually worth asserting only for its
 effect, and that is better stated as a case that omits the parameter and asserts what gets deployed

@@ -49,7 +49,14 @@ public static class TestTargetFactsSerializer
         [TestTargetType.HasDefaultPropertyName] = parameter.HasDefault,
         [TestTargetType.FilePropertyName] = parameter.File,
         [TestTargetType.LinePropertyName] = parameter.Line,
+        [TestTargetType.AllowedPropertyName] = parameter.Allowed is { } allowed ? new JArray(allowed.Select(value => value.DeepClone()).ToArray<object>()) : JValue.CreateNull(),
+        [TestTargetType.MinLengthPropertyName] = ToNullableValue(parameter.MinLength),
+        [TestTargetType.MaxLengthPropertyName] = ToNullableValue(parameter.MaxLength),
+        [TestTargetType.MinValuePropertyName] = ToNullableValue(parameter.MinValue),
+        [TestTargetType.MaxValuePropertyName] = ToNullableValue(parameter.MaxValue),
     }).ToArray<object>());
+
+    private static JToken ToNullableValue(long? value) => value is { } present ? new JValue(present) : JValue.CreateNull();
 
     private static JArray SerializeOutputs(TestFactSet facts) => new(facts.Outputs.Select(output => new JObject
     {

@@ -76,5 +76,66 @@ namespace Bicep.Cli.IntegrationTests
                 result.Should().Be(0);
             }
         }
+
+        [TestMethod]
+        public async Task Test_Facts_ReportTheConstraintsAParameterDeclares()
+        {
+            var settings = new InvocationSettings(new(TestContext, TestFrameworkEnabled: true), BicepTestConstants.ClientFactory, BicepTestConstants.TemplateSpecRepositoryFactory);
+            var outputFileDir = FileHelper.GetResultFilePath(TestContext, "facts-parameter-constraints");
+            Directory.CreateDirectory(outputFileDir);
+
+            FileHelper.SaveResultFile(TestContext, "main.bicep", """
+                @minLength(3)
+                @maxLength(24)
+                type accountName = string
+
+                @allowed(['Standard_LRS', 'Standard_ZRS'])
+                param sku string = 'Standard_ZRS'
+
+                param name accountName = 'contoso'
+
+                @minValue(7)
+                @maxValue(90)
+                param retentionDays int?
+
+                param kind 'StorageV2' | 'BlobStorage' = 'StorageV2'
+                """, outputFileDir);
+
+            var testPath = FileHelper.SaveResultFile(TestContext, "policy.biceptest", """
+                test constraints 'main.bicep' = {
+                  assertions: {
+                    skuIsZoneRedundantOrLocal: {
+                      passWhen: filter(target.parameters, p => p.name == 'sku')[0].allowed == ['Standard_LRS', 'Standard_ZRS']
+                      message: 'The SKU list must stay limited to LRS and ZRS.'
+                    }
+                    noGeoRedundantSku: {
+                      failOn: filter(target.parameters, p => contains(p.allowed ?? [], 'Standard_GRS'))
+                      message: 'Geo-redundant storage must not be offered.'
+                    }
+                    nameBoundsComeFromTheAlias: {
+                      passWhen: filter(target.parameters, p => p.name == 'name')[0].minLength == 3 && filter(target.parameters, p => p.name == 'name')[0].maxLength == 24
+                      message: 'Account names are 3 to 24 characters.'
+                    }
+                    retentionIsBounded: {
+                      passWhen: filter(target.parameters, p => p.name == 'retentionDays')[0].minValue == 7 && filter(target.parameters, p => p.name == 'retentionDays')[0].maxValue == 90
+                      message: 'Retention is 7 to 90 days.'
+                    }
+                    unboundedFactsAreNull: {
+                      passWhen: filter(target.parameters, p => p.name == 'sku')[0].minLength == null && filter(target.parameters, p => p.name == 'kind')[0].allowed == null
+                      message: 'Only declared bounds and decorator lists are reported.'
+                    }
+                  }
+                }
+                """, outputFileDir);
+
+            var (output, error, result) = await Bicep(settings, "test", "--output-detail", "all", testPath);
+
+            using (new AssertionScope())
+            {
+                error.Should().NotContain("Error");
+                output.Should().Contain("Evaluation constraints (main.bicep) Passed!");
+                result.Should().Be(0);
+            }
+        }
     }
 }

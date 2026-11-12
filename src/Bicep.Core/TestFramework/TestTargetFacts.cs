@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Immutable;
+using Newtonsoft.Json.Linq;
 
 namespace Bicep.Core.TestFramework;
 
@@ -49,7 +50,23 @@ public record TestImportFact(string Path, string ResolvedFile, ImmutableArray<st
 /// <param name="HasDefault">Whether the declaration supplies a default value.</param>
 /// <param name="File">The declaring file, relative to the fact root and always using '/' separators.</param>
 /// <param name="Line">The 1-based line the declaration starts on.</param>
-public record TestParameterFact(string Name, string Type, bool Required, bool HasDefault, string File, int Line);
+/// <param name="Allowed">The values listed by <c>@allowed()</c>, or null when the declaration has no such decorator.</param>
+/// <param name="MinLength">The least length the declared type accepts, from <c>@minLength()</c> on the parameter or its type alias.</param>
+/// <param name="MaxLength">The greatest length the declared type accepts, from <c>@maxLength()</c> on the parameter or its type alias.</param>
+/// <param name="MinValue">The least integer the declared type accepts, from <c>@minValue()</c> on the parameter or its type alias.</param>
+/// <param name="MaxValue">The greatest integer the declared type accepts, from <c>@maxValue()</c> on the parameter or its type alias.</param>
+public record TestParameterFact(
+    string Name,
+    string Type,
+    bool Required,
+    bool HasDefault,
+    string File,
+    int Line,
+    ImmutableArray<JToken>? Allowed = null,
+    long? MinLength = null,
+    long? MaxLength = null,
+    long? MinValue = null,
+    long? MaxValue = null);
 
 /// <summary>
 /// An output declaration: what a file offers whoever deploys or calls it once it has run.
