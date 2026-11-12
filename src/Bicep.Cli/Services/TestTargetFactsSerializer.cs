@@ -20,6 +20,7 @@ public static class TestTargetFactsSerializer
         [TestTargetType.ImportsPropertyName] = SerializeImports(facts.Local),
         [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.Local),
         [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.Local),
+        [TestTargetType.VariablesPropertyName] = SerializeVariables(facts.Local),
         [TestTargetType.TargetScopePropertyName] = facts.TargetScope,
         [TestTargetType.WithModulesPropertyName] = new JObject
         {
@@ -28,8 +29,17 @@ public static class TestTargetFactsSerializer
             [TestTargetType.ImportsPropertyName] = SerializeImports(facts.WithModules),
             [TestTargetType.ParametersPropertyName] = SerializeParameters(facts.WithModules),
             [TestTargetType.OutputsPropertyName] = SerializeOutputs(facts.WithModules),
+            [TestTargetType.VariablesPropertyName] = SerializeVariables(facts.WithModules),
         },
     };
+
+    private static JArray SerializeVariables(TestFactSet facts) => new(facts.Variables.Select(variable => new JObject
+    {
+        [TestTargetType.NamePropertyName] = variable.Name,
+        [TestTargetType.ExportedPropertyName] = variable.Exported,
+        [TestTargetType.FilePropertyName] = variable.File,
+        [TestTargetType.LinePropertyName] = variable.Line,
+    }).ToArray<object>());
 
     private static JArray SerializeParameters(TestFactSet facts) => new(facts.Parameters.Select(parameter => new JObject
     {
@@ -39,7 +49,14 @@ public static class TestTargetFactsSerializer
         [TestTargetType.HasDefaultPropertyName] = parameter.HasDefault,
         [TestTargetType.FilePropertyName] = parameter.File,
         [TestTargetType.LinePropertyName] = parameter.Line,
+        [TestTargetType.AllowedPropertyName] = parameter.Allowed is { } allowed ? new JArray(allowed.Select(value => value.DeepClone()).ToArray<object>()) : JValue.CreateNull(),
+        [TestTargetType.MinLengthPropertyName] = ToNullableValue(parameter.MinLength),
+        [TestTargetType.MaxLengthPropertyName] = ToNullableValue(parameter.MaxLength),
+        [TestTargetType.MinValuePropertyName] = ToNullableValue(parameter.MinValue),
+        [TestTargetType.MaxValuePropertyName] = ToNullableValue(parameter.MaxValue),
     }).ToArray<object>());
+
+    private static JToken ToNullableValue(long? value) => value is { } present ? new JValue(present) : JValue.CreateNull();
 
     private static JArray SerializeOutputs(TestFactSet facts) => new(facts.Outputs.Select(output => new JObject
     {
@@ -90,6 +107,7 @@ public static class TestTargetFactsSerializer
         var result = new JObject
         {
             [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.Local, includeBodies),
+            [TestTargetType.ModulesPropertyName] = SerializeEvaluatedModules(evaluated.LocalModules),
         };
 
         if (includeOutputs)
@@ -102,11 +120,25 @@ public static class TestTargetFactsSerializer
             result[TestTargetType.WithModulesPropertyName] = new JObject
             {
                 [TestTargetType.ResourcesPropertyName] = SerializeEvaluatedResources(evaluated.WithModules, includeBodies),
+                [TestTargetType.ModulesPropertyName] = SerializeEvaluatedModules(evaluated.WithModulesModules),
             };
         }
 
         return result;
     }
+
+    private static JArray SerializeEvaluatedModules(IEnumerable<TestEvaluatedModule> modules) => new(modules.Select(module => new JObject
+    {
+        [TestTargetType.NamePropertyName] = module.Name,
+        [TestTargetType.SymbolicNamePropertyName] = module.SymbolicName,
+        [TestTargetType.InstanceIdPropertyName] = module.InstanceId,
+        [TestTargetType.FilePropertyName] = module.File,
+        [TestTargetType.LinePropertyName] = module.Line,
+        [TestTargetType.IdPropertyName] = module.Id,
+        [TestTargetType.SubscriptionIdPropertyName] = module.SubscriptionId,
+        [TestTargetType.ResourceGroupPropertyName] = module.ResourceGroup,
+        [TestTargetType.ScopePropertyName] = module.Scope,
+    }).ToArray<object>());
 
     /// <summary>
     /// Bodies are rendered only for an assertion that reads one. The facts reach ARM as a single value,
@@ -127,6 +159,7 @@ public static class TestTargetFactsSerializer
             [TestTargetType.IdPropertyName] = resource.Id,
             [TestTargetType.SubscriptionIdPropertyName] = resource.SubscriptionId,
             [TestTargetType.ResourceGroupPropertyName] = resource.ResourceGroup,
+            [TestTargetType.ScopePropertyName] = resource.Scope,
         };
 
         if (includeBodies)

@@ -1318,6 +1318,37 @@ namespace Bicep.Core.Semantics.Namespaces
                     .Build();
             }
 
+            // A test is only ever evaluated offline, so a test file may use functions ARM does not have,
+            // provided they are written in terms of ones it does.
+            static IEnumerable<FunctionOverload> GetTestFilePermittedOverloads()
+            {
+                yield return new FunctionOverloadBuilder("single")
+                    .WithReturnResultBuilder((_, _, _, argumentTypes) => new(argumentTypes[0] switch
+                    {
+                        ArrayType arrayType => arrayType.Item.Type,
+                        _ => LanguageConstants.Any
+                    }), LanguageConstants.Any)
+                    .WithGenericDescription("Returns the only element of the array. Fails if the array does not have exactly one element.")
+                    .WithRequiredParameter("array", LanguageConstants.Array, "The array that should hold exactly one element.")
+                    .WithEvaluator(expression =>
+                    {
+                        var array = expression.Parameters[0];
+                        var length = new FunctionCallExpression(null, "length", [array]);
+
+                        return new TernaryExpression(
+                            expression.SourceSyntax,
+                            new BinaryExpression(null, BinaryOperator.Equals, length, new IntegerLiteralExpression(null, 1)),
+                            new FunctionCallExpression(null, "first", [array]),
+                            new FunctionCallExpression(null, "fail", [
+                                new FunctionCallExpression(null, "format", [
+                                    new StringLiteralExpression(null, "single() expects an array with exactly one element, but the array has {0}."),
+                                    length,
+                                ]),
+                            ]));
+                    })
+                    .Build();
+            }
+
             static FunctionOverload MarkPureIfEvaluableInParameterFile(FunctionOverload overload) =>
                 LanguageConstants.IdentifierComparer.Equals(overload.Name, "fail") || overload.Flags.HasFlag(FunctionFlags.ParamDefaultsOnly)
                     ? overload
@@ -1331,6 +1362,11 @@ namespace Bicep.Core.Semantics.Namespaces
             foreach (var overload in GetParamsFilePermittedOverloads(featureProvider))
             {
                 yield return new(overload, (_, sfk) => sfk == BicepSourceFileKind.ParamsFile);
+            }
+
+            foreach (var overload in GetTestFilePermittedOverloads())
+            {
+                yield return new(overload, (_, sfk) => sfk == BicepSourceFileKind.TestFile);
             }
         }
 

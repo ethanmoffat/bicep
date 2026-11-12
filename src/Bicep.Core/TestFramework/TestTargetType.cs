@@ -42,6 +42,17 @@ public static class TestTargetType
     public const string IdPropertyName = "id";
     public const string SubscriptionIdPropertyName = "subscriptionId";
     public const string ResourceGroupPropertyName = "resourceGroup";
+    public const string VariablesPropertyName = "variables";
+    public const string ExportedPropertyName = "exported";
+    public const string ScopePropertyName = "scope";
+    public const string AllowedPropertyName = "allowed";
+    public const string MinLengthPropertyName = "minLength";
+    public const string MaxLengthPropertyName = "maxLength";
+    public const string MinValuePropertyName = "minValue";
+    public const string MaxValuePropertyName = "maxValue";
+
+    private static readonly TypeSymbol NullableArray = TypeHelper.CreateTypeUnion(LanguageConstants.Array, LanguageConstants.Null);
+    private static readonly TypeSymbol NullableInt = TypeHelper.CreateTypeUnion(LanguageConstants.Int, LanguageConstants.Null);
 
     /// <summary>
     /// The top-level keys of a resource body an evaluated instance exposes. These are what the author
@@ -105,6 +116,11 @@ public static class TestTargetType
             new NamedTypeProperty(HasDefaultPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration supplies a default value. A nullable parameter can be neither required nor defaulted."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(AllowedPropertyName, NullableArray, TypePropertyFlags.ReadOnly, "The values listed by @allowed(), or null when the declaration has none. A literal union type such as 'a' | 'b' is reported through type instead."),
+            new NamedTypeProperty(MinLengthPropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The least length accepted, from @minLength() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MaxLengthPropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The greatest length accepted, from @maxLength() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MinValuePropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The least integer accepted, from @minValue() on the parameter or its type alias, or null when there is no bound."),
+            new NamedTypeProperty(MaxValuePropertyName, NullableInt, TypePropertyFlags.ReadOnly, "The greatest integer accepted, from @maxValue() on the parameter or its type alias, or null when there is no bound."),
         ],
         null);
 
@@ -114,6 +130,17 @@ public static class TestTargetType
         [
             new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The output name, which is also the name a caller reads."),
             new NamedTypeProperty(TypePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declared type as written. Whitespace, line breaks and comments between tokens collapse to single spaces."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+        ],
+        null);
+
+    private static readonly ObjectType VariableFact = new(
+        "variableFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The variable name."),
+            new NamedTypeProperty(ExportedPropertyName, LanguageConstants.Bool, TypePropertyFlags.ReadOnly, "Whether the declaration carries @export(), so another file may import it."),
             new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
             new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
         ],
@@ -147,6 +174,7 @@ public static class TestTargetType
             new NamedTypeProperty(IdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource ID Azure would address this instance by, built from where it deploys: the case's deployment context, a module's scope, the declaration's own subscription or resource group, or the resource an extension resource is scoped to. A context value the input file does not state is the evaluator's placeholder."),
             new NamedTypeProperty(SubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The subscription this instance deploys into. Empty at tenant or management group scope."),
             new NamedTypeProperty(ResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource group this instance deploys into. Empty if it is not deployed into one, including a resource group itself. An extension resource deploys into the resource group of what it is scoped to."),
+            new NamedTypeProperty(ScopePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The ID of what this instance is deployed into, which its id begins with: for an extension resource, the ID of the resource it is scoped to; otherwise the ID of its resource group, subscription or management group, or '/' for the tenant. A resource group's scope is its subscription."),
             new NamedTypeProperty("properties", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's properties as this case computes them. Null if the declaration sets none."),
             new NamedTypeProperty("location", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's location as this case computes it. Null if the declaration sets none."),
             new NamedTypeProperty("sku", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's SKU as this case computes it. Null if the declaration sets none."),
@@ -154,6 +182,26 @@ public static class TestTargetType
             new NamedTypeProperty("identity", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's managed identity configuration as this case computes it. Null if the declaration sets none."),
             new NamedTypeProperty("tags", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's tags as this case computes them. Null if the declaration sets none."),
             new NamedTypeProperty("zones", LanguageConstants.Any, TypePropertyFlags.ReadOnly, "The resource's availability zones as this case computes them. Null if the declaration sets none."),
+        ],
+        null);
+
+    /// <summary>
+    /// One module call the target would make for the case being run: the deployment ARM would create
+    /// for it. Its resources are under <c>withModules.resources</c>; this describes the call itself.
+    /// </summary>
+    private static readonly ObjectType EvaluatedModuleFact = new(
+        "evaluatedModuleFact",
+        TypeSymbolValidationFlags.Default,
+        [
+            new NamedTypeProperty(NamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The deployment name the call computes for this case, which is the name the deployment has in Azure."),
+            new NamedTypeProperty(SymbolicNamePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The symbolic name of the module declaration this call came from."),
+            new NamedTypeProperty(InstanceIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "Identifies this call among the others the same declaration produced, including enclosing module call and loop indices."),
+            new NamedTypeProperty(FilePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The declaring file, relative to the selector root and always using '/' separators."),
+            new NamedTypeProperty(LinePropertyName, LanguageConstants.Int, TypePropertyFlags.ReadOnly, "The 1-based line the declaration starts on."),
+            new NamedTypeProperty(IdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource ID of the deployment, beneath the scope it deploys to."),
+            new NamedTypeProperty(SubscriptionIdPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The subscription the deployment runs in. Empty at tenant or management group scope."),
+            new NamedTypeProperty(ResourceGroupPropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The resource group the deployment runs in. Empty if it does not run in one."),
+            new NamedTypeProperty(ScopePropertyName, LanguageConstants.String, TypePropertyFlags.ReadOnly, "The ID of the resource group, subscription or management group the deployment runs in, or '/' for the tenant."),
         ],
         null);
 
@@ -166,6 +214,11 @@ public static class TestTargetType
                 new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
                 TypePropertyFlags.ReadOnly,
                 "Evaluated instances from the selected file together with every local module reachable from it."),
+            new NamedTypeProperty(
+                ModulesPropertyName,
+                new TypedArrayType(EvaluatedModuleFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Module calls the selected file makes together with the calls made by every local module reachable from it."),
         ],
         null);
 
@@ -182,6 +235,11 @@ public static class TestTargetType
                 new TypedArrayType(EvaluatedResourceFact, TypeSymbolValidationFlags.Default),
                 TypePropertyFlags.ReadOnly,
                 "Resource instances the selected file would deploy. Loops are expanded, false conditions are excluded and existing references are not instances."),
+            new NamedTypeProperty(
+                ModulesPropertyName,
+                new TypedArrayType(EvaluatedModuleFact, TypeSymbolValidationFlags.Default),
+                TypePropertyFlags.ReadOnly,
+                "Module calls the selected file would make, one per deployment. Loops are expanded and false conditions are excluded."),
             new NamedTypeProperty(
                 OutputsPropertyName,
                 // The selected file is not known until a target is bound, and one test may cover many
@@ -255,5 +313,10 @@ public static class TestTargetType
             new TypedArrayType(OutputFact, TypeSymbolValidationFlags.Default),
             TypePropertyFlags.ReadOnly,
             "Output declarations in source order. Their values for a case are under evaluated.outputs."),
+        new NamedTypeProperty(
+            VariablesPropertyName,
+            new TypedArrayType(VariableFact, TypeSymbolValidationFlags.Default),
+            TypePropertyFlags.ReadOnly,
+            "Variable declarations in source order. Imported variables are not declarations and are reported under imports."),
     ];
 }

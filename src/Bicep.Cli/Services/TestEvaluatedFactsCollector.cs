@@ -61,11 +61,17 @@ public sealed partial class TestEvaluatedFactsProvider(
     private EvaluatedDeployment? root;
     private ImmutableArray<TestEvaluatedResource>? local;
     private ImmutableArray<TestEvaluatedResource>? withModules;
+    private ImmutableArray<TestEvaluatedModule>? localModules;
+    private ImmutableArray<TestEvaluatedModule>? withModulesModules;
     private JObject? outputs;
 
     public ImmutableArray<TestEvaluatedResource> Local => local ??= Collect(Root(), string.Empty, recurse: false);
 
     public ImmutableArray<TestEvaluatedResource> WithModules => withModules ??= Collect(Root(), string.Empty, recurse: true);
+
+    public ImmutableArray<TestEvaluatedModule> LocalModules => localModules ??= CollectModules(Root(), string.Empty, recurse: false);
+
+    public ImmutableArray<TestEvaluatedModule> WithModulesModules => withModulesModules ??= CollectModules(Root(), string.Empty, recurse: true);
 
     /// <summary>
     /// Outputs are computed strictly, and only when something asks for them. An output is a consumption:
@@ -424,7 +430,8 @@ public sealed partial class TestEvaluatedFactsProvider(
                 body[key] = isModuleWrapper && key == "properties" ? JValue.CreateNull() : resource[key]?.DeepClone() ?? JValue.CreateNull();
             }
 
-            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default));
+            var configuration = deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default);
+            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, configuration);
             var location = ResourceLocationPattern().Match(id);
             var isResourceGroup = string.Equals(type, ResourceGroupResourceType, StringComparison.OrdinalIgnoreCase);
 
@@ -439,7 +446,82 @@ public sealed partial class TestEvaluatedFactsProvider(
                 deployment.Unresolved.TryGetValue(property.Name, out var unresolvedReason) ? unresolvedReason : null,
                 id,
                 location.Groups["subscription"] is { Success: true } subscription ? subscription.Value : string.Empty,
-                !isResourceGroup && location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty));
+                !isResourceGroup && location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty,
+                TemplateEvaluator.GetEvaluatedResourceScope(deployment.Source, resource, configuration)));
+        }
+
+        return collected.ToImmutable();
+    }
+
+    /// <summary>
+    /// Reads the module calls out of one evaluated template: each deployment the compiler generated for a
+    /// module declaration, with the name and scope this case computes for it. A call whose arguments
+    /// could not be computed still has a name, so it is listed; only following it into what the module
+    /// itself calls needs those arguments.
+    /// </summary>
+    private ImmutableArray<TestEvaluatedModule> CollectModules(EvaluatedDeployment deployment, string instancePrefix, bool recurse)
+    {
+        if (deployment.Template[TestTargetType.ResourcesPropertyName] is not JObject resources)
+        {
+            return [];
+        }
+
+        var collected = ImmutableArray.CreateBuilder<TestEvaluatedModule>();
+
+        foreach (var property in resources.Properties())
+        {
+            var symbolicName = BaseSymbolicName(property.Name);
+
+            if (property.Value is not JObject resource ||
+                !string.Equals(resource[TestTargetType.TypePropertyName]?.Value<string>(), DeploymentResourceType, StringComparison.OrdinalIgnoreCase) ||
+                sourceFacts.WithModules.Modules.FirstOrDefault(module => module.File == deployment.File && module.Name == symbolicName) is not { } declaration)
+            {
+                continue;
+            }
+
+            if (resource["condition"] is { } condition)
+            {
+                if (condition.Type is not JTokenType.Boolean)
+                {
+                    throw new InvalidOperationException($"The condition on '{symbolicName}' could not be evaluated for this case.");
+                }
+
+                if (!condition.Value<bool>())
+                {
+                    continue;
+                }
+            }
+
+            var instanceId = instancePrefix + property.Name;
+            var configuration = deployment.Context.Apply(TemplateEvaluator.EvaluationConfiguration.Default);
+            var id = TemplateEvaluator.GetEvaluatedResourceId(deployment.Source, resource, configuration);
+            var location = ResourceLocationPattern().Match(id);
+
+            collected.Add(new TestEvaluatedModule(
+                resource[TestTargetType.NamePropertyName]?.Value<string>() ?? string.Empty,
+                symbolicName,
+                instanceId,
+                declaration.File,
+                declaration.Line,
+                id,
+                location.Groups["subscription"] is { Success: true } subscription ? subscription.Value : string.Empty,
+                location.Groups["resourceGroup"] is { Success: true } resourceGroup ? resourceGroup.Value : string.Empty,
+                TemplateEvaluator.GetEvaluatedResourceScope(deployment.Source, resource, configuration)));
+
+            if (!recurse)
+            {
+                continue;
+            }
+
+            if (deployment.Unresolved.TryGetValue(property.Name, out var reason) && TryGetModuleFile(deployment.File, symbolicName) is not null)
+            {
+                throw new InvalidOperationException($"The arguments of module '{property.Name}' could not be evaluated for this case: {reason}");
+            }
+
+            if (deployment.Modules.TryGetValue(property.Name, out var module))
+            {
+                collected.AddRange(CollectModules(module, $"{instanceId}/", recurse: true));
+            }
         }
 
         return collected.ToImmutable();

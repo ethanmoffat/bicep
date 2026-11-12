@@ -295,6 +295,27 @@ parameter the target requires. Omitting `assertions`
 preserves the target-owned behaviour above. An `assertions` object that is present but empty is an
 error, because it neither asserts anything nor falls back to anything.
 
+### Expecting exactly one with `single()`
+
+A test file can call `single(array)`, which returns the only element of an array and fails the assertion when the array does not have exactly one. It replaces checking `length(x) == 1` in one place and reading `first(x)` in another:
+
+```bicep
+theOnlyAccountIsInTheRegion: {
+  passWhen: single(filter(target.evaluated.resources, r => r.symbolicName == 'logs')).location == region
+  message: 'The logs account belongs in ${region}.'
+}
+```
+
+When there are none, or more than one, the assertion fails and says how many there were:
+
+```console
+	[✗] Assertion theOnlyAccountIsInTheRegion failed!
+		The logs account belongs in eastus.
+		Could not be evaluated: single() expects an array with exactly one element, but the array has 2.
+```
+
+`single()` is available anywhere in a `.biceptest` file, and nowhere else: a `.bicep`, `.bicepparam` or `.biceptestparam` file reports `BCP057` for it, because ARM has no such function. In a test it is shorthand for `length(x) == 1 ? first(x) : fail(...)`, so it relies only on functions ARM evaluates. Its result has the type of the array's elements, so a misspelled property after it is still a compile error.
+
 ### The `target` symbol
 
 Inside `assertions`, `target` is a typed, read-only symbol describing the compiler's view of the
@@ -307,8 +328,9 @@ selected file. It is not a global Bicep keyword and exists only in this scope.
 | `target.imports` | Compile-time `import` statements in the file |
 | `target.parameters` | Parameters the file declares, in source order |
 | `target.outputs` | Outputs the file declares, in source order |
+| `target.variables` | Variables the file declares, in source order |
 | `target.targetScope` | The scope the file deploys to |
-| `target.withModules` | Resources, modules, imports, parameters and outputs for the file **plus every module it transitively reaches** |
+| `target.withModules` | Resources, modules, imports, parameters, outputs and variables for the file **plus every module it transitively reaches** |
 | `target.evaluated` | What the file would actually produce for this input case, computed offline — see [Evaluated values](#evaluated-values) |
 
 Each resource carries `symbolicName`, `type` (without the API version), `existing`, `waitsFor`, `file`
@@ -342,8 +364,9 @@ must supply, what it may read back and where it may be deployed. Like every sour
 parameter values, so a test that selects its target with `match` can police a file with required
 parameters without a `params` block.
 
-Each parameter carries `name`, `type`, `required`, `hasDefault`, `file` and `line`. Each output
-carries `name`, `type`, `file` and `line`.
+Each parameter carries `name`, `type`, `required`, `hasDefault`, `allowed`, `minLength`,
+`maxLength`, `minValue`, `maxValue`, `file` and `line`. Each output carries `name`, `type`, `file`
+and `line`.
 
 - `required` is the compiler's own definition, the one a parameters file is checked against: there
   is no default **and** the type does not accept `null`. A nullable parameter with no default, such
@@ -371,6 +394,23 @@ carries `name`, `type`, `file` and `line`.
   goes ahead and reports the assertion that never holds. Most facts, such as a resource's `type`,
   are typed as plain `string`, and a misspelling there cannot be caught this way.
 - `line` is where the declaration starts, which for a decorated parameter is its first decorator.
+- `allowed` is the list `@allowed()` gives, in the order written, or `null` when the parameter has no such decorator. A literal union type such as `'a' | 'b'` restricts values too, but it is part of the type and is reported through `type`. `@allowed()` cannot decorate a type declaration, so a parameter typed with an alias never inherits a list. Use `p.allowed ?? []` to search the list without a null check.
+- `minLength` and `maxLength` are the length bounds of a string or array parameter, and `minValue` and `maxValue` are the bounds of an integer parameter. Each is `null` when there is no bound. They come from the same declared type the compiler validates arguments against, so a bound written on a type alias counts, and a bound on the parameter itself overrides the alias's. A tuple type has a fixed length and reports none.
+
+```bicep
+test storageContract 'storage.bicep' = {
+  assertions: {
+    noGeoRedundantSku: {
+      failOn: filter(target.parameters, p => contains(p.allowed ?? [], 'Standard_GRS'))
+      message: 'Geo-redundant storage must not be offered.'
+    }
+    retentionIsBounded: {
+      passWhen: filter(target.parameters, p => p.name == 'retentionDays')[0].maxValue == 90
+      message: 'Retention may not exceed 90 days.'
+    }
+  }
+}
+```
 
 There is deliberately no default-value fact. A default is usually worth asserting only for its
 effect, and that is better stated as a case that omits the parameter and asserts what gets deployed
@@ -397,6 +437,29 @@ test compositionPolicy = {
 
 These assertions are in [`source-policy.biceptest`](examples/test-framework/source-policy.biceptest),
 alongside a module policy requiring each storage module to output the name it chose.
+
+#### Variables
+
+Each variable carries `name`, `exported`, `file` and `line`. `exported` is whether the declaration carries `@export()`, so another file may import it. `line` is where the declaration starts, which for a decorated variable is its first decorator.
+
+A variable imported from another file is not a declaration of this file. It is reported under `imports`, and the file that declares it reports it under its own `variables` when it is reachable through `withModules`.
+
+There is no value and no type fact. A variable's value is a question about a deployment, so it is better asserted through what that value produces under [Evaluated values](#evaluated-values). Most variables declare no type, so a type fact would usually be empty or inferred.
+
+A policy that keeps a removed alias from coming back can name the variables directly:
+
+```bicep
+var removed = ['cnameRecords', 'privateLinkCnameRecords']
+
+test dnsZone 'main.bicep' = {
+  assertions: {
+    removedVariablesStayRemoved: {
+      failOn: filter(target.variables, v => contains(removed, v.name))
+      message: 'The legacy alias variables must stay removed.'
+    }
+  }
+}
+```
 
 #### Deployment order with `waitsFor`
 
@@ -775,6 +838,8 @@ $ bicep test deployment-name.biceptest --inputs deployment-name.biceptestparam -
 Passed! - Failed: 0, Errored: 0, Passed: 1, Total: 1, Duration: 161ms
 ```
 
+A module does not need to output its own name for a test to check it: `target.evaluated.modules` reports the name each module call computed (see [Which deployment each module call creates](#which-deployment-each-module-call-creates)).
+
 There is no implicit default. A target that reads `deployment()` without a name being supplied is
 not given an invented one:
 
@@ -944,6 +1009,8 @@ offline evaluator working out the consequences of the source and the values supp
 | `target.evaluated.resources` | Resource instances the selected file would deploy |
 | `target.evaluated.outputs` | Evaluated values of the outputs the selected file declares, by name |
 | `target.evaluated.withModules.resources` | The same instances for the selected file **plus every local module reachable from it** |
+| `target.evaluated.modules` | The deployment each module call in the selected file creates, one per loop instance (see "Which deployment each module call creates" below) |
+| `target.evaluated.withModules.modules` | The same deployments for the selected file **plus those created by every local module reachable from it** |
 
 Each instance carries:
 
@@ -956,6 +1023,7 @@ Each instance carries:
 | `file`, `line` | The declaration that produced the instance |
 | `id` | The resource ID Azure would address the instance by (see "Where each instance deploys" below) |
 | `subscriptionId`, `resourceGroup` | The subscription and resource group the instance deploys into. Empty where there is none |
+| `scope` | The ID of what the instance is deployed into, which `id` begins with (see "Where each instance deploys" below) |
 | `properties`, `location`, `sku`, `kind`, `identity`, `tags`, `zones` | What the declaration sets, computed for this case. Null where the declaration sets nothing |
 
 ### What each instance declares
@@ -992,6 +1060,19 @@ the instance and the declaration" below), however much of its body the assertion
 Bodies are computed only for an assertion that reads one, and they are all-or-nothing for the
 instances in scope: if any instance's body could not be computed, reading a body fails and names it.
 
+An assertion also reads bodies when it uses an instance as a whole value: passing it to `string()` or another function that looks inside it, comparing it with `==` or `!=`, interpolating it, spreading it, or indexing it with a computed key. `string(r)` therefore shows the same `properties` that reading `r.properties` would, which makes it a quick way to see what an instance holds:
+
+```bicep
+showTheAccount: {
+  passWhen: false
+  message: string(single(filter(target.evaluated.resources, r => r.symbolicName == 'account')))
+}
+```
+
+Functions that only pass instances along or count them, such as `filter`, `map`, `sort`, `first`, `single` and `length`, do not read bodies by themselves, so `length(filter(target.evaluated.resources, r => r.type == '...'))` still needs none.
+
+`string(null)` is an error, as it is in ARM: the template language's `string()` does not accept null. A value that may be null, such as a body key the declaration does not set, needs a fallback first, as in `string(r.sku ?? {})` or `string(r.?tags ?? 'none')`.
+
 ```text
 Could not be evaluated: The properties of 'assignment' (main.bicep(6)) could not be evaluated for this case: The language expression property 'principalId' doesn't exist, ...
 ```
@@ -1002,7 +1083,7 @@ names and outputs that do not read that body are unaffected.
 
 ### Where each instance deploys
 
-`id`, `subscriptionId` and `resourceGroup` say where an instance lands, worked out the way Azure
+`id`, `subscriptionId`, `resourceGroup` and `scope` say where an instance lands, worked out the way Azure
 would:
 
 - the case's `deploymentContext` for the selected file;
@@ -1016,6 +1097,26 @@ its own `resourceGroup` is empty: it deploys into a subscription, not into itsel
 management group scope `subscriptionId` is empty too. A context value the input file does not state
 is the evaluator's placeholder (`00000000-0000-0000-0000-000000000000`, `DummyResourceGroup`), the
 same one `subscription()` and `resourceGroup()` return, so state it if an assertion compares it.
+
+`scope` is the ID of what the instance is deployed into, the same prefix ARM builds its `id` from:
+
+| Instance | `scope` |
+|----------|---------|
+| An extension resource, such as a role assignment or lock | The `id` of the resource it is scoped to |
+| A resource group | Its subscription, `/subscriptions/<id>` |
+| A resource deployed into a resource group, including a child resource | `/subscriptions/<id>/resourceGroups/<name>` |
+| A resource deployed at subscription scope | `/subscriptions/<id>` |
+| A resource deployed at management group scope | `/providers/Microsoft.Management/managementGroups/<name>` |
+| A resource deployed at tenant scope | `/` |
+
+This answers questions `resourceGroup` cannot, such as whether every lock sits on a storage account or whether a role assignment is granted on a resource or on its whole subscription:
+
+```bicep
+locksSitOnTheAccount: {
+  failOn: filter(target.evaluated.withModules.resources, r => r.type == 'Microsoft.Authorization/locks' && !endsWith(r.scope, '/storageAccounts/account'))
+  message: 'Locks belong on the storage account.'
+}
+```
 
 These are the evaluated counterpart of a module's `scope:` argument: rather than asserting what a
 module call was handed, an assertion checks where its resources actually end up.
@@ -1057,6 +1158,44 @@ Unlike bodies, these are always available: they need nothing beyond the name and
 Bicep requires to be computable before anything deploys. Like every evaluated value they are never
 written to a report. An `existing` resource is not reported at all, because nothing deploys it; a
 mock keyed by its real resource ID is what checks where it is read from.
+
+### Which deployment each module call creates
+
+Each module call creates a nested deployment, and `target.evaluated.modules` lists them, one for each loop instance of each call the case deploys. `target.resources` and `target.modules` describe the declarations; this is what those declarations produce for the case. Each deployment carries:
+
+| Fact | Description |
+|------|-------------|
+| `name` | The deployment name the call computed for this instance, such as `'${deployment().name}-primary'` worked out with this case's values |
+| `symbolicName` | The symbolic name of the module declaration |
+| `instanceId` | Distinguishes instances of the same call, including loop indices and, under `withModules`, the path of calls that reached it |
+| `file`, `line` | The module declaration that produced the deployment |
+| `id` | The ID of the `Microsoft.Resources/deployments` resource, which sits beneath the scope the deployment is created at |
+| `subscriptionId`, `resourceGroup` | The subscription and resource group the module deploys into. Empty where there is none |
+| `scope` | The ID of what the module deploys into: its own `scope:` argument, or the caller's scope when it has none |
+
+ARM limits a deployment name to 64 characters. Because a name is often built from a parameter and `deployment().name`, a long input case can break it, and the source alone does not show it:
+
+```bicep
+namesFitTheLimit: {
+  failOn: filter(target.evaluated.withModules.modules, m => length(m.name) > 64)
+  message: 'Azure rejects a deployment name longer than 64 characters.'
+}
+```
+
+A violation names the declaration and the deployment, in the same way as a resource instance:
+
+```console
+	[✗] Assertion namesFitTheLimit failed!
+		Azure rejects a deployment name longer than 64 characters.
+		main.bicep(2): a-very-long-stamp-name-that-goes-on-and-on-and-on-and-on-and-on-0
+		main.bicep(2): a-very-long-stamp-name-that-goes-on-and-on-and-on-and-on-and-on-1
+```
+
+A call whose condition is false is not listed. An unevaluatable condition is an error, as it is for a resource.
+
+The name and the scope are always available, because Bicep requires both to be computable before anything deploys. A module call whose arguments are only known at deployment time is still listed in `target.evaluated.modules`. Reading `target.evaluated.withModules.modules` follows the call into the module, so it fails and names the call, in the same way as `withModules.resources` (see "Evaluation happens only when it is asked for" below).
+
+The order follows the evaluated template, which lists looped calls after the others, so compare names as a set or sort them first. `modules` lists every call, including a call to a registry or template spec module. `target.evaluated.resources` is unchanged: as before, it reports a call to a module the evaluator cannot follow as a `Microsoft.Resources/deployments` instance with no `properties`, and it does not report a call to a local module.
 
 ### Source facts and evaluated instances are different questions
 
